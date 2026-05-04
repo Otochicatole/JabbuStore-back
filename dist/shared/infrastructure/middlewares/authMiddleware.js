@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminOnly = exports.authMiddleware = void 0;
+exports.superAdminOnly = exports.adminOnly = exports.requireRole = exports.authMiddleware = void 0;
 const AuthService_1 = require("../AuthService");
 const authMiddleware = (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -12,17 +12,23 @@ const authMiddleware = (req, res, next) => {
     if (!payload) {
         return res.status(401).json({ error: 'Invalid or expired token' });
     }
-    // Inject user info into request (optional but useful)
     req.user = payload;
     next();
 };
 exports.authMiddleware = authMiddleware;
-const adminOnly = (req, res, next) => {
-    const user = req.user;
-    if (!user || (user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN')) {
-        return res.status(403).json({ error: 'Access denied: Admin role required' });
-    }
-    next();
+const requireRole = (roles) => {
+    return (req, res, next) => {
+        const user = req.user;
+        if (!user || !roles.includes(user.role)) {
+            return res.status(403).json({
+                error: `Access denied: One of these roles is required: ${roles.join(', ')}`
+            });
+        }
+        next();
+    };
 };
-exports.adminOnly = adminOnly;
+exports.requireRole = requireRole;
+// Shorthands
+exports.adminOnly = (0, exports.requireRole)(['ADMIN', 'SUPER_ADMIN']);
+exports.superAdminOnly = (0, exports.requireRole)(['SUPER_ADMIN']);
 //# sourceMappingURL=authMiddleware.js.map

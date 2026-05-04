@@ -28,6 +28,9 @@ app.use(express.json());
 app.use('/api/users', userRoutes);
 app.use('/api/admins', adminRoutes);
 
+import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
+app.use(errorHandler);
+
 app.get('/', (req, res) => {
   res.json({ 
     message: 'Server is running', 

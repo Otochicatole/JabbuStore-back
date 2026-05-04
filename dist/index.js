@@ -27,6 +27,8 @@ app.use(express_1.default.json());
 // Routes
 app.use('/api/users', UserRoutes_1.default);
 app.use('/api/admins', AdminRoutes_1.default);
+const errorHandler_1 = require("./shared/infrastructure/middlewares/errorHandler");
+app.use(errorHandler_1.errorHandler);
 app.get('/', (req, res) => {
     res.json({
         message: 'Server is running',
