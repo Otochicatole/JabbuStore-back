@@ -2,7 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.errorHandler = void 0;
 const errorHandler = (err, req, res, next) => {
-    console.error(`[Error] ${err.stack || err.message}`);
+    const errorDetails = err.stack || err.message || JSON.stringify(err);
+    console.error(`[Error] ${errorDetails}`);
     const isProduction = process.env.NODE_ENV === 'production';
     // Specific handling for known error types can be added here
     if (err.name === 'PrismaClientKnownRequestError') {

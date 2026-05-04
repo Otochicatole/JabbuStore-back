@@ -27,7 +27,11 @@ export class LoginUserUseCase {
       throw new Error('Invalid credentials');
     }
 
-    const isValid = await AuthService.comparePassword(password, user.password!);
+    if (!user.password) {
+      throw new Error('This account uses Steam login. Please login with Steam.');
+    }
+
+    const isValid = await AuthService.comparePassword(password, user.password);
     if (!isValid) {
       throw new Error('Invalid credentials');
     }

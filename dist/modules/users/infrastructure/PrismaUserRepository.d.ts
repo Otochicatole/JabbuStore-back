@@ -3,5 +3,6 @@ export declare class PrismaUserRepository implements IUserRepository {
     save(user: any): Promise<User>;
     findAll(): Promise<User[]>;
     findByEmail(email: string): Promise<User | null>;
+    findBySteamId(steamId: string): Promise<User | null>;
 }
 //# sourceMappingURL=PrismaUserRepository.d.ts.map

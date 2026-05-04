@@ -3,7 +3,11 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
+import session from 'express-session';
+import passport from 'passport';
 import { rateLimit } from 'express-rate-limit';
+import { configurePassport } from './modules/auth/infrastructure/PassportConfig';
+import authRoutes from './modules/auth/infrastructure/AuthRoutes';
 import userRoutes from './modules/users/infrastructure/UserRoutes';
 import adminRoutes from './modules/admins/infrastructure/AdminRoutes';
 
@@ -24,7 +28,25 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
 
+// Session & Passport
+app.set('trust proxy', 1); // Trust the dev tunnel proxy
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.BACKEND_URL?.startsWith('https'), // Secure cookies if using HTTPS
+      sameSite: 'lax',
+    }
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
+configurePassport();
+
 // Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admins', adminRoutes);
 

@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 
 export const errorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error(`[Error] ${err.stack || err.message}`);
+  const errorDetails = err.stack || err.message || JSON.stringify(err);
+  console.error(`[Error] ${errorDetails}`);
 
   const isProduction = process.env.NODE_ENV === 'production';
 
