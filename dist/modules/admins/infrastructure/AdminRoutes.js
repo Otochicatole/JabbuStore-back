@@ -1,0 +1,20 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const AdminController_1 = require("./AdminController");
+const AdminUseCases_1 = require("../application/AdminUseCases");
+const PrismaAdminRepository_1 = require("./PrismaAdminRepository");
+const authMiddleware_1 = require("../../../shared/infrastructure/middlewares/authMiddleware");
+const validationMiddleware_1 = require("../../../shared/infrastructure/middlewares/validationMiddleware");
+const adminSchemas_1 = require("./adminSchemas");
+const router = (0, express_1.Router)();
+const adminRepository = new PrismaAdminRepository_1.PrismaAdminRepository();
+const createAdminUseCase = new AdminUseCases_1.CreateAdminUseCase(adminRepository);
+const getAdminsUseCase = new AdminUseCases_1.GetAdminsUseCase(adminRepository);
+const loginAdminUseCase = new AdminUseCases_1.LoginAdminUseCase(adminRepository);
+const adminController = new AdminController_1.AdminController(createAdminUseCase, getAdminsUseCase, loginAdminUseCase);
+router.get('/', authMiddleware_1.authMiddleware, authMiddleware_1.adminOnly, (req, res) => adminController.getAll(req, res));
+router.post('/', authMiddleware_1.authMiddleware, authMiddleware_1.adminOnly, (0, validationMiddleware_1.validate)(adminSchemas_1.createAdminSchema), (req, res) => adminController.create(req, res));
+router.post('/login', (0, validationMiddleware_1.validate)(adminSchemas_1.loginAdminSchema), (req, res) => adminController.login(req, res));
+exports.default = router;
+//# sourceMappingURL=AdminRoutes.js.map
