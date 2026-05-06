@@ -6,4 +6,5 @@
  */
 export const storeAccounts: string[] = [
   "76561198100328935", // Ejemplo de cuenta (puedes reemplazarla con tus cuentas de bots)
+  "76561198448543540",
 ];
