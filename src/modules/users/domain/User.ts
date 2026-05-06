@@ -13,6 +13,7 @@ export interface User {
 export interface IUserRepository {
   save(user: Partial<User>): Promise<User>;
   findAll(): Promise<User[]>;
+  findById(id: string): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
   findBySteamId(steamId: string): Promise<User | null>;
 }
