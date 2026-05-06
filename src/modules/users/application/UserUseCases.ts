@@ -125,3 +125,13 @@ export class GetUserInventoryUseCase {
     });
   }
 }
+
+export class GetUserProfileUseCase {
+  constructor(private userRepository: IUserRepository) {}
+
+  async execute(userId: string): Promise<User | null> {
+    const user = await this.userRepository.findById(userId);
+    return user;
+  }
+}
+

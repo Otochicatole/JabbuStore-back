@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
-import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryUseCase } from '../application/UserUseCases';
+import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryUseCase, GetUserProfileUseCase } from '../application/UserUseCases';
 
 export class UserController {
   constructor(
     private createUserUseCase: CreateUserUseCase,
     private getUsersUseCase: GetUsersUseCase,
     private loginUserUseCase: LoginUserUseCase,
-    private getUserInventoryUseCase: GetUserInventoryUseCase
+    private getUserInventoryUseCase: GetUserInventoryUseCase,
+    private getUserProfileUseCase: GetUserProfileUseCase
   ) {}
 
   async getAll(req: Request, res: Response) {
@@ -36,6 +37,21 @@ export class UserController {
       res.json(result);
     } catch (error: any) {
       res.status(401).json({ error: error.message });
+    }
+  }
+
+  async getMe(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const user = await this.getUserProfileUseCase.execute(userId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      // Remove password from response
+      const { password: _, ...userWithoutPassword } = user;
+      res.json(userWithoutPassword);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   }
 
