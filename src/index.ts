@@ -10,6 +10,7 @@ import { configurePassport } from './modules/auth/infrastructure/PassportConfig'
 import authRoutes from './modules/auth/infrastructure/AuthRoutes';
 import userRoutes from './modules/users/infrastructure/UserRoutes';
 import adminRoutes from './modules/admins/infrastructure/AdminRoutes';
+import storeRoutes from './modules/store/infrastructure/StoreRoutes';
 
 dotenv.config();
 
@@ -49,6 +50,7 @@ configurePassport();
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admins', adminRoutes);
+app.use('/api/store', storeRoutes);
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
 app.use(errorHandler);
