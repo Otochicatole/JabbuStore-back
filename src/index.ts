@@ -63,6 +63,10 @@ app.get('/', (req, res) => {
   });
 });
 
+import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyncScheduler';
+
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
+  // Iniciar la sincronización en segundo plano de inventarios de bots de Steam
+  startStoreSyncScheduler();
 });
