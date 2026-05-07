@@ -58,7 +58,8 @@ export class UserController {
   async getInventory(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id; // Extraído de forma segura del token JWT por authMiddleware
-      const inventory = await this.getUserInventoryUseCase.execute(userId);
+      const forceSync = req.query.forceSync === 'true';
+      const inventory = await this.getUserInventoryUseCase.execute(userId, forceSync);
       res.json(inventory);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

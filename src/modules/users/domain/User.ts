@@ -1,3 +1,17 @@
+export interface UserInventoryItem {
+  assetId: string;
+  classId: string;
+  name: string;
+  type: string;
+  iconUrl: string | null;
+  tradable: boolean;
+  marketable: boolean;
+  userId: string;
+  price: number;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface User {
   id: string;
   email: string | null;
@@ -8,6 +22,7 @@ export interface User {
   profileUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
+  inventory?: UserInventoryItem[];
 }
 
 export interface IUserRepository {
@@ -16,4 +31,8 @@ export interface IUserRepository {
   findById(id: string): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
   findBySteamId(steamId: string): Promise<User | null>;
+  
+  // Gestión de Inventario del Usuario guardado en DB
+  getUserInventory(userId: string): Promise<UserInventoryItem[]>;
+  saveUserInventory(userId: string, items: UserInventoryItem[]): Promise<void>;
 }
