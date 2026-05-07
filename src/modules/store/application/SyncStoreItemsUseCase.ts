@@ -44,17 +44,20 @@ export class SyncStoreItemsUseCase {
       }
     }
 
+    // Filtrar únicamente artículos que son intercambiables (Enfoque B)
+    const tradableAggregatedItems = aggregatedItems.filter(item => item.tradable === true);
+
     // Si no pudimos conseguir ningún ítem en absoluto debido a fallos totales o rate limits globales,
     // es mejor NO limpiar la base de datos (para no dejar la tienda vacía)
-    if (aggregatedItems.length === 0 && storeAccounts.length > 0) {
-      console.warn(`[Store Inventory Sync] No items retrieved from any bot. Skipping DB clearance to preserve existing catalog.`);
+    if (tradableAggregatedItems.length === 0 && storeAccounts.length > 0) {
+      console.warn(`[Store Inventory Sync] No tradable items retrieved from any bot. Skipping DB clearance to preserve existing catalog.`);
       return;
     }
 
-    console.log(`[Store Inventory Sync] Retrieved ${aggregatedItems.length} items from bots. Fetching market prices...`);
+    console.log(`[Store Inventory Sync] Retrieved ${tradableAggregatedItems.length} tradable items from bots. Fetching market prices...`);
 
     // Obtener los precios de mercado reales usando el PriceEnrichmentService
-    const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(aggregatedItems);
+    const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
 
     // Filtrar duplicados por assetId para evitar errores de Unique Constraint en la base de datos
     const uniqueItemsMap = new Map<string, StoreItem>();
@@ -63,7 +66,7 @@ export class SyncStoreItemsUseCase {
     }
     const finalPricedItems = Array.from(uniqueItemsMap.values());
 
-    console.log(`[Store Inventory Sync] Saving ${finalPricedItems.length} unique items with real prices to database...`);
+    console.log(`[Store Inventory Sync] Saving ${finalPricedItems.length} unique tradable items with real prices to database...`);
     await this.storeRepository.clearAndSaveMany(finalPricedItems);
     console.log(`[Store Inventory Sync] Database sync completed successfully!`);
   }

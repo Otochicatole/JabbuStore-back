@@ -78,8 +78,9 @@ export class GetUserInventoryUseCase {
     }
 
     if (!forceSync && cachedInventory.length > 0 && !isExpired) {
-      console.log(`[User Inventory Cache] Serving ${cachedInventory.length} items from database for user: ${userId}`);
-      return cachedInventory;
+      const tradableCache = cachedInventory.filter(item => item.tradable);
+      console.log(`[User Inventory Cache] Serving ${tradableCache.length} tradable items from database for user: ${userId}`);
+      return tradableCache;
     }
 
     if (isExpired && !forceSync) {
@@ -121,12 +122,15 @@ export class GetUserInventoryUseCase {
       // 4. Mapear y limpiar el inventario de Steam para retornar solo lo que el frontend necesita
       const parsedItems = this.parseSteamInventory(data, userId);
 
+      // Filtrar únicamente los artículos que son intercambiables (Enfoque B)
+      const tradableItems = parsedItems.filter(item => item.tradable === true);
+
       // 5. Enriquecer los ítems con precios acordes al mercado real
-      console.log(`[User Inventory Sync] Enriching ${parsedItems.length} items with market prices...`);
-      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(parsedItems);
+      console.log(`[User Inventory Sync] Enriching ${tradableItems.length} tradable items with market prices...`);
+      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableItems);
 
       // 6. Guardar en DB para no tener que volver a consultar a Steam
-      console.log(`[User Inventory Cache] Saving ${pricedItems.length} items to database cache for user: ${userId}`);
+      console.log(`[User Inventory Cache] Saving ${pricedItems.length} tradable items to database cache for user: ${userId}`);
       await this.userRepository.saveUserInventory(userId, pricedItems);
 
       return pricedItems;
@@ -136,8 +140,9 @@ export class GetUserInventoryUseCase {
       // Fallback: Si Steam falla pero tenemos ítems cacheados de antes, los devolvemos en vez de lanzar error
       const cachedInventory = await this.userRepository.getUserInventory(userId);
       if (cachedInventory.length > 0) {
-        console.warn(`[User Inventory] Steam query failed. Serving stale cached inventory as fallback.`);
-        return cachedInventory;
+        const tradableCache = cachedInventory.filter(item => item.tradable);
+        console.warn(`[User Inventory] Steam query failed. Serving stale cached tradable inventory as fallback.`);
+        return tradableCache;
       }
       
       throw new Error(error.message || 'Could not load Steam inventory');
