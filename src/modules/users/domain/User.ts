@@ -8,6 +8,11 @@ export interface UserInventoryItem {
   marketable: boolean;
   userId: string;
   price: number;
+  rarity: string;
+  exterior: string | null;
+  category: string;
+  isStatTrak: boolean;
+  isSouvenir: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }

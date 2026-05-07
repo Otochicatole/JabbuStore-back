@@ -39,6 +39,11 @@ model StoreItem {
   marketable Boolean  @default(true)
   botSteamId String
   price      Float    @default(0.0)
+  rarity     String   @default("common")
+  exterior   String?
+  category   String   @default("other")
+  isStatTrak Boolean  @default(false)
+  isSouvenir Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
@@ -54,6 +59,11 @@ model UserInventoryItem {
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   price      Float    @default(0.0)
+  rarity     String   @default("common")
+  exterior   String?
+  category   String   @default("other")
+  isStatTrak Boolean  @default(false)
+  isSouvenir Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }

@@ -161,6 +161,8 @@ export class GetUserInventoryUseCase {
       
       // Obtener el tipo/categoría del ítem si existe
       const type = description?.type || '';
+      
+      const details = PriceEnrichmentService.parseItemDetails(description);
 
       return {
         assetId: asset.assetid,
@@ -174,6 +176,7 @@ export class GetUserInventoryUseCase {
         marketable: description?.marketable === 1,
         userId: userId,
         price: 0, // Se actualizará en el enriquecimiento de precios
+        ...details,
       };
     });
   }

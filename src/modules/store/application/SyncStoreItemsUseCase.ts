@@ -81,6 +81,8 @@ export class SyncStoreItemsUseCase {
     return data.assets.map((asset: any) => {
       const description: any = descriptionsMap.get(asset.classid);
       const type = description?.type || '';
+      
+      const details = PriceEnrichmentService.parseItemDetails(description);
 
       return {
         assetId: asset.assetid,
@@ -94,6 +96,7 @@ export class SyncStoreItemsUseCase {
         marketable: description?.marketable === 1,
         botSteamId: botSteamId,
         price: 0, // Se actualizará en el siguiente paso de enriquecimiento
+        ...details,
       };
     });
   }
