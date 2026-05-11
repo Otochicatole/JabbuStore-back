@@ -114,12 +114,14 @@ export class PriceEnrichmentService {
     return 0;
   }
 
-  static parseItemDetails(description: any): {
+  static parseItemDetails(description: any, assetId?: string): {
     rarity: string;
     exterior: string | null;
     category: string;
     isStatTrak: boolean;
     isSouvenir: boolean;
+    float: number | null;
+    pattern: number | null;
   } {
     const typeStr = description?.type || '';
     const name = description?.market_hash_name || description?.name || '';
@@ -175,6 +177,8 @@ export class PriceEnrichmentService {
       category,
       isStatTrak,
       isSouvenir,
+      float: null,
+      pattern: null,
     };
   }
 
@@ -231,4 +235,5 @@ export class PriceEnrichmentService {
     }
     return Math.abs(hash);
   }
+
 }

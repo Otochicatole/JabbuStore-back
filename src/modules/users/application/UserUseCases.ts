@@ -101,7 +101,7 @@ export class GetUserInventoryUseCase {
     const appId = 730; // AppID de CS:GO / CS2
     const contextId = 2; // ContextID para inventario de skins
     
-    const steamUrl = `https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=spanish&count=2000`;
+    const steamUrl = `https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`;
     console.log(`[Steam Inventory Sync] Fetching fresh inventory for Steam ID: ${steamId}`);
     console.log(`[Steam Inventory Sync] Request URL: ${steamUrl}`);
     
@@ -152,8 +152,8 @@ export class GetUserInventoryUseCase {
   private parseSteamInventory(data: any, userId: string): UserInventoryItem[] {
     if (!data || !data.assets || !data.descriptions) return [];
 
-    const descriptionsMap = new Map(
-      data.descriptions.map((desc: any) => [desc.classid, desc])
+    const descriptionsMap = new Map<string, any>(
+      data.descriptions.map((desc: any) => [String(desc.classid), desc])
     );
 
     return data.assets.map((asset: any) => {
@@ -162,7 +162,7 @@ export class GetUserInventoryUseCase {
       // Obtener el tipo/categoría del ítem si existe
       const type = description?.type || '';
       
-      const details = PriceEnrichmentService.parseItemDetails(description);
+      const details = PriceEnrichmentService.parseItemDetails(description, asset.assetid);
 
       return {
         assetId: asset.assetid,

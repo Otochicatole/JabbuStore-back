@@ -11,7 +11,7 @@ export class SyncStoreItemsUseCase {
     const contextId = 2; // ContextID para inventario de skins
 
     const fetchPromises = storeAccounts.map(async (steamId) => {
-      const steamUrl = `https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=spanish&count=2000`;
+      const steamUrl = `https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`;
       
       console.log(`[Store Inventory Sync] Fetching inventory for bot: ${steamId}`);
       
@@ -66,7 +66,7 @@ export class SyncStoreItemsUseCase {
     }
     const finalPricedItems = Array.from(uniqueItemsMap.values());
 
-    console.log(`[Store Inventory Sync] Saving ${finalPricedItems.length} unique tradable items with real prices to database...`);
+    console.log(`[Store Inventory Sync] Saving ${finalPricedItems.length} unique tradable items with real prices and basic floats to database...`);
     await this.storeRepository.clearAndSaveMany(finalPricedItems);
     console.log(`[Store Inventory Sync] Database sync completed successfully!`);
   }
@@ -74,15 +74,15 @@ export class SyncStoreItemsUseCase {
   private parseSteamInventory(data: any, botSteamId: string): StoreItem[] {
     if (!data || !data.assets || !data.descriptions) return [];
 
-    const descriptionsMap = new Map(
-      data.descriptions.map((desc: any) => [desc.classid, desc])
+    const descriptionsMap = new Map<string, any>(
+      data.descriptions.map((desc: any) => [String(desc.classid), desc])
     );
 
     return data.assets.map((asset: any) => {
       const description: any = descriptionsMap.get(asset.classid);
       const type = description?.type || '';
       
-      const details = PriceEnrichmentService.parseItemDetails(description);
+      const details = PriceEnrichmentService.parseItemDetails(description, asset.assetid);
 
       return {
         assetId: asset.assetid,

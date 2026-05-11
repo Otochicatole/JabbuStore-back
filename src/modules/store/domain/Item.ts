@@ -13,4 +13,6 @@ export interface StoreItem {
   category: string;
   isStatTrak: boolean;
   isSouvenir: boolean;
+  float: number | null;
+  pattern: number | null;
 }

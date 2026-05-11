@@ -44,6 +44,8 @@ model StoreItem {
   category   String   @default("other")
   isStatTrak Boolean  @default(false)
   isSouvenir Boolean  @default(false)
+  float      Float?
+  pattern    Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
@@ -64,6 +66,8 @@ model UserInventoryItem {
   category   String   @default("other")
   isStatTrak Boolean  @default(false)
   isSouvenir Boolean  @default(false)
+  float      Float?
+  pattern    Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
