@@ -78,11 +78,40 @@ export class SyncStoreItemsUseCase {
       data.descriptions.map((desc: any) => [String(desc.classid), desc])
     );
 
+    // Parsear asset_properties para obtener floats y patterns exactos provistos por Steam
+    const assetPropertiesMap = new Map<string, { float: number | null, pattern: number | null }>();
+    if (data.asset_properties) {
+      const propertiesList = Array.isArray(data.asset_properties)
+        ? data.asset_properties
+        : Object.values(data.asset_properties);
+
+      for (const entry of propertiesList as any[]) {
+        if (!entry || !entry.assetid || !entry.asset_properties) continue;
+        
+        let float: number | null = null;
+        let pattern: number | null = null;
+
+        for (const prop of entry.asset_properties) {
+          if (prop.propertyid === 1) {
+            pattern = prop.int_value ? parseInt(prop.int_value, 10) : null;
+          } else if (prop.propertyid === 2) {
+            float = prop.float_value ? parseFloat(prop.float_value) : null;
+          }
+        }
+        assetPropertiesMap.set(String(entry.assetid), { float, pattern });
+      }
+    }
+
     return data.assets.map((asset: any) => {
       const description: any = descriptionsMap.get(asset.classid);
       const type = description?.type || '';
       
       const details = PriceEnrichmentService.parseItemDetails(description, asset.assetid);
+
+      // Obtener float y pattern exactos desde la propiedad de Steam si existen
+      const propData = assetPropertiesMap.get(String(asset.assetid));
+      const floatVal = propData?.float !== undefined ? propData.float : details.float;
+      const patternVal = propData?.pattern !== undefined ? propData.pattern : details.pattern;
 
       return {
         assetId: asset.assetid,
@@ -97,6 +126,8 @@ export class SyncStoreItemsUseCase {
         botSteamId: botSteamId,
         price: 0, // Se actualizará en el siguiente paso de enriquecimiento
         ...details,
+        float: floatVal,
+        pattern: patternVal,
       };
     });
   }

@@ -1,68 +1,13 @@
-### Variables globales
-@baseUrl = http://localhost:3001
-@steamId = 76561198100328935
-@csFloatApiKey = z20zDeE6VVT0lBCfsMC2OlSSq7E9vqv5
+GET https://api.csgofloat.com/?url=76561198100328935
 
-###############################################
-# 1. Verificar que el servidor está corriendo
-###############################################
 
-### Ping al servidor
-GET {{baseUrl}}/
+### 
+GET https://steamcommunity.com/inventory/76561198100328935/730/2
 
-###############################################
-# 2. Items de la tienda (inventario de los bots)
-###############################################
-
-### Obtener todos los items de la tienda (con floats)
-GET {{baseUrl}}/api/store/items
+####
+GET https://steamcommunity.com/inventory/76561198100328935/730/2?l=english&count=5000
 Accept: application/json
 
-###############################################
-# 3. Inventario de Steam de un usuario (raw)
-###############################################
-
-### Obtener inventario crudo de Steam para el SteamID dado
-GET https://steamcommunity.com/inventory/{{steamId}}/730/2?l=english&count=2000
-Accept: application/json
-User-Agent: Mozilla/5.0
-
-###############################################
-# 4. Consultar float real via CSFloat (api.csgofloat.com)
-# (Reemplaza el inspect link con uno real del inventario de arriba)
-###############################################
-
-### Consultar float de un ítem via api.csgofloat.com
-# El parámetro 'url' es el inspect link (steam://rungame/730/...) URL-encodeado
-GET https://api.csgofloat.com/?url=steam%3A%2F%2Frungame%2F730%2F76561202255233023%2F%2Bcsgo_econ_action_preview%2520S76561198100328935A698323590D7935523998312483177
-Accept: application/json
-Authorization: {{csFloatApiKey}}
-
-###############################################
-# 5. Forzar re-sincronización del inventario del usuario
-# (Requiere JWT token - primero debes hacer login)
-###############################################
-
-### Login con email/password para obtener token
-POST {{baseUrl}}/api/users/login
-Content-Type: application/json
-
-{
-  "email": "tu@email.com",
-  "password": "tu_password"
-}
-
-###############################################
-# 6. Obtener inventario del usuario autenticado (con floats reales)
-# (Requiere reemplazar {{token}} con el JWT del login anterior)
-###############################################
-
-### Obtener inventario del usuario (usa caché de DB o sincroniza con Steam)
-GET {{baseUrl}}/api/users/me/inventory
-Authorization: Bearer {{token}}
-Accept: application/json
-
-### Forzar re-sincronización del inventario (ignora caché)
-GET {{baseUrl}}/api/users/me/inventory?forceSync=true
-Authorization: Bearer {{token}}
+### Obtener inventario CS2
+GET https://steamcommunity.com/inventory/76561198100328935/730/2?l=english&count=5000
 Accept: application/json
