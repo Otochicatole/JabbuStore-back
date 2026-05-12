@@ -1,4 +1,4 @@
-import { prisma } from './shared/infrastructure/PrismaClient';
+import { prisma } from '../../src/shared/infrastructure/PrismaClient';
 
 async function main() {
   const items = await prisma.storeItem.findMany();

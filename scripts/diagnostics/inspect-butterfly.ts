@@ -1,4 +1,4 @@
-import { storeAccounts } from './storeAccounts';
+import { storeAccounts } from '../../src/storeAccounts';
 
 async function main() {
   const appId = 730;

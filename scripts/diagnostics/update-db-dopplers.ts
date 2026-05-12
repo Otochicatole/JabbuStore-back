@@ -1,6 +1,17 @@
 import 'dotenv/config';
-import { prisma } from './shared/infrastructure/PrismaClient';
-import { PriceEnrichmentService } from './shared/infrastructure/PriceEnrichmentService';
+import { prisma } from '../../src/shared/infrastructure/PrismaClient';
+import { PriceEnrichmentService } from '../../src/shared/infrastructure/PriceEnrichmentService';
+
+interface DBStoreItem {
+  assetId: string;
+  classId: string;
+  name: string;
+  type: string;
+  price: number;
+  iconUrl: string | null;
+  pattern: number | null;
+  botSteamId: string;
+}
 
 async function main() {
   console.log('--- DOPPLER DATABASE MIGRATION & PRICE REFRESH ---');
@@ -22,7 +33,7 @@ async function main() {
       return;
     }
 
-    const updatedItems = [];
+    const updatedItems: DBStoreItem[] = [];
     const phaseMapping: Record<string, string> = {
       phase1: 'Phase 1',
       phase2: 'Phase 2',
@@ -36,7 +47,7 @@ async function main() {
 
     for (const item of dopplerItems) {
       // Extract the icon hash from the full iconUrl
-      let iconHash = null;
+      let iconHash: string | null = null;
       if (item.iconUrl) {
         if (item.iconUrl.includes('economy/image/')) {
           iconHash = item.iconUrl.split('economy/image/')[1] || null;
@@ -53,8 +64,14 @@ async function main() {
           console.log(`Detected: "${item.name}" -> "${newName}" (${phaseDisplayName})`);
           
           updatedItems.push({
-            ...item,
+            assetId: item.assetId,
+            classId: item.classId,
             name: newName,
+            type: item.type,
+            price: item.price,
+            iconUrl: item.iconUrl,
+            pattern: item.pattern,
+            botSteamId: item.botSteamId,
           });
         }
       } else {

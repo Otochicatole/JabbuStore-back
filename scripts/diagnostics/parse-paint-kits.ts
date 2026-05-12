@@ -8,17 +8,19 @@ async function main() {
   let currentKit = "";
   
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.includes('"paint_kits"')) {
+    const line = lines[i];
+    if (!line) continue;
+    const trimmed = line.trim();
+    if (trimmed.includes('"paint_kits"')) {
       inPaintKits = true;
     }
     
     if (inPaintKits) {
-      if (line.match(/^"\d+"/)) {
-        currentKit = line.replace(/"/g, '');
+      if (trimmed.match(/^"\d+"/)) {
+        currentKit = trimmed.replace(/"/g, '');
       }
-      if (line.includes('"name"')) {
-        let name = line.replace(/"name"/, '').replace(/"/g, '').trim();
+      if (trimmed.includes('"name"')) {
+        let name = trimmed.replace(/"name"/, '').replace(/"/g, '').trim();
         if (name.includes('am_doppler_phase') || name.includes('am_ruby') || name.includes('am_sapphire') || name.includes('am_blackpearl') || name.includes('am_emerald')) {
             console.log(`Paint Index: ${currentKit} -> Name: ${name}`);
         }

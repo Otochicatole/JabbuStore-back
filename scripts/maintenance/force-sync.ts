@@ -1,10 +1,10 @@
-import { prisma } from './shared/infrastructure/PrismaClient';
-import { SyncStoreItemsUseCase } from './modules/store/application/SyncStoreItemsUseCase';
-import { PrismaStoreRepository } from './modules/store/infrastructure/PrismaStoreRepository';
+import { prisma } from '../../src/shared/infrastructure/PrismaClient';
+import { SyncStoreItemsUseCase } from '../../src/modules/store/application/SyncStoreItemsUseCase';
+import { PrismaStoreRepository } from '../../src/modules/store/infrastructure/PrismaStoreRepository';
 
 async function run() {
   console.log("Forcing a complete Store Sync to fix Doppler phases and prices...");
-  const repository = new PrismaStoreRepository(prisma);
+  const repository = new PrismaStoreRepository();
   const syncUseCase = new SyncStoreItemsUseCase(repository);
   
   try {

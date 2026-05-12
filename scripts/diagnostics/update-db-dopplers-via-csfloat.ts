@@ -1,6 +1,14 @@
 import 'dotenv/config';
-import { prisma } from './shared/infrastructure/PrismaClient';
-import { PriceEnrichmentService } from './shared/infrastructure/PriceEnrichmentService';
+import { prisma } from '../../src/shared/infrastructure/PrismaClient';
+import { PriceEnrichmentService } from '../../src/shared/infrastructure/PriceEnrichmentService';
+
+interface EnrichedStoreItem {
+  assetId: string;
+  classId: string;
+  name: string;
+  type: string;
+  price: number;
+}
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -54,7 +62,7 @@ async function main() {
     const apiKey = process.env.CSFLOAT_API_KEY || "vq1X3VcfTgqd93O6Fu53bLGeuv6igg38";
     console.log(`Using CSFloat API Key: ${apiKey.substring(0, 5)}...`);
 
-    const updatedItemsToSave = [];
+    const updatedItemsToSave: EnrichedStoreItem[] = [];
 
     for (const asset of dopplerAssets) {
       const description = descriptionsMap.get(asset.classid);

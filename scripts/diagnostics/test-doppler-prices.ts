@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { PriceEnrichmentService } from './shared/infrastructure/PriceEnrichmentService';
+import { PriceEnrichmentService } from '../../src/shared/infrastructure/PriceEnrichmentService';
 
 async function main() {
   const apiKey = process.env.CS2_SH_API_KEY || "demo_XtEHDOxUhPjBmvYxesvNbqrPMfkiKNMC";

@@ -1,4 +1,4 @@
-import { prisma } from './shared/infrastructure/PrismaClient';
+import { prisma } from '../../src/shared/infrastructure/PrismaClient';
 
 async function main() {
   console.log('--- DB ITEMS DIAGNOSTIC ---');
