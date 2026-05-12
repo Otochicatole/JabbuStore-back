@@ -79,7 +79,7 @@ export class SyncStoreItemsUseCase {
     );
 
     // Parsear asset_properties para obtener floats y patterns exactos provistos por Steam
-    const assetPropertiesMap = new Map<string, { float: number | null, pattern: number | null }>();
+    const assetPropertiesMap = new Map<string, { float: number | null, pattern: number | null, paintIndex: number | null }>();
     if (data.asset_properties) {
       const propertiesList = Array.isArray(data.asset_properties)
         ? data.asset_properties
@@ -90,15 +90,18 @@ export class SyncStoreItemsUseCase {
         
         let float: number | null = null;
         let pattern: number | null = null;
+        let paintIndex: number | null = null;
 
         for (const prop of entry.asset_properties) {
           if (prop.propertyid === 1) {
             pattern = prop.int_value ? parseInt(prop.int_value, 10) : null;
           } else if (prop.propertyid === 2) {
             float = prop.float_value ? parseFloat(prop.float_value) : null;
+          } else if (prop.propertyid === 7) {
+            paintIndex = prop.int_value ? parseInt(prop.int_value, 10) : null;
           }
         }
-        assetPropertiesMap.set(String(entry.assetid), { float, pattern });
+        assetPropertiesMap.set(String(entry.assetid), { float, pattern, paintIndex });
       }
     }
 
@@ -112,11 +115,34 @@ export class SyncStoreItemsUseCase {
       const propData = assetPropertiesMap.get(String(asset.assetid));
       const floatVal = propData?.float !== undefined ? propData.float : details.float;
       const patternVal = propData?.pattern !== undefined ? propData.pattern : details.pattern;
+      const paintIndexVal = propData?.paintIndex !== undefined ? propData.paintIndex : null;
+
+      let rawName = description?.market_hash_name || description?.name || '';
+
+      // Detect Doppler phase and append to name if applicable
+      const iconHash = description?.icon_url || null;
+      const detectedPhase = PriceEnrichmentService.detectDopplerPhase(rawName, iconHash, paintIndexVal);
+      if (detectedPhase) {
+        const phaseMapping: Record<string, string> = {
+          phase1: 'Phase 1',
+          phase2: 'Phase 2',
+          phase3: 'Phase 3',
+          phase4: 'Phase 4',
+          ruby: 'Ruby',
+          sapphire: 'Sapphire',
+          blackpearl: 'Black Pearl',
+          emerald: 'Emerald'
+        };
+        const phaseDisplayName = phaseMapping[detectedPhase];
+        if (phaseDisplayName && !rawName.includes(phaseDisplayName)) {
+          rawName = `${rawName} | ${phaseDisplayName}`;
+        }
+      }
 
       return {
         assetId: asset.assetid,
         classId: asset.classid,
-        name: description?.market_hash_name || description?.name || '',
+        name: rawName,
         type: type,
         iconUrl: description?.icon_url
           ? `https://community.cloudflare.steamstatic.com/economy/image/${description.icon_url}`

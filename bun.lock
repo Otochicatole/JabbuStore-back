@@ -9,6 +9,7 @@
         "@prisma/client": "^7.8.0",
         "bcrypt": "^6.0.0",
         "cors": "^2.8.6",
+        "csgo-doppler-phase": "^1.1.3",
         "dotenv": "^17.4.2",
         "express": "^5.2.1",
         "express-rate-limit": "^8.4.1",
@@ -221,6 +222,8 @@
     "create-require": ["create-require@1.1.1", "", {}, "sha512-dcKFX3jn0MpIaXjisoRvexIJVEKzaq7z2rZKxf+MSr9TkdmHmsU4m2lcLojrj/FHl8mk5VxMmYA+ftRkP/3oKQ=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
+
+    "csgo-doppler-phase": ["csgo-doppler-phase@1.1.3", "", {}, "sha512-QYreYVie5hKhNJTPLfETDuo6uIzWSIdfQFvD5Rj/ABSHOmIsPvJz5hcORFNGjvc7ymt5PA43cKNpigOBNl+e1w=="],
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 

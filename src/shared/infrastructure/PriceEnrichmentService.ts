@@ -10,24 +10,99 @@ export interface PriceableItem {
 
 export class PriceEnrichmentService {
   /**
+   * Detectar la fase exacta de un Doppler o Gamma Doppler usando icon_url o el paintIndex oficial de CS2
+   */
+  static detectDopplerPhase(marketHashName: string, iconUrl: string | null, paintIndex?: number | null): string | null {
+    if (!marketHashName) return null;
+    if (!marketHashName.includes('Doppler')) return null;
+
+    // 1. Detección exacta mediante Paint Index (Finish Catalog) si está disponible
+    if (paintIndex !== undefined && paintIndex !== null) {
+      const paintIndexMap: Record<number, string> = {
+        // Doppler Gen 1
+        418: 'phase1', 419: 'phase2', 420: 'phase3', 421: 'phase4',
+        415: 'ruby', 416: 'sapphire', 417: 'blackpearl',
+        // Doppler Gen 2 (Prisma: Talon, Ursus, Navaja, Stiletto)
+        852: 'phase1', 853: 'phase2', 854: 'phase3', 855: 'phase4',
+        849: 'ruby', 850: 'sapphire', 851: 'blackpearl',
+        
+        // Gamma Doppler Gen 1
+        569: 'phase1', 570: 'phase2', 571: 'phase3', 572: 'phase4',
+        568: 'emerald',
+        // Gamma Doppler Gen 2 (Dreams & Nightmares, etc)
+        1119: 'phase1', 1120: 'phase2', 1121: 'phase3', 1122: 'phase4',
+        1118: 'emerald',
+      };
+      if (paintIndexMap[paintIndex]) {
+        return paintIndexMap[paintIndex];
+      }
+    }
+
+    // 2. Intentar usar la librería offline si el hash tiene el formato clásico de CS:GO (-9a8)
+    if (iconUrl && iconUrl.startsWith('-9a8')) {
+      try {
+        const dopplerPhaseDetector = require('csgo-doppler-phase');
+        let cleanIconUrl = iconUrl;
+        if (iconUrl.includes('economy/image/')) {
+          cleanIconUrl = iconUrl.split('economy/image/')[1] || iconUrl;
+        }
+
+        const detected = dopplerPhaseDetector.detect(marketHashName, cleanIconUrl);
+        if (detected && typeof detected === 'string' && !detected.startsWith('Something wrong')) {
+          return detected;
+        }
+      } catch (error) {
+        console.error('[PriceEnrichmentService] Error detecting Doppler phase via library:', error);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Descompone un nombre completo de ítem (con fase opcional añadida) en el nombre base de mercado y la fase.
+   */
+  static getBaseNameAndPhase(fullName: string): { baseName: string; phase: string | null } {
+    if (!fullName) return { baseName: '', phase: null };
+
+    const parts = fullName.split(' | ');
+    if (parts.length >= 2) {
+      const lastPart = parts[parts.length - 1]!;
+      const phaseNames = ['Phase 1', 'Phase 2', 'Phase 3', 'Phase 4', 'Ruby', 'Sapphire', 'Black Pearl', 'Emerald'];
+      if (phaseNames.includes(lastPart)) {
+        const baseName = parts.slice(0, -1).join(' | ');
+        return { baseName, phase: lastPart };
+      }
+    }
+    return { baseName: fullName, phase: null };
+  }
+
+  /**
    * Enriquecer una lista de artículos con precios del mercado real (vía cs2.sh) o fallbacks deterministas.
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(items: T[]): Promise<T[]> {
     const apiKey = config.cs2ShApiKey;
     
-    // Obtener nombres únicos de mercado para consultar a la API de cs2.sh
-    const uniqueHashNames = Array.from(new Set(items.map(item => item.name).filter(Boolean)));
+    // Obtener nombres base de mercado únicos para consultar a la API de cs2.sh (evitando nombres con fase agregada)
+    const uniqueBaseNamesMap = new Map<string, string>(); // fullName -> baseName
+    for (const item of items) {
+      if (item.name) {
+        const { baseName } = this.getBaseNameAndPhase(item.name);
+        uniqueBaseNamesMap.set(item.name, baseName);
+      }
+    }
+    const uniqueBaseNames = Array.from(new Set(uniqueBaseNamesMap.values())).filter(Boolean);
     const pricesMap = new Map<string, number>();
 
     if (!apiKey) {
       console.warn(`[Price Enrichment Service] CS2_SH_API_KEY is not set in .env. Falling back to deterministic simulation prices.`);
     } else {
-      console.log(`[Price Enrichment Service] Querying cs2.sh latest prices for ${uniqueHashNames.length} unique items...`);
+      console.log(`[Price Enrichment Service] Querying cs2.sh latest prices for ${uniqueBaseNames.length} unique base items...`);
       
       // La API cs2.sh permite consultar un máximo de 100 ítems por request POST
       const chunkSize = 100;
-      for (let i = 0; i < uniqueHashNames.length; i += chunkSize) {
-        const chunk = uniqueHashNames.slice(i, i + chunkSize);
+      for (let i = 0; i < uniqueBaseNames.length; i += chunkSize) {
+        const chunk = uniqueBaseNames.slice(i, i + chunkSize);
         try {
           const response = await fetch('https://api.cs2.sh/v1/prices/latest', {
             method: 'POST',
@@ -46,12 +121,21 @@ export class PriceEnrichmentService {
 
           const responseData = (await response.json()) as any;
           if (responseData && responseData.items) {
-            for (const itemName of chunk) {
-              const itemPriceData = responseData.items[itemName];
+            // Mapear los precios de vuelta a los ítems originales (incluyendo soporte para fases)
+            for (const item of items) {
+              const baseInfo = this.getBaseNameAndPhase(item.name);
+              const itemPriceData = responseData.items[baseInfo.baseName];
               if (itemPriceData) {
-                const price = this.determinePriceFromData(itemPriceData);
+                let price = 0;
+                // Si el ítem original tiene una fase detectada y cs2.sh tiene esa fase en sus variantes
+                if (baseInfo.phase && itemPriceData.variants && itemPriceData.variants[baseInfo.phase]) {
+                  price = this.determinePriceFromData(itemPriceData.variants[baseInfo.phase]);
+                } else {
+                  price = this.determinePriceFromData(itemPriceData);
+                }
+
                 if (price > 0) {
-                  pricesMap.set(itemName, price);
+                  pricesMap.set(item.name, price);
                 }
               }
             }
@@ -80,6 +164,23 @@ export class PriceEnrichmentService {
 
   private static determinePriceFromData(itemPriceData: any): number {
     if (!itemPriceData) return 0;
+    
+    // Si contiene variantes (como Dopplers Phase 1-4, Ruby, Emerald, Marble Fades, etc.)
+    if (itemPriceData.variants && typeof itemPriceData.variants === 'object') {
+      const variantPrices: number[] = [];
+      for (const variantKey of Object.keys(itemPriceData.variants)) {
+        const variantData = itemPriceData.variants[variantKey];
+        const price = this.determinePriceFromData(variantData);
+        if (price > 0) {
+          variantPrices.push(price);
+        }
+      }
+      if (variantPrices.length > 0) {
+        // Retornamos el promedio de los precios reales de las variantes
+        const sum = variantPrices.reduce((a, b) => a + b, 0);
+        return Math.round((sum / variantPrices.length) * 100) / 100;
+      }
+    }
     
     // 1. Buff163 es el estándar de oro de precios en efectivo de CS2 (BUFF)
     if (itemPriceData.buff?.ask) {
