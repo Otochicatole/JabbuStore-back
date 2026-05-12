@@ -22,7 +22,9 @@ export class PriceEnrichmentService {
         // Doppler Gen 1
         418: 'phase1', 419: 'phase2', 420: 'phase3', 421: 'phase4',
         415: 'ruby', 416: 'sapphire', 417: 'blackpearl',
-        // Doppler Gen 2 (Prisma: Talon, Ursus, Navaja, Stiletto)
+        // Doppler Gen 2 (Spectrum: Butterfly, Huntsman, Falchion, Shadow Daggers, Bowie)
+        618: 'phase2', 619: 'sapphire', 617: 'blackpearl',
+        // Doppler Gen 3 (Prisma: Talon, Ursus, Navaja, Stiletto)
         852: 'phase1', 853: 'phase2', 854: 'phase3', 855: 'phase4',
         849: 'ruby', 850: 'sapphire', 851: 'blackpearl',
         
