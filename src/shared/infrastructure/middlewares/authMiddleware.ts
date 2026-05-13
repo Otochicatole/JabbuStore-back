@@ -4,12 +4,15 @@ import { AuthService } from '../AuthService';
 export const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
   let token: string | null = null;
 
-  // 1. Intentar extraer el token desde cookies (seguro para admin)
+  // 1. Intentar extraer el token desde cookies (seguro para admin y usuarios)
   const cookieHeader = req.headers.cookie;
   if (cookieHeader) {
-    const match = cookieHeader.match(/(?:^|;)\s*admin_token\s*=\s*([^;]+)/);
-    if (match && match[1]) {
-      token = decodeURIComponent(match[1]);
+    const adminMatch = cookieHeader.match(/(?:^|;)\s*admin_token\s*=\s*([^;]+)/);
+    const authMatch = cookieHeader.match(/(?:^|;)\s*auth_token\s*=\s*([^;]+)/);
+    if (adminMatch && adminMatch[1]) {
+      token = decodeURIComponent(adminMatch[1]);
+    } else if (authMatch && authMatch[1]) {
+      token = decodeURIComponent(authMatch[1]);
     }
   }
 

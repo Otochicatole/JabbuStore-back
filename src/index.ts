@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3001;
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 10000, // Aumentado a 10,000 para evitar bloqueos 429 durante el desarrollo
   message: 'Too many requests from this IP, please try again after 15 minutes',
 });
 
