@@ -32,9 +32,35 @@ export class AdminController {
     const { email, password } = req.body;
     try {
       const result = await this.loginAdminUseCase.execute(email, password);
-      res.json(result);
+      
+      // Detectar si la solicitud viene por HTTPS (túneles de desarrollo o producción)
+      const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https' || req.headers.host?.includes('devtunnels.ms');
+
+      // Establecer la cookie HTTP-Only segura con el token de administrador
+      res.cookie('admin_token', result.token, {
+        httpOnly: true,
+        secure: isHttps ? true : false,
+        sameSite: isHttps ? 'none' : 'lax', // Requerido 'none' para cross-site en Dev Tunnels de https a http://localhost
+        maxAge: 24 * 60 * 60 * 1000, // 24 horas
+        path: '/',
+      });
+
+      // Retornar la información del administrador y el token para el BFF del frontend
+      res.json({ admin: result.admin, token: result.token });
     } catch (error: any) {
       res.status(401).json({ error: error.message });
     }
+  }
+
+  async logout(req: Request, res: Response) {
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https' || req.headers.host?.includes('devtunnels.ms');
+
+    res.clearCookie('admin_token', {
+      httpOnly: true,
+      secure: isHttps ? true : false,
+      sameSite: isHttps ? 'none' : 'lax',
+      path: '/',
+    });
+    res.json({ success: true });
   }
 }

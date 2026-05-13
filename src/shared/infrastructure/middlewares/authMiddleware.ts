@@ -2,14 +2,30 @@ import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../AuthService';
 
 export const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
+  let token: string | null = null;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  // 1. Intentar extraer el token desde cookies (seguro para admin)
+  const cookieHeader = req.headers.cookie;
+  if (cookieHeader) {
+    const match = cookieHeader.match(/(?:^|;)\s*admin_token\s*=\s*([^;]+)/);
+    if (match && match[1]) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
+
+  // 2. Fallback al encabezado Authorization Bearer (para APIs / usuarios)
+  if (!token) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1] || null;
+    }
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Authorization token required' });
   }
 
-  const token = authHeader.split(' ')[1];
-  const payload = AuthService.verifyToken(token!);
+  const payload = AuthService.verifyToken(token);
 
   if (!payload) {
     return res.status(401).json({ error: 'Invalid or expired token' });

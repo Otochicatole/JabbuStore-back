@@ -25,7 +25,14 @@ const limiter = rateLimit({
 
 app.use(helmet());
 app.use(limiter);
-app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    process.env.FRONTEND_URL || ''
+  ].filter(Boolean),
+  credentials: true,
+}));
 app.use(morgan('dev'));
 app.use(express.json());
 

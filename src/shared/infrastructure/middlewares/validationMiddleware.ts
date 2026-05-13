@@ -11,10 +11,22 @@ export const validate = (schema: z.ZodTypeAny) => {
         params: req.params,
       });
 
-      // Sobrescribimos req con los datos limpios (sanitizados)
-      req.body = (validatedData as any).body;
-      req.query = (validatedData as any).query;
-      req.params = (validatedData as any).params;
+      // Sobrescribimos req con los datos limpios (sanitizados) de manera segura para Express 5
+      if ((validatedData as any).body !== undefined) {
+        req.body = (validatedData as any).body;
+      }
+      if ((validatedData as any).query !== undefined) {
+        for (const key in req.query) {
+          delete req.query[key];
+        }
+        Object.assign(req.query, (validatedData as any).query);
+      }
+      if ((validatedData as any).params !== undefined) {
+        for (const key in req.params) {
+          delete req.params[key];
+        }
+        Object.assign(req.params, (validatedData as any).params);
+      }
 
       next();
     } catch (error) {
