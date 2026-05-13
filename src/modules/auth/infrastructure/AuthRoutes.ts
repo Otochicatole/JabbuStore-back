@@ -21,9 +21,9 @@ router.get(
       role: 'USER' 
     });
 
-    // Redirect to Frontend with token
+    // Redirect to Frontend BFF directly to set cookie
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    res.redirect(`${frontendUrl}/api/auth/session?token=${token}`);
   }
 );
 

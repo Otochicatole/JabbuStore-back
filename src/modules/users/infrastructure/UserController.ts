@@ -45,7 +45,7 @@ export class UserController {
       const userId = (req as any).user.id;
       const user = await this.getUserProfileUseCase.execute(userId);
       if (!user) {
-        return res.status(404).json({ error: 'User not found' });
+        return res.status(401).json({ error: 'User not found or deleted' });
       }
       // Remove password from response
       const { password: _, ...userWithoutPassword } = user;
@@ -62,6 +62,9 @@ export class UserController {
       const inventory = await this.getUserInventoryUseCase.execute(userId, forceSync);
       res.json(inventory);
     } catch (error: any) {
+      if (error.message === 'User not found') {
+        return res.status(401).json({ error: 'User not found or deleted' });
+      }
       res.status(400).json({ error: error.message });
     }
   }
