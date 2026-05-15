@@ -17,6 +17,11 @@ model User {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   inventory  UserInventoryItem[]
+  orders     Order[]
+
+  listings   SkinListing[]
+  purchases  Purchase[]
+  trades     Trade[]
 }
 
 model Admin {
@@ -70,4 +75,126 @@ model UserInventoryItem {
   pattern    Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+enum OrderType {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  TRADE_PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model Order {
+  id         String      @id @default(uuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       OrderType
+  status     OrderStatus @default(PENDING_PAYMENT)
+  totalPrice Float
+  items      OrderItem[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  assetId   String
+  name      String
+  price     Float
+  iconUrl   String?
+}
+
+model AdminSettings {
+  id                         String   @id @default(uuid())
+  globalPriceModifierType    String   @default("percentage_increase") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
+  globalPriceModifierValue   Float    @default(0.0)
+  globalPriceModifierEnabled Boolean  @default(false)
+  minimumUserSellPrice       Float    @default(1.0)
+  currency                   String   @default("USD")
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+model Bot {
+  id           String   @id @default(uuid())
+  name         String
+  steamId      String   @unique
+  tradeUrl     String?
+  status       String   @default("active") // active, inactive, maintenance, full, error
+  maxItems     Int      @default(1000)
+  currentItems Int      @default(0)
+  isActive     Boolean  @default(true)
+  lastSyncAt   DateTime?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  listings     SkinListing[]
+  purchases    Purchase[]
+  trades       Trade[]
+}
+
+model SkinListing {
+  id               String   @id @default(uuid())
+  userId           String?  // Null if from bot/system, or link to User if selling from inventory
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  botId            String?
+  bot              Bot?     @relation(fields: [botId], references: [id], onDelete: SetNull)
+  skinId           String   // Reference to assetId (StoreItem or UserInventoryItem)
+  basePrice        Float
+  finalPrice       Float
+  status           String   @default("active") // draft, active, reserved, sold, cancelled, expired
+  reservedByUserId String?
+  reservedUntil    DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  purchases        Purchase[]
+}
+
+model Purchase {
+  id             String      @id @default(uuid())
+  buyerId        String
+  buyer          User        @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  listingId      String
+  listing        SkinListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  skinId         String      // assetId
+  botId          String?
+  bot            Bot?        @relation(fields: [botId], references: [id], onDelete: SetNull)
+  basePrice      Float
+  finalPrice     Float
+  paymentStatus  String      @default("pending_payment") // pending_payment, paid, failed, refunded
+  tradeStatus    String      @default("pending") // pending, sent, accepted, failed, cancelled
+  status         String      @default("pending_payment") // pending_payment, paid, trade_pending, trade_sent, trade_accepted, cancelled, failed, refunded
+  paidAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  trades         Trade[]
+}
+
+model Trade {
+  id                String    @id @default(uuid())
+  purchaseId        String
+  purchase          Purchase  @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  botId             String
+  bot               Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steamTradeOfferId String?
+  status            String    @default("pending") // pending, sent, accepted, failed, cancelled
+  errorMessage      String?
+  sentAt            DateTime?
+  acceptedAt        DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }

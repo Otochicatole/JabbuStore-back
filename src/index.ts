@@ -11,6 +11,9 @@ import authRoutes from './modules/auth/infrastructure/AuthRoutes';
 import userRoutes from './modules/users/infrastructure/UserRoutes';
 import adminRoutes from './modules/admins/infrastructure/AdminRoutes';
 import storeRoutes from './modules/store/infrastructure/StoreRoutes';
+import orderRoutes from './modules/orders/infrastructure/OrderRoutes';
+import marketplaceRoutes from './modules/marketplace/infrastructure/MarketplaceRoutes';
+import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMarketplaceRoutes';
 
 dotenv.config();
 
@@ -58,6 +61,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admins', adminRoutes);
 app.use('/api/store', storeRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/admin/marketplace', adminMarketplaceRoutes);
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
 app.use(errorHandler);
