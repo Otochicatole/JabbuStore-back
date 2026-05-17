@@ -80,6 +80,26 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async activateBot(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const bot = await BotService.activateBot(id as string);
+      res.json(bot);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async deleteBot(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      await BotService.deleteBot(id as string);
+      res.status(204).send();
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Purchases
   static async getPurchases(req: Request, res: Response) {
     try {

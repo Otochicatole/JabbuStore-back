@@ -2,7 +2,7 @@ import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
 export class BotService {
   static async getAllBots() {
-    return prisma.bot.findMany();
+    return prisma.bot.findMany({ orderBy: { createdAt: 'desc' } });
   }
 
   static async getBotById(id: string) {
@@ -27,14 +27,22 @@ export class BotService {
     });
   }
 
-  // Gets an available bot with capacity
-  static async getAvailableBot() {
-    return prisma.bot.findFirst({
-      where: {
-        isActive: true,
-        status: 'active',
-        currentItems: { lt: prisma.bot.fields.maxItems }
-      }
+  static async activateBot(id: string) {
+    return prisma.bot.update({
+      where: { id },
+      data: { isActive: true, status: 'active' }
     });
+  }
+
+  static async deleteBot(id: string) {
+    return prisma.bot.delete({ where: { id } });
+  }
+
+  // Gets an available bot with capacity - filter in memory since Prisma doesn't support column-to-column comparison
+  static async getAvailableBot() {
+    const bots = await prisma.bot.findMany({
+      where: { isActive: true, status: 'active' }
+    });
+    return bots.find(bot => bot.currentItems < bot.maxItems) || null;
   }
 }

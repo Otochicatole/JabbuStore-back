@@ -17,6 +17,8 @@ router.get('/bots', AdminMarketplaceController.getBots);
 router.post('/bots', AdminMarketplaceController.createBot);
 router.patch('/bots/:id', AdminMarketplaceController.updateBot);
 router.patch('/bots/:id/deactivate', AdminMarketplaceController.deactivateBot);
+router.patch('/bots/:id/activate', AdminMarketplaceController.activateBot);
+router.delete('/bots/:id', AdminMarketplaceController.deleteBot);
 
 // Purchases
 router.get('/purchases', AdminMarketplaceController.getPurchases);
