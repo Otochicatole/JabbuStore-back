@@ -1,6 +1,6 @@
 import { StoreItem } from '../domain/Item';
 import { IStoreRepository } from '../domain/IStoreRepository';
-import { storeAccounts } from '../../../storeAccounts';
+import { BotService } from '../../marketplace/application/BotService';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
 
 export class SyncStoreItemsUseCase {
@@ -10,7 +10,11 @@ export class SyncStoreItemsUseCase {
     const appId = 730; // AppID de CS:GO / CS2
     const contextId = 2; // ContextID para inventario de skins
 
-    const fetchPromises = storeAccounts.map(async (steamId) => {
+    const bots = await BotService.getAllBots();
+    const activeBots = bots.filter(bot => bot.isActive);
+
+    const fetchPromises = activeBots.map(async (bot) => {
+      const steamId = bot.steamId;
       const steamUrl = `https://steamcommunity.com/inventory/${steamId}/${appId}/${contextId}?l=english&count=2000`;
       
       console.log(`[Store Inventory Sync] Fetching inventory for bot: ${steamId}`);
@@ -49,7 +53,7 @@ export class SyncStoreItemsUseCase {
 
     // Si no pudimos conseguir ningún ítem en absoluto debido a fallos totales o rate limits globales,
     // es mejor NO limpiar la base de datos (para no dejar la tienda vacía)
-    if (tradableAggregatedItems.length === 0 && storeAccounts.length > 0) {
+    if (tradableAggregatedItems.length === 0 && activeBots.length > 0) {
       console.warn(`[Store Inventory Sync] No tradable items retrieved from any bot. Skipping DB clearance to preserve existing catalog.`);
       return;
     }
