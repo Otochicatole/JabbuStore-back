@@ -18,11 +18,18 @@ export class AdminMarketplaceController {
   static async updatePricingSettings(req: Request, res: Response) {
     try {
       const { globalPriceModifierType, globalPriceModifierValue, globalPriceModifierEnabled } = req.body;
+      console.log('[Admin] updatePricingSettings received:', {
+        globalPriceModifierType,
+        globalPriceModifierValue,
+        globalPriceModifierEnabled,
+        typeOfEnabled: typeof globalPriceModifierEnabled,
+      });
       const settings = await AdminSettingsService.updatePricingSettings({
         globalPriceModifierType,
         globalPriceModifierValue,
         globalPriceModifierEnabled
       });
+      console.log('[Admin] updatePricingSettings saved:', settings);
       res.json(settings);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
