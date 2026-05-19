@@ -1,8 +1,23 @@
 import { Request, Response } from 'express';
 import { ListingService } from '../application/ListingService';
 import { PurchaseService } from '../application/PurchaseService';
+import { AdminSettingsService } from '../application/AdminSettingsService';
 
 export class MarketplaceController {
+  // Public settings (no auth required)
+  static async getPublicSettings(req: Request, res: Response) {
+    try {
+      const settings = await AdminSettingsService.getSettings();
+      // Only expose what the client needs, nothing sensitive
+      res.json({
+        minimumUserSellPrice: settings.minimumUserSellPrice,
+        currency: settings.currency,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Listings
   static async createListing(req: Request, res: Response) {
     try {

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { 
-  CreatePurchaseOrderUseCase, 
+  CreatePurchaseOrderUseCase,
+  CreateSellOrderUseCase,
   GetUserOrdersUseCase, 
   GetAllOrdersUseCase, 
   UpdateOrderStatusUseCase 
@@ -10,6 +11,7 @@ import { OrderStatus } from '../domain/Order';
 export class OrderController {
   constructor(
     private createPurchaseOrderUseCase: CreatePurchaseOrderUseCase,
+    private createSellOrderUseCase: CreateSellOrderUseCase,
     private getUserOrdersUseCase: GetUserOrdersUseCase,
     private getAllOrdersUseCase: GetAllOrdersUseCase,
     private updateOrderStatusUseCase: UpdateOrderStatusUseCase
@@ -25,6 +27,22 @@ export class OrderController {
       }
 
       const order = await this.createPurchaseOrderUseCase.execute(userId, itemIds);
+      res.status(201).json(order);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  async createSellOrder(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const { items } = req.body; // [{ assetId, requestedPrice }]
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'items must be a non-empty array of { assetId, requestedPrice }' });
+      }
+
+      const order = await this.createSellOrderUseCase.execute(userId, items);
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

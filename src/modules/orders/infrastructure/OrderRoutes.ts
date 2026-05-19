@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { OrderController } from './OrderController';
 import { PrismaOrderRepository } from './PrismaOrderRepository';
 import { 
-  CreatePurchaseOrderUseCase, 
+  CreatePurchaseOrderUseCase,
+  CreateSellOrderUseCase,
   GetUserOrdersUseCase, 
   GetAllOrdersUseCase, 
   UpdateOrderStatusUseCase 
@@ -13,12 +14,14 @@ const router = Router();
 
 const orderRepository = new PrismaOrderRepository();
 const createPurchaseOrderUseCase = new CreatePurchaseOrderUseCase(orderRepository);
+const createSellOrderUseCase = new CreateSellOrderUseCase(orderRepository);
 const getUserOrdersUseCase = new GetUserOrdersUseCase(orderRepository);
 const getAllOrdersUseCase = new GetAllOrdersUseCase(orderRepository);
 const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(orderRepository);
 
 const orderController = new OrderController(
   createPurchaseOrderUseCase,
+  createSellOrderUseCase,
   getUserOrdersUseCase,
   getAllOrdersUseCase,
   updateOrderStatusUseCase
@@ -26,6 +29,7 @@ const orderController = new OrderController(
 
 // Client Routes
 router.post('/', authMiddleware, (req, res) => orderController.createPurchaseOrder(req, res));
+router.post('/sell', authMiddleware, (req, res) => orderController.createSellOrder(req, res));
 router.get('/me', authMiddleware, (req, res) => orderController.getMyOrders(req, res));
 
 // Admin Routes

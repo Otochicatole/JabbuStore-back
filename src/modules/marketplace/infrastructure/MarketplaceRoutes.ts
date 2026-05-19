@@ -4,6 +4,9 @@ import { authMiddleware } from '../../../shared/infrastructure/middlewares/authM
 
 const router = Router();
 
+// Public settings (for clients without auth)
+router.get('/settings/public', MarketplaceController.getPublicSettings);
+
 // Listings
 router.get('/listings', MarketplaceController.getActiveListings);
 router.post('/listings', authMiddleware, MarketplaceController.createListing);

@@ -24,6 +24,10 @@ router.delete('/bots/:id', AdminMarketplaceController.deleteBot);
 router.get('/purchases', AdminMarketplaceController.getPurchases);
 router.get('/purchases/:id', AdminMarketplaceController.getPurchaseById);
 
+// User Listings (sell requests)
+router.get('/listings', AdminMarketplaceController.getListings);
+router.patch('/listings/:id/cancel', AdminMarketplaceController.adminCancelListing);
+
 // Trades
 router.post('/trades/:purchaseId/process', AdminMarketplaceController.processTrade);
 

@@ -3,6 +3,8 @@ import { AdminSettingsService } from '../application/AdminSettingsService';
 import { BotService } from '../application/BotService';
 import { PurchaseService } from '../application/PurchaseService';
 import { TradeService } from '../application/TradeService';
+import { ListingService } from '../application/ListingService';
+import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
 export class AdminMarketplaceController {
   // Settings
@@ -128,6 +130,29 @@ export class AdminMarketplaceController {
       const { purchaseId } = req.params;
       const trade = await TradeService.initiateTradeProcess(purchaseId as string);
       res.json(trade);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Listings (user sell requests)
+  static async getListings(req: Request, res: Response) {
+    try {
+      const listings = await ListingService.getAllListings();
+      res.json(listings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async adminCancelListing(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const listing = await (prisma as any).skinListing.update({
+        where: { id },
+        data: { status: 'cancelled' }
+      });
+      res.json(listing);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

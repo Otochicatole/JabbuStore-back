@@ -52,6 +52,29 @@ export class ListingService {
     });
   }
 
+  static async getAllListings() {
+    const listings = await prisma.skinListing.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, name: true, avatar: true, steamId: true } }
+      }
+    });
+
+    // Enrich with inventory item data (name + iconUrl)
+    const assetIds = listings.map(l => l.skinId);
+    const inventoryItems = await prisma.userInventoryItem.findMany({
+      where: { assetId: { in: assetIds } },
+      select: { assetId: true, name: true, iconUrl: true }
+    });
+    const inventoryMap = Object.fromEntries(inventoryItems.map(i => [i.assetId, i]));
+
+    return listings.map(listing => ({
+      ...listing,
+      itemName: inventoryMap[listing.skinId]?.name ?? null,
+      itemIconUrl: inventoryMap[listing.skinId]?.iconUrl ?? null,
+    }));
+  }
+
   static async getListingById(id: string) {
     return prisma.skinListing.findUnique({
       where: { id },
