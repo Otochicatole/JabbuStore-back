@@ -1,6 +1,7 @@
 import { IUserRepository, User, UserInventoryItem } from '../domain/User';
 import { AuthService } from '../../../shared/infrastructure/AuthService';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
 export class CreateUserUseCase {
   constructor(private userRepository: IUserRepository) {}
@@ -80,7 +81,7 @@ export class GetUserInventoryUseCase {
     if (!forceSync && cachedInventory.length > 0 && !isExpired) {
       const tradableCache = cachedInventory.filter(item => item.tradable);
       console.log(`[User Inventory Cache] Serving ${tradableCache.length} tradable items from database for user: ${userId}`);
-      return tradableCache;
+      return this.applySellModifier(tradableCache);
     }
 
     if (isExpired && !forceSync) {
@@ -133,7 +134,7 @@ export class GetUserInventoryUseCase {
       console.log(`[User Inventory Cache] Saving ${pricedItems.length} tradable items to database cache for user: ${userId}`);
       await this.userRepository.saveUserInventory(userId, pricedItems);
 
-      return pricedItems;
+      return this.applySellModifier(pricedItems);
     } catch (error: any) {
       console.error('Error fetching steam inventory:', error);
       
@@ -233,6 +234,34 @@ export class GetUserInventoryUseCase {
         ...details,
         float: floatVal,
         pattern: patternVal,
+      };
+    });
+  }
+
+  private async applySellModifier(items: UserInventoryItem[]): Promise<UserInventoryItem[]> {
+    const settings = await prisma.adminSettings.findFirst();
+    
+    if (!settings || !settings.userSellModifierEnabled) {
+      return items;
+    }
+
+    const value = settings.userSellModifierValue;
+    const type = settings.userSellModifierType;
+
+    return items.map(item => {
+      let modifiedPrice = item.price;
+      if (type === 'percentage_increase') {
+        modifiedPrice = item.price * (1 + value / 100);
+      } else if (type === 'percentage_decrease') {
+        modifiedPrice = item.price * (1 - value / 100);
+      } else if (type === 'fixed_increase') {
+        modifiedPrice = item.price + value;
+      } else if (type === 'fixed_decrease') {
+        modifiedPrice = item.price - value;
+      }
+      return {
+        ...item,
+        price: Math.max(0, modifiedPrice)
       };
     });
   }

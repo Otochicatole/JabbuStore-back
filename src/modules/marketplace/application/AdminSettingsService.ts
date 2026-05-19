@@ -23,6 +23,18 @@ export class AdminSettingsService {
     });
   }
 
+  static async updateUserSellSettings(data: {
+    userSellModifierType?: string;
+    userSellModifierValue?: number;
+    userSellModifierEnabled?: boolean;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data
+    });
+  }
+
   static async updateMinimumSellPrice(minimumUserSellPrice: number) {
     const settings = await this.getSettings();
     return prisma.adminSettings.update({

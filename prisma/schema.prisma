@@ -117,6 +117,12 @@ model AdminSettings {
   globalPriceModifierType    String   @default("percentage_increase") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
   globalPriceModifierValue   Float    @default(0.0)
   globalPriceModifierEnabled Boolean  @default(false)
+  
+  // Reglas para cuando el usuario vende
+  userSellModifierType       String   @default("percentage_decrease") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
+  userSellModifierValue      Float    @default(0.0)
+  userSellModifierEnabled    Boolean  @default(false)
+
   minimumUserSellPrice       Float    @default(1.0)
   currency                   String   @default("USD")
   createdAt                  DateTime @default(now())

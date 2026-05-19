@@ -38,6 +38,20 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateUserSellSettings(req: Request, res: Response) {
+    try {
+      const { userSellModifierType, userSellModifierValue, userSellModifierEnabled } = req.body;
+      const settings = await AdminSettingsService.updateUserSellSettings({
+        userSellModifierType,
+        userSellModifierValue,
+        userSellModifierEnabled
+      });
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async updateMinimumSellPrice(req: Request, res: Response) {
     try {
       const { minimumUserSellPrice } = req.body;
