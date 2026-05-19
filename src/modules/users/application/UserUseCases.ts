@@ -276,3 +276,23 @@ export class GetUserProfileUseCase {
   }
 }
 
+export class UpdateUserProfileUseCase {
+  constructor(private userRepository: IUserRepository) {}
+
+  async execute(userId: string, data: { name?: string; email?: string; tradeUrl?: string }): Promise<User> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const updatedUser = await this.userRepository.save({
+      id: userId,
+      name: data.name !== undefined ? data.name : user.name,
+      email: data.email !== undefined ? data.email : user.email,
+      tradeUrl: data.tradeUrl !== undefined ? data.tradeUrl : (user as any).tradeUrl,
+    });
+
+    return updatedUser;
+  }
+}
+

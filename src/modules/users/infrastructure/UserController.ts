@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryUseCase, GetUserProfileUseCase } from '../application/UserUseCases';
+import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryUseCase, GetUserProfileUseCase, UpdateUserProfileUseCase } from '../application/UserUseCases';
 
 export class UserController {
   constructor(
@@ -7,7 +7,8 @@ export class UserController {
     private getUsersUseCase: GetUsersUseCase,
     private loginUserUseCase: LoginUserUseCase,
     private getUserInventoryUseCase: GetUserInventoryUseCase,
-    private getUserProfileUseCase: GetUserProfileUseCase
+    private getUserProfileUseCase: GetUserProfileUseCase,
+    private updateUserProfileUseCase: UpdateUserProfileUseCase
   ) {}
 
   async getAll(req: Request, res: Response) {
@@ -52,6 +53,18 @@ export class UserController {
       res.json(userWithoutPassword);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  }
+
+  async updateMe(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const { name, email, tradeUrl } = req.body;
+      const updatedUser = await this.updateUserProfileUseCase.execute(userId, { name, email, tradeUrl });
+      const { password: _, ...userWithoutPassword } = updatedUser;
+      res.json(userWithoutPassword);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
     }
   }
 

@@ -27,6 +27,7 @@ export interface User {
   steamId: string | null;
   avatar: string | null;
   profileUrl: string | null;
+  tradeUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
   inventory?: UserInventoryItem[];
