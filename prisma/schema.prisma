@@ -45,6 +45,7 @@ model StoreItem {
   marketable Boolean  @default(true)
   botSteamId String
   price      Float    @default(0.0)
+  isPriceManual Boolean @default(false)
   rarity     String   @default("common")
   exterior   String?
   category   String   @default("other")
