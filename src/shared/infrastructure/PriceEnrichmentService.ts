@@ -184,32 +184,7 @@ export class PriceEnrichmentService {
       }
     }
     
-    // 1. Buff163 es el estándar de oro de precios en efectivo de CS2 (BUFF)
-    if (itemPriceData.buff?.ask) {
-      return itemPriceData.buff.ask;
-    }
-    
-    // 2. CSFloat es el segundo mercado en efectivo con más volumen y precios realistas
-    if (itemPriceData.csfloat?.ask) {
-      return itemPriceData.csfloat.ask;
-    }
-    
-    // 3. Skinport es una excelente referencia europea
-    if (itemPriceData.skinport?.ask) {
-      return itemPriceData.skinport.ask;
-    }
-    
-    // 4. Steam Community Market está inflado por comisiones, aplicamos descuento de ~30%
-    if (itemPriceData.steam?.ask) {
-      return Math.round(itemPriceData.steam.ask * 0.7 * 100) / 100;
-    }
-    
-    // 5. C5Game
-    if (itemPriceData.c5game?.ask) {
-      return itemPriceData.c5game.ask;
-    }
-    
-    // 6. Youpin
+    // Usar únicamente precios de Youpin
     if (itemPriceData.youpin?.ask) {
       return itemPriceData.youpin.ask;
     }
