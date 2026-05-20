@@ -33,4 +33,7 @@ router.patch('/listings/:id/cancel', AdminMarketplaceController.adminCancelListi
 // Trades
 router.post('/trades/:purchaseId/process', AdminMarketplaceController.processTrade);
 
+// Store Manual Pricing Overrides
+router.patch('/store/items/:assetId/price', AdminMarketplaceController.updateStoreItemPrice);
+
 export default router;

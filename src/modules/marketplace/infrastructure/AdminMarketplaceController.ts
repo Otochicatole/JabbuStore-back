@@ -181,4 +181,30 @@ export class AdminMarketplaceController {
       res.status(500).json({ error: err.message });
     }
   }
+
+  static async updateStoreItemPrice(req: Request, res: Response) {
+    try {
+      const { assetId } = req.params;
+      const { price, isPriceManual } = req.body;
+
+      if (typeof price !== 'number' || price < 0) {
+        return res.status(400).json({ error: 'El precio debe ser un número válido mayor o igual a 0.' });
+      }
+
+      // isPriceManual is sent from the frontend switch — defaults to true if not provided
+      const manualFlag = typeof isPriceManual === 'boolean' ? isPriceManual : true;
+
+      const updatedItem = await (prisma as any).storeItem.update({
+        where: { assetId },
+        data: {
+          price,
+          isPriceManual: manualFlag
+        }
+      });
+
+      res.json(updatedItem);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
 }
