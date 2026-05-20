@@ -26,6 +26,8 @@ export interface Order {
   type: OrderType;
   status: OrderStatus;
   totalPrice: number;
+  paymentMethod?: string | null;
+  metadata?: any;
   items: OrderItem[];
   createdAt: Date;
   updatedAt: Date;

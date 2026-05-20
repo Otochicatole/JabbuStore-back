@@ -1,10 +1,11 @@
 import { IOrderRepository, Order, OrderItem, OrderStatus, OrderType } from '../domain/Order';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import { WebhookService } from './WebhookService';
 
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
-  async execute(userId: string, assetIds: string[]): Promise<Order> {
+  async execute(userId: string, assetIds: string[], metadata?: any): Promise<Order> {
     if (!assetIds || assetIds.length === 0) {
       throw new Error('No items provided for the order');
     }
@@ -41,10 +42,15 @@ export class CreatePurchaseOrderUseCase {
       type: OrderType.BUY,
       status: OrderStatus.PENDING_PAYMENT,
       totalPrice,
+      metadata,
       items: [] // is passed separately
     };
 
     const order = await this.orderRepository.create(orderData, orderItemsData);
+    
+    // Dispatch webhook notification in the background
+    WebhookService.sendOrderNotification(order, 'order.created');
+    
     return order;
   }
 }
@@ -53,7 +59,7 @@ export class CreatePurchaseOrderUseCase {
 export class CreateSellOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
-  async execute(userId: string, items: { assetId: string; requestedPrice: number }[]): Promise<Order> {
+  async execute(userId: string, items: { assetId: string; requestedPrice: number }[], metadata?: any): Promise<Order> {
     if (!items || items.length === 0) {
       throw new Error('No items provided for the sell order');
     }
@@ -83,7 +89,29 @@ export class CreateSellOrderUseCase {
       });
 
       if (alreadyListed) {
-        throw new Error(`El item "${inventoryItem.name}" ya está listado para la venta.`);
+        // Self-healing check: If the listing is active but the only corresponding sell order is CANCELLED,
+        // we should self-heal the listing to 'cancelled' and allow this creation to pass!
+        const lastSellOrder = await prisma.order.findFirst({
+          where: {
+            userId,
+            type: 'SELL',
+            items: {
+              some: { assetId: item.assetId }
+            }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        if (lastSellOrder && lastSellOrder.status === 'CANCELLED') {
+          // Update the listing to cancelled
+          await prisma.skinListing.update({
+            where: { id: alreadyListed.id },
+            data: { status: 'cancelled' }
+          });
+          console.log(`[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`);
+        } else {
+          throw new Error(`El item "${inventoryItem.name}" ya está listado para la venta.`);
+        }
       }
 
       resolvedItems.push({
@@ -100,7 +128,7 @@ export class CreateSellOrderUseCase {
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(
-      { userId, type: OrderType.SELL, status: OrderStatus.PENDING_PAYMENT, totalPrice, items: [] },
+      { userId, type: OrderType.SELL, status: OrderStatus.PENDING_PAYMENT, totalPrice, metadata, items: [] },
       resolvedItems
     );
 
@@ -114,6 +142,12 @@ export class CreateSellOrderUseCase {
         status: 'active',
       }))
     });
+
+    // Fetch full order with items populated for the webhook dispatcher
+    const fullOrder = await this.orderRepository.findById(order.id);
+    if (fullOrder) {
+      WebhookService.sendOrderNotification(fullOrder, 'order.created');
+    }
 
     return order;
   }
@@ -139,6 +173,11 @@ export class UpdateOrderStatusUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
   async execute(orderId: string, status: OrderStatus): Promise<Order> {
-    return this.orderRepository.updateStatus(orderId, status);
+    const order = await this.orderRepository.updateStatus(orderId, status);
+    
+    // Dispatch webhook status change notification
+    WebhookService.sendOrderNotification(order, 'order.status_updated');
+    
+    return order;
   }
 }

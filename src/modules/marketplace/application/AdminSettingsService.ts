@@ -11,6 +11,7 @@ export class AdminSettingsService {
     return settings;
   }
 
+
   static async updatePricingSettings(data: {
     globalPriceModifierType?: string;
     globalPriceModifierValue?: number;
@@ -40,6 +41,14 @@ export class AdminSettingsService {
     return prisma.adminSettings.update({
       where: { id: settings.id },
       data: { minimumUserSellPrice }
+    });
+  }
+
+  static async updateWebhookUrl(webhookUrl: string | null) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data: { webhookUrl }
     });
   }
 }

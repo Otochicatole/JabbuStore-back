@@ -30,6 +30,7 @@ const orderController = new OrderController(
 // Client Routes
 router.post('/', authMiddleware, (req, res) => orderController.createPurchaseOrder(req, res));
 router.post('/sell', authMiddleware, (req, res) => orderController.createSellOrder(req, res));
+router.post('/validate', authMiddleware, (req, res) => orderController.validateOrder(req, res));
 router.get('/me', authMiddleware, (req, res) => orderController.getMyOrders(req, res));
 
 // Admin Routes

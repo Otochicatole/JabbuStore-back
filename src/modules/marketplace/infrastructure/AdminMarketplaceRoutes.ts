@@ -12,6 +12,7 @@ router.get('/settings', AdminMarketplaceController.getSettings);
 router.patch('/settings/pricing', AdminMarketplaceController.updatePricingSettings);
 router.patch('/settings/user-sell', AdminMarketplaceController.updateUserSellSettings);
 router.patch('/settings/minimum-sell-price', AdminMarketplaceController.updateMinimumSellPrice);
+router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUrl);
 
 // Bots
 router.get('/bots', AdminMarketplaceController.getBots);

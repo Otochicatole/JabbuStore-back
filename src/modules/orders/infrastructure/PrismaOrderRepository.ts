@@ -9,6 +9,8 @@ export class PrismaOrderRepository implements IOrderRepository {
         type: orderData.type as any,
         status: orderData.status as any,
         totalPrice: orderData.totalPrice,
+        paymentMethod: orderData.paymentMethod || null,
+        metadata: orderData.metadata || null,
         items: {
           create: itemsData.map(item => ({
             assetId: item.assetId,
@@ -62,6 +64,22 @@ export class PrismaOrderRepository implements IOrderRepository {
       data: { status: status as any },
       include: { items: true }
     });
+
+    // If a SELL order is cancelled, cancel any corresponding active or reserved skin listings as well
+    if (status === 'CANCELLED' && order.type === 'SELL') {
+      const assetIds = order.items.map(item => item.assetId);
+      if (assetIds.length > 0) {
+        await prisma.skinListing.updateMany({
+          where: {
+            skinId: { in: assetIds },
+            userId: order.userId,
+            status: { in: ['active', 'reserved'] }
+          },
+          data: { status: 'cancelled' }
+        });
+      }
+    }
+
     return order as any;
   }
 }

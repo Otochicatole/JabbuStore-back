@@ -98,6 +98,8 @@ model Order {
   type       OrderType
   status     OrderStatus @default(PENDING_PAYMENT)
   totalPrice Float
+  paymentMethod String?
+  metadata   Json?
   items      OrderItem[]
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
@@ -125,6 +127,7 @@ model AdminSettings {
   userSellModifierEnabled    Boolean  @default(false)
 
   minimumUserSellPrice       Float    @default(1.0)
+  webhookUrl                 String?
   currency                   String   @default("USD")
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt

@@ -62,6 +62,16 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateWebhookUrl(req: Request, res: Response) {
+    try {
+      const { webhookUrl } = req.body;
+      const settings = await AdminSettingsService.updateWebhookUrl(webhookUrl);
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
