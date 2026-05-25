@@ -38,11 +38,43 @@ export class PrismaStoreRepository implements IStoreRepository {
       };
     });
 
-    await prisma.$transaction([
-      prisma.storeItem.deleteMany(),
-      prisma.storeItem.createMany({
-        data: updatedItems as any,
-      }),
-    ]);
+    // Sanitize objects to guarantee no undefined values are passed to Prisma
+    const sanitizedItems = updatedItems.map(item => ({
+      assetId: item.assetId,
+      classId: item.classId,
+      name: item.name,
+      type: item.type,
+      iconUrl: item.iconUrl || null,
+      tradable: item.tradable ?? true,
+      marketable: item.marketable ?? true,
+      botSteamId: item.botSteamId || "resell_market",
+      price: item.price ?? 0.0,
+      isImmediate: item.isImmediate ?? true,
+      isPriceManual: item.isPriceManual ?? false,
+      rarity: item.rarity || "common",
+      exterior: item.exterior || null,
+      category: item.category || "other",
+      isStatTrak: item.isStatTrak ?? false,
+      isSouvenir: item.isSouvenir ?? false,
+      float: (item.float !== undefined && item.float !== null && !isNaN(item.float)) ? item.float : null,
+      pattern: (item.pattern !== undefined && item.pattern !== null && !isNaN(item.pattern)) ? Math.round(item.pattern) : null,
+    }));
+
+    // Chunk array into batches of 1000 items to bypass PostgreSQL parameter limit (max 65,535 parameters)
+    const chunkSize = 1000;
+    const batches: typeof sanitizedItems[] = [];
+    for (let i = 0; i < sanitizedItems.length; i += chunkSize) {
+      batches.push(sanitizedItems.slice(i, i + chunkSize));
+    }
+
+    await prisma.storeItem.deleteMany();
+    
+    console.log(`[Prisma Store Repository] Saving ${sanitizedItems.length} items in ${batches.length} chunks...`);
+    for (let idx = 0; idx < batches.length; idx++) {
+      const batch = batches[idx]!;
+      await prisma.storeItem.createMany({
+        data: batch,
+      });
+    }
   }
 }

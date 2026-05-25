@@ -51,4 +51,16 @@ export class AdminSettingsService {
       data: { webhookUrl }
     });
   }
+
+  static async updateResellSettings(data: {
+    resellModifierType?: string;
+    resellModifierValue?: number;
+    resellModifierEnabled?: boolean;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data
+    });
+  }
 }

@@ -11,6 +11,7 @@ router.use(authMiddleware, adminOnly);
 router.get('/settings', AdminMarketplaceController.getSettings);
 router.patch('/settings/pricing', AdminMarketplaceController.updatePricingSettings);
 router.patch('/settings/user-sell', AdminMarketplaceController.updateUserSellSettings);
+router.patch('/settings/resell', AdminMarketplaceController.updateResellSettings);
 router.patch('/settings/minimum-sell-price', AdminMarketplaceController.updateMinimumSellPrice);
 router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUrl);
 

@@ -51,27 +51,50 @@ export class SyncStoreItemsUseCase {
     // Filtrar únicamente artículos que son intercambiables (Enfoque B)
     const tradableAggregatedItems = aggregatedItems.filter(item => item.tradable === true);
 
-    // Si no pudimos conseguir ningún ítem en absoluto debido a fallos totales o rate limits globales,
-    // es mejor NO limpiar la base de datos (para no dejar la tienda vacía)
-    if (tradableAggregatedItems.length === 0 && activeBots.length > 0) {
-      console.warn(`[Store Inventory Sync] No tradable items retrieved from any bot. Skipping DB clearance to preserve existing catalog.`);
+    // Obtener los precios de mercado reales usando el PriceEnrichmentService para ítems de bots
+    let botItemsWithFlag: any[] = [];
+    if (tradableAggregatedItems.length > 0) {
+      console.log(`[Store Inventory Sync] Retrieved ${tradableAggregatedItems.length} tradable items from bots. Fetching market prices...`);
+      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
+      
+      // Filtrar duplicados por assetId para evitar errores de Unique Constraint en la base de datos
+      const uniqueItemsMap = new Map<string, any>();
+      for (const item of pricedItems) {
+        uniqueItemsMap.set(item.assetId, item);
+      }
+      botItemsWithFlag = Array.from(uniqueItemsMap.values()).map(item => ({
+        ...item,
+        isImmediate: true,
+      }));
+    } else {
+      console.warn(`[Store Inventory Sync] No tradable items retrieved from bots.`);
+    }
+
+    // Traer el catálogo completo de reventa desde cs2.sh (Youpin + Buff)
+    const resellItems = await PriceEnrichmentService.fetchAllResellItemsFromMarket();
+
+    // Unificar ambos catálogos
+    const allItems = [...botItemsWithFlag, ...resellItems];
+
+    // Deduplicar la lista final completa por assetId para garantizar la restricción única de la base de datos
+    const uniqueFinalItemsMap = new Map<string, any>();
+    for (const item of allItems) {
+      uniqueFinalItemsMap.set(item.assetId, item);
+    }
+    const finalAllItems = Array.from(uniqueFinalItemsMap.values());
+
+    // Protección de seguridad: si no conseguimos NINGÚN artículo (bots ni reventa) y tenemos bots activos
+    // es mejor no limpiar la base de datos para no dejar la tienda vacía.
+    if (finalAllItems.length === 0 && activeBots.length > 0) {
+      console.warn(`[Store Inventory Sync] No items retrieved from bots or resell catalog. Skipping DB sync to preserve data.`);
       return;
     }
 
-    console.log(`[Store Inventory Sync] Retrieved ${tradableAggregatedItems.length} tradable items from bots. Fetching market prices...`);
+    const finalBotCount = finalAllItems.filter(i => i.isImmediate).length;
+    const finalResellCount = finalAllItems.filter(i => !i.isImmediate).length;
 
-    // Obtener los precios de mercado reales usando el PriceEnrichmentService
-    const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
-
-    // Filtrar duplicados por assetId para evitar errores de Unique Constraint en la base de datos
-    const uniqueItemsMap = new Map<string, StoreItem>();
-    for (const item of pricedItems) {
-      uniqueItemsMap.set(item.assetId, item);
-    }
-    const finalPricedItems = Array.from(uniqueItemsMap.values());
-
-    console.log(`[Store Inventory Sync] Saving ${finalPricedItems.length} unique tradable items with real prices and basic floats to database...`);
-    await this.storeRepository.clearAndSaveMany(finalPricedItems);
+    console.log(`[Store Inventory Sync] Saving ${finalBotCount} bot items and ${finalResellCount} resell items to database...`);
+    await this.storeRepository.clearAndSaveMany(finalAllItems);
     console.log(`[Store Inventory Sync] Database sync completed successfully!`);
   }
 

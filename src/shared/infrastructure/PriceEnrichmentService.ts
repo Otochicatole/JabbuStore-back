@@ -9,6 +9,8 @@ export interface PriceableItem {
 }
 
 export class PriceEnrichmentService {
+  private static byMykelImagesMap: Map<string, string> | null = null;
+
   /**
    * Detectar la fase exacta de un Doppler o Gamma Doppler usando icon_url o el paintIndex oficial de CS2
    */
@@ -312,6 +314,246 @@ export class PriceEnrichmentService {
       hash |= 0; // Convert to 32bit integer
     }
     return Math.abs(hash);
+  }
+
+  static inferDetailsFromMarketHashName(name: string): {
+    type: string;
+    rarity: string;
+    exterior: string | null;
+    category: string;
+    isStatTrak: boolean;
+    isSouvenir: boolean;
+  } {
+    const nameLower = name.toLowerCase();
+    
+    // Exterior
+    let exterior: string | null = null;
+    if (name.includes('(Factory New)')) exterior = 'Factory New';
+    else if (name.includes('(Minimal Wear)')) exterior = 'Minimal Wear';
+    else if (name.includes('(Field-Tested)')) exterior = 'Field-Tested';
+    else if (name.includes('(Well-Worn)')) exterior = 'Well-Worn';
+    else if (name.includes('(Battle-Scarred)')) exterior = 'Battle-Scarred';
+
+    // Rarity & Category
+    let rarity = 'common';
+    let category = 'other';
+    let type = 'Weapon';
+
+    const isKnife = name.includes('★') || ['knife', 'bayonet', 'karambit', 'flip', 'gut', 'falchion', 'bowie', 'huntsman', 'talon', 'ursus', 'stiletto', 'navaja', 'nomad', 'survival', 'paracord', 'skeleton'].some(k => nameLower.includes(k));
+    const isGloves = ['gloves', 'wraps'].some(g => nameLower.includes(g));
+
+    if (isKnife) {
+      rarity = 'ancient';
+      category = 'knife';
+      type = '★ Knife';
+    } else if (isGloves) {
+      rarity = 'ancient';
+      category = 'gloves';
+      type = '★ Gloves';
+    } else {
+      if (['ak-47', 'm4a4', 'm4a1-s', 'awp', 'scout', 'ssg 08', 'sg 553', 'aug', 'galil', 'famas', 'g3sg1', 'scar-20'].some(r => nameLower.includes(r))) {
+        category = 'rifle';
+        type = 'Rifle';
+        rarity = nameLower.includes('ak-47') || nameLower.includes('awp') || nameLower.includes('m4a') ? 'legendary' : 'mythical';
+      } else if (['glock-18', 'usp-s', 'desert eagle', 'deagle', 'p250', 'cz75', 'five-seven', 'tec-9', 'dual berettas', 'revolver'].some(p => nameLower.includes(p))) {
+        category = 'pistol';
+        type = 'Pistol';
+        rarity = nameLower.includes('desert eagle') || nameLower.includes('usp-s') ? 'mythical' : 'rare';
+      } else if (['mac-10', 'mp9', 'mp7', 'mp5', 'ump-45', 'p90', 'bizon'].some(s => nameLower.includes(s))) {
+        category = 'smg';
+        type = 'SMG';
+        rarity = 'rare';
+      } else if (['nova', 'xm1014', 'mag-7', 'sawed-off', 'negev', 'm249'].some(sh => nameLower.includes(sh))) {
+        category = 'heavy';
+        type = 'Heavy';
+        rarity = 'uncommon';
+      }
+    }
+
+    const isStatTrak = name.includes('StatTrak™') || name.includes('StatTrak');
+    const isSouvenir = name.includes('Souvenir');
+
+    return {
+      type,
+      rarity,
+      exterior,
+      category,
+      isStatTrak,
+      isSouvenir
+    };
+  }
+
+  static cleanNameForImageLookup(name: string): string {
+    if (!name) return '';
+    let clean = name;
+
+    // 1. Quitar el exterior entre paréntesis al final (ej. " (Factory New)", " (Field-Tested)")
+    const exteriorMatch = clean.match(/\s*\([^)]+\)\s*$/);
+    if (exteriorMatch) {
+      clean = clean.replace(exteriorMatch[0], '');
+    }
+
+    // 2. Quitar Doppler phases al final
+    const phaseNames = ['Phase 1', 'Phase 2', 'Phase 3', 'Phase 4', 'Ruby', 'Sapphire', 'Black Pearl', 'Emerald'];
+    for (const phase of phaseNames) {
+      if (clean.endsWith(` | ${phase}`)) {
+        clean = clean.substring(0, clean.length - (phase.length + 3));
+        break;
+      }
+    }
+
+    // 3. Eliminar prefijos clásicos de mercado de Steam
+    clean = clean.replace(/^★\s+/, ''); // Quitar estrella de cuchillos/guantes
+    clean = clean.replace(/^StatTrak™\s+/, ''); // Quitar StatTrak
+    clean = clean.replace(/^Souvenir\s+/, ''); // Quitar Souvenir
+
+    return clean.trim();
+  }
+
+  static async fetchByMykelSkinsImages(): Promise<Map<string, string>> {
+    if (this.byMykelImagesMap) return this.byMykelImagesMap;
+
+    const map = new Map<string, string>();
+    const endpoints = [
+      'skins.json',
+      'stickers.json',
+      'crates.json',
+      'agents.json',
+      'music_kits.json',
+      'patches.json',
+      'keys.json',
+      'graffiti.json',
+      'collectibles.json'
+    ];
+
+    console.log(`[Price Enrichment Service] Loading skin, sticker, agent, patch, crate & music images from ByMykel API...`);
+
+    const promises = endpoints.map(async (file) => {
+      const url = `https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/${file}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        return { file, data: (await response.json()) as any[] };
+      }
+      throw new Error(`Failed to fetch ${file}`);
+    });
+
+    const results = await Promise.allSettled(promises);
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        const { file, data } = result.value;
+        let count = 0;
+        for (const item of data) {
+          if (item && item.name && item.image) {
+            // Mapeo 1: Nombre original de ByMykel
+            map.set(item.name, item.image);
+
+            // Mapeo 2: Nombre de ByMykel limpio
+            const cleanMykelName = this.cleanNameForImageLookup(item.name);
+            if (cleanMykelName && cleanMykelName !== item.name) {
+              map.set(cleanMykelName, item.image);
+            }
+            count++;
+          }
+        }
+        console.log(`  -> Loaded ${count} mappings from ${file}`);
+      } else {
+        console.warn(`[Price Enrichment Service] Failed to load some image mappings:`, result.reason);
+      }
+    }
+
+    this.byMykelImagesMap = map;
+    console.log(`[Price Enrichment Service] Loaded total of ${map.size} unique image mappings from ByMykel.`);
+    return map;
+  }
+
+  /**
+   * Fetchea todas las skins con sus precios Youpin y Buff desde cs2.sh,
+   * y las formatea como ítems de reventa (isImmediate = false).
+   */
+  static async fetchAllResellItemsFromMarket(): Promise<any[]> {
+    const apiKey = config.cs2ShApiKey;
+    if (!apiKey) {
+      console.warn(`[Price Enrichment Service] CS2_SH_API_KEY is not set. Resell catalog cannot be loaded.`);
+      return [];
+    }
+
+    try {
+      console.log(`[Price Enrichment Service] Fetching complete resell catalog from cs2.sh...`);
+      const response = await fetch('https://api.cs2.sh/v1/prices/latest', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`[Price Enrichment Service] cs2.sh returned error status: ${response.status}`);
+        return [];
+      }
+
+      const responseData = (await response.json()) as any;
+      const itemsMap = responseData.items || responseData || {};
+      const resellItems: any[] = [];
+
+      // Obtener mapas de imágenes estándar desde ByMykel
+      const imagesMap = await this.fetchByMykelSkinsImages();
+
+      for (const [name, itemData] of Object.entries(itemsMap)) {
+        const data = itemData as any;
+        const youpinVolume = data.youpin?.ask_volume || 0;
+        const buffVolume = data.buff?.ask_volume || 0;
+        const youpinAsk = data.youpin?.ask || 0;
+        const buffAsk = data.buff?.ask || 0;
+
+        // Filtrar por volumen y liquidez mínima para no saturar la base de datos (mínimo 2 ofertas activas)
+        if (youpinVolume + buffVolume < 2) continue;
+
+        // Tomar el precio ask de Youpin prioritariamente, sino de Buff
+        const basePrice = youpinAsk || buffAsk;
+        if (!basePrice || basePrice <= 0.5) continue; // Descartar sin precio o demasiado baratos
+
+        const details = this.inferDetailsFromMarketHashName(name);
+        const safeId = `resell-${name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
+
+        // Limpiar el nombre para ByMykel de manera exhaustiva
+        const cleanBaseName = this.cleanNameForImageLookup(name);
+
+        // Buscar imagen en el mapa
+        const iconUrl = imagesMap.get(name) || 
+                        imagesMap.get(cleanBaseName) || 
+                        imagesMap.get('★ ' + cleanBaseName) || 
+                        imagesMap.get(cleanBaseName.replace('★ ', '')) || 
+                        null;
+
+        resellItems.push({
+          assetId: safeId,
+          classId: safeId,
+          name,
+          type: details.type,
+          iconUrl,
+          tradable: true,
+          marketable: true,
+          botSteamId: "resell_market",
+          price: basePrice,
+          isImmediate: false,
+          isPriceManual: false,
+          rarity: details.rarity,
+          exterior: details.exterior,
+          category: details.category,
+          isStatTrak: details.isStatTrak,
+          isSouvenir: details.isSouvenir,
+          float: null,
+          pattern: null,
+        });
+      }
+
+      console.log(`[Price Enrichment Service] Successfully parsed ${resellItems.length} resell items from cs2.sh.`);
+      return resellItems;
+    } catch (error) {
+      console.error(`[Price Enrichment Service] Error fetching resell items:`, error);
+      return [];
+    }
   }
 
 }

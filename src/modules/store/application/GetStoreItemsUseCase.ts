@@ -2,17 +2,12 @@ import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { StoreItem } from '../domain/Item';
 import { IStoreRepository } from '../domain/IStoreRepository';
 
-function applyModifier(basePrice: number, settings: {
-  globalPriceModifierEnabled: boolean;
-  globalPriceModifierType: string;
-  globalPriceModifierValue: number;
-}): number {
-  if (!settings.globalPriceModifierEnabled) return basePrice;
+function applyModifier(basePrice: number, enabled: boolean, type: string, value: number): number {
+  if (!enabled) return basePrice;
 
-  const value = settings.globalPriceModifierValue;
   let modifier = 0;
 
-  switch (settings.globalPriceModifierType) {
+  switch (type) {
     case 'percentage_increase': modifier = (basePrice * value) / 100; break;
     case 'percentage_decrease': modifier = -((basePrice * value) / 100); break;
     case 'fixed_increase': modifier = value; break;
@@ -32,16 +27,32 @@ export class GetStoreItemsUseCase {
       prisma.adminSettings.findFirst(),
     ]);
 
-    const modifierSettings = settings ?? {
+    const settingsData = settings ?? {
       globalPriceModifierEnabled: false,
       globalPriceModifierType: 'percentage_increase',
       globalPriceModifierValue: 0,
+      resellModifierEnabled: false,
+      resellModifierType: 'percentage_increase',
+      resellModifierValue: 0,
     };
 
-    // Apply the global price modifier in-memory — base price in DB stays untouched
-    return items.map((item) => ({
-      ...item,
-      displayPrice: applyModifier(item.price, modifierSettings),
-    }));
+    return items.map((item) => {
+      const isImmediate = item.isImmediate !== false; // true por defecto si no está definido
+      
+      const enabled = isImmediate 
+        ? settingsData.globalPriceModifierEnabled 
+        : settingsData.resellModifierEnabled;
+      const type = isImmediate 
+        ? settingsData.globalPriceModifierType 
+        : settingsData.resellModifierType;
+      const value = isImmediate 
+        ? settingsData.globalPriceModifierValue 
+        : settingsData.resellModifierValue;
+
+      return {
+        ...item,
+        displayPrice: applyModifier(item.price, enabled, type, value),
+      };
+    });
   }
 }

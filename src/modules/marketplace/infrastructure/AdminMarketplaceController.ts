@@ -72,6 +72,20 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateResellSettings(req: Request, res: Response) {
+    try {
+      const { resellModifierType, resellModifierValue, resellModifierEnabled } = req.body;
+      const settings = await AdminSettingsService.updateResellSettings({
+        resellModifierType,
+        resellModifierValue,
+        resellModifierEnabled
+      });
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
