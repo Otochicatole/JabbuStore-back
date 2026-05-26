@@ -38,7 +38,6 @@ export class PrismaStoreRepository implements IStoreRepository {
       };
     });
 
-    // Sanitize objects to guarantee no undefined values are passed to Prisma
     const sanitizedItems = updatedItems.map(item => ({
       assetId: item.assetId,
       classId: item.classId,
@@ -47,9 +46,8 @@ export class PrismaStoreRepository implements IStoreRepository {
       iconUrl: item.iconUrl || null,
       tradable: item.tradable ?? true,
       marketable: item.marketable ?? true,
-      botSteamId: item.botSteamId || "resell_market",
+      botSteamId: item.botSteamId || "unknown",
       price: item.price ?? 0.0,
-      isImmediate: item.isImmediate ?? true,
       isPriceManual: item.isPriceManual ?? false,
       rarity: item.rarity || "common",
       exterior: item.exterior || null,

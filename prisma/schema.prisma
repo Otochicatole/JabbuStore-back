@@ -36,26 +36,46 @@ model Admin {
 }
 
 model StoreItem {
-  assetId    String   @id
-  classId    String
-  name       String
-  type       String
-  iconUrl    String?
-  tradable   Boolean  @default(true)
-  marketable Boolean  @default(true)
-  botSteamId String
-  price      Float    @default(0.0)
-  isImmediate   Boolean  @default(true)
+  assetId       String   @id
+  classId       String
+  name          String
+  type          String
+  iconUrl       String?
+  tradable      Boolean  @default(true)
+  marketable    Boolean  @default(true)
+  botSteamId    String
+  price         Float    @default(0.0)
   isPriceManual Boolean  @default(false)
-  rarity     String   @default("common")
-  exterior   String?
-  category   String   @default("other")
-  isStatTrak Boolean  @default(false)
-  isSouvenir Boolean  @default(false)
-  float      Float?
-  pattern    Int?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  rarity        String   @default("common")
+  exterior      String?
+  category      String   @default("other")
+  isStatTrak    Boolean  @default(false)
+  isSouvenir    Boolean  @default(false)
+  float         Float?
+  pattern       Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/// Catálogo de ítems de reventa provenientes de Buff163 y YouPin via cs2.sh
+model MarketListing {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  provider      String   // 'buff' | 'youpin' — plataforma con mejor precio/volumen
+  youpinAsk     Float?
+  youpinVolume  Int?
+  buffAsk       Float?
+  buffVolume    Int?
+  price         Float    @default(0.0) // precio base seleccionado (mejor entre ambos)
+  iconUrl       String?
+  rarity        String   @default("common")
+  exterior      String?
+  category      String   @default("other")
+  isStatTrak    Boolean  @default(false)
+  isSouvenir    Boolean  @default(false)
+  isPriceManual Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model UserInventoryItem {
@@ -124,19 +144,21 @@ model OrderItem {
 
 model AdminSettings {
   id                         String   @id @default(uuid())
-  globalPriceModifierType    String   @default("percentage_increase") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
+
+  // Modificador global para ítems físicos de bots
+  globalPriceModifierType    String   @default("percentage_increase")
   globalPriceModifierValue   Float    @default(0.0)
   globalPriceModifierEnabled Boolean  @default(false)
   
   // Reglas para cuando el usuario vende
-  userSellModifierType       String   @default("percentage_decrease") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
+  userSellModifierType       String   @default("percentage_decrease")
   userSellModifierValue      Float    @default(0.0)
   userSellModifierEnabled    Boolean  @default(false)
 
-  // Reglas para reventa
-  resellModifierType         String   @default("percentage_increase") // percentage_increase, percentage_decrease, fixed_increase, fixed_decrease
-  resellModifierValue        Float    @default(0.0)
-  resellModifierEnabled      Boolean  @default(false)
+  // Modificador para market listings (Buff/YouPin) — independiente de bots
+  marketModifierType         String   @default("percentage_increase")
+  marketModifierValue        Float    @default(0.0)
+  marketModifierEnabled      Boolean  @default(false)
 
   minimumUserSellPrice       Float    @default(1.0)
   webhookUrl                 String?

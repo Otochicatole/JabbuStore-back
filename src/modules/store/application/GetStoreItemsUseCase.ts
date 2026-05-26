@@ -31,28 +31,16 @@ export class GetStoreItemsUseCase {
       globalPriceModifierEnabled: false,
       globalPriceModifierType: 'percentage_increase',
       globalPriceModifierValue: 0,
-      resellModifierEnabled: false,
-      resellModifierType: 'percentage_increase',
-      resellModifierValue: 0,
     };
 
-    return items.map((item) => {
-      const isImmediate = item.isImmediate !== false; // true por defecto si no está definido
-      
-      const enabled = isImmediate 
-        ? settingsData.globalPriceModifierEnabled 
-        : settingsData.resellModifierEnabled;
-      const type = isImmediate 
-        ? settingsData.globalPriceModifierType 
-        : settingsData.resellModifierType;
-      const value = isImmediate 
-        ? settingsData.globalPriceModifierValue 
-        : settingsData.resellModifierValue;
-
-      return {
-        ...item,
-        displayPrice: applyModifier(item.price, enabled, type, value),
-      };
-    });
+    return items.map((item) => ({
+      ...item,
+      displayPrice: applyModifier(
+        item.price,
+        settingsData.globalPriceModifierEnabled,
+        settingsData.globalPriceModifierType,
+        settingsData.globalPriceModifierValue,
+      ),
+    }));
   }
 }

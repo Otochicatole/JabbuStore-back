@@ -10,43 +10,50 @@ export class CreatePurchaseOrderUseCase {
       throw new Error('No items provided for the order');
     }
 
-    // Obtenemos los items directamente de la base de datos para asegurar el precio real
-    const storeItems = await prisma.storeItem.findMany({
-      where: {
-        assetId: { in: assetIds }
-      }
-    });
+    // Separar bot items de market listings
+    const botIds = assetIds.filter(id => !id.startsWith('market-'));
+    const marketIds = assetIds
+      .filter(id => id.startsWith('market-'))
+      .map(id => id.replace(/^market-/, ''));
 
-    if (storeItems.length !== assetIds.length) {
+    // Resolver bot items
+    const storeItems = botIds.length > 0
+      ? await prisma.storeItem.findMany({ where: { assetId: { in: botIds } } })
+      : [];
+
+    if (storeItems.length !== botIds.length) {
       const foundIds = storeItems.map(i => i.assetId);
-      const missingIds = assetIds.filter(id => !foundIds.includes(id));
-      throw new Error(`Some items are no longer available in the store: ${missingIds.join(', ')}`);
+      const missingIds = botIds.filter(id => !foundIds.includes(id));
+      throw new Error(`Some bot items are no longer available: ${missingIds.join(', ')}`);
     }
 
-    // Map overrides list for fast lookup
+    // Resolver market listings
+    const marketListings = marketIds.length > 0
+      ? await prisma.marketListing.findMany({ where: { id: { in: marketIds } } })
+      : [];
+
+    if (marketListings.length !== marketIds.length) {
+      const foundIds = marketListings.map((i: any) => i.id);
+      const missingIds = marketIds.filter(id => !foundIds.includes(id));
+      throw new Error(`Some market listings are no longer available: ${missingIds.join(', ')}`);
+    }
+
+    // Map overrides for fast lookup
     const overridesMap = new Map<string, any>();
     if (Array.isArray(itemsOverrides)) {
       itemsOverrides.forEach(ov => {
-        if (ov && ov.assetId) {
-          overridesMap.set(ov.assetId, ov);
-        }
+        if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
       });
     }
 
     let totalPrice = 0;
-    const orderItemsData: Omit<OrderItem, 'id' | 'orderId'>[] = storeItems.map(item => {
+    const orderItemsData: Omit<OrderItem, 'id' | 'orderId'>[] = [];
+
+    // Bot items — precio real de DB, float/pattern reales
+    for (const item of storeItems) {
       totalPrice += item.price;
       const override = overridesMap.get(item.assetId);
-      
-      // Determine provider: use override, or database field, or fallback to bots
-      let provider = "bots";
-      if (override && override.provider) {
-        provider = override.provider;
-      } else if (item.botSteamId === "resell_market") {
-        provider = "youpin"; // resell default
-      }
-
-      return {
+      orderItemsData.push({
         assetId: item.assetId,
         name: item.name,
         price: item.price,
@@ -55,11 +62,26 @@ export class CreatePurchaseOrderUseCase {
         exterior: override?.exterior || item.exterior,
         float: (override?.float !== undefined && override?.float !== null) ? override.float : item.float,
         pattern: (override?.pattern !== undefined && override?.pattern !== null) ? override.pattern : item.pattern,
-        provider: provider
-      };
-    });
+        provider: 'bot',
+      });
+    }
 
-    // Fix floating point precision
+    // Market listings — precio del catálogo, sin float/pattern individuales
+    for (const item of marketListings as any[]) {
+      totalPrice += item.price;
+      orderItemsData.push({
+        assetId: `market-${item.id}`,
+        name: item.name,
+        price: item.price,
+        iconUrl: item.iconUrl,
+        rarity: item.rarity,
+        exterior: item.exterior,
+        float: null,
+        pattern: null,
+        provider: item.provider, // 'buff' | 'youpin'
+      });
+    }
+
     totalPrice = Math.round(totalPrice * 100) / 100;
 
     const orderData = {
@@ -68,17 +90,15 @@ export class CreatePurchaseOrderUseCase {
       status: OrderStatus.PENDING_PAYMENT,
       totalPrice,
       metadata,
-      items: [] // is passed separately
+      items: []
     };
 
     const order = await this.orderRepository.create(orderData, orderItemsData);
-    
-    // Dispatch webhook notification in the background
     WebhookService.sendOrderNotification(order, 'order.created');
-    
     return order;
   }
 }
+
 
 // === SELL ORDER ===
 export class CreateSellOrderUseCase {

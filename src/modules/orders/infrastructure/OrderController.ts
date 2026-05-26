@@ -97,24 +97,56 @@ export class OrderController {
         }
 
         const { prisma } = require('../../../shared/infrastructure/PrismaClient');
-        const storeItems = await prisma.storeItem.findMany({
-          where: { assetId: { in: itemIds } }
-        });
 
-        if (storeItems.length !== itemIds.length) {
+        // Separar ids: bots (assetId normal) vs market listings (prefijo "market-")
+        const botIds = itemIds.filter((id: string) => !id.startsWith('market-'));
+        const marketIds = itemIds
+          .filter((id: string) => id.startsWith('market-'))
+          .map((id: string) => id.replace(/^market-/, ''));
+
+        // Validar bot items
+        const storeItems = botIds.length > 0
+          ? await prisma.storeItem.findMany({ where: { assetId: { in: botIds } } })
+          : [];
+
+        if (storeItems.length !== botIds.length) {
           const foundIds = storeItems.map((i: any) => i.assetId);
-          const missingIds = itemIds.filter(id => !foundIds.includes(id));
-          return res.status(400).json({ error: `Algunos items ya no están disponibles en la tienda: ${missingIds.join(', ')}` });
+          const missingIds = botIds.filter((id: string) => !foundIds.includes(id));
+          return res.status(400).json({ error: `Algunos items de bot ya no están disponibles: ${missingIds.join(', ')}` });
+        }
+
+        // Validar market listings
+        const marketItems = marketIds.length > 0
+          ? await prisma.marketListing.findMany({ where: { id: { in: marketIds } } })
+          : [];
+
+        if (marketItems.length !== marketIds.length) {
+          const foundIds = marketItems.map((i: any) => i.id);
+          const missingIds = marketIds.filter((id: string) => !foundIds.includes(id));
+          return res.status(400).json({ error: `Algunos listings de mercado ya no están disponibles: ${missingIds.join(', ')}` });
         }
 
         let totalPrice = 0;
-        const resolvedItems = storeItems.map((item: any) => {
+
+        const resolvedBotItems = storeItems.map((item: any) => {
           totalPrice += item.price;
           return {
             assetId: item.assetId,
             name: item.name,
             price: item.price,
-            iconUrl: item.iconUrl || null
+            iconUrl: item.iconUrl || null,
+            provider: 'bot',
+          };
+        });
+
+        const resolvedMarketItems = marketItems.map((item: any) => {
+          totalPrice += item.price;
+          return {
+            assetId: `market-${item.id}`,
+            name: item.name,
+            price: item.price,
+            iconUrl: item.iconUrl || null,
+            provider: item.provider, // 'buff' | 'youpin'
           };
         });
 
@@ -123,7 +155,7 @@ export class OrderController {
         return res.json({
           valid: true,
           type: 'BUY',
-          items: resolvedItems,
+          items: [...resolvedBotItems, ...resolvedMarketItems],
           totalPrice
         });
       } else if (type === 'SELL') {

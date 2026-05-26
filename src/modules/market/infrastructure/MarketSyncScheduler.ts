@@ -1,0 +1,35 @@
+import { PrismaMarketRepository } from './PrismaMarketRepository';
+import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
+import { config } from '../../../shared/config';
+
+/**
+ * Scheduler independiente para el catálogo de market listings (Buff/YouPin).
+ * Corre en su propio intervalo, separado del sync de inventario de bots.
+ */
+export function startMarketSyncScheduler(): void {
+  const intervalMinutes = config.storeSyncIntervalMinutes; // reusar configuración existente
+  const marketRepository = new PrismaMarketRepository();
+  const syncUseCase = new SyncMarketListingsUseCase(marketRepository);
+
+  // Sincronización inicial al arrancar el servidor
+  console.log('[Market Sync Scheduler] Iniciando primera sincronización del catálogo de mercado...');
+  syncUseCase.execute()
+    .then(({ synced, skipped }) => {
+      console.log(`[Market Sync Scheduler] Sincronización inicial completa: ${synced} listings, ${skipped} omitidos.`);
+    })
+    .catch((error) => {
+      console.error('[Market Sync Scheduler] Error en sincronización inicial:', error);
+    });
+
+  // Refresco periódico en segundo plano
+  const intervalMs = intervalMinutes * 60 * 1000;
+  setInterval(async () => {
+    console.log('[Market Sync Scheduler] Ejecutando sincronización programada...');
+    try {
+      const { synced, skipped } = await syncUseCase.execute();
+      console.log(`[Market Sync Scheduler] Sync completado: ${synced} listings, ${skipped} omitidos.`);
+    } catch (error) {
+      console.error('[Market Sync Scheduler] Error en sincronización programada:', error);
+    }
+  }, intervalMs);
+}

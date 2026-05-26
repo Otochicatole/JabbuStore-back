@@ -48,54 +48,40 @@ export class SyncStoreItemsUseCase {
       }
     }
 
-    // Filtrar únicamente artículos que son intercambiables (Enfoque B)
+    // Filtrar únicamente artículos que son intercambiables
     const tradableAggregatedItems = aggregatedItems.filter(item => item.tradable === true);
 
-    // Obtener los precios de mercado reales usando el PriceEnrichmentService para ítems de bots
-    let botItemsWithFlag: any[] = [];
-    if (tradableAggregatedItems.length > 0) {
-      console.log(`[Store Inventory Sync] Retrieved ${tradableAggregatedItems.length} tradable items from bots. Fetching market prices...`);
-      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
-      
-      // Filtrar duplicados por assetId para evitar errores de Unique Constraint en la base de datos
-      const uniqueItemsMap = new Map<string, any>();
-      for (const item of pricedItems) {
-        uniqueItemsMap.set(item.assetId, item);
+    if (tradableAggregatedItems.length === 0) {
+      console.warn(`[Store Inventory Sync] No se obtuvieron ítems intercambiables de los bots.`);
+      if (activeBots.length > 0) {
+        console.warn(`[Store Inventory Sync] Hay bots activos pero sin ítems. Omitiendo sync para preservar datos actuales.`);
+        return;
       }
-      botItemsWithFlag = Array.from(uniqueItemsMap.values()).map(item => ({
-        ...item,
-        isImmediate: true,
-      }));
-    } else {
-      console.warn(`[Store Inventory Sync] No tradable items retrieved from bots.`);
     }
 
-    // Traer el catálogo completo de reventa desde cs2.sh (Youpin + Buff)
-    const resellItems = await PriceEnrichmentService.fetchAllResellItemsFromMarket();
+    // Enriquecer ítems de bots con precios reales de mercado via cs2.sh
+    let botItems: any[] = [];
+    if (tradableAggregatedItems.length > 0) {
+      console.log(`[Store Inventory Sync] ${tradableAggregatedItems.length} ítems intercambiables. Obteniendo precios de mercado...`);
+      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
 
-    // Unificar ambos catálogos
-    const allItems = [...botItemsWithFlag, ...resellItems];
-
-    // Deduplicar la lista final completa por assetId para garantizar la restricción única de la base de datos
-    const uniqueFinalItemsMap = new Map<string, any>();
-    for (const item of allItems) {
-      uniqueFinalItemsMap.set(item.assetId, item);
+      // Deduplicar por assetId
+      const uniqueMap = new Map<string, any>();
+      for (const item of pricedItems) {
+        uniqueMap.set(item.assetId, item);
+      }
+      botItems = Array.from(uniqueMap.values());
     }
-    const finalAllItems = Array.from(uniqueFinalItemsMap.values());
 
-    // Protección de seguridad: si no conseguimos NINGÚN artículo (bots ni reventa) y tenemos bots activos
-    // es mejor no limpiar la base de datos para no dejar la tienda vacía.
-    if (finalAllItems.length === 0 && activeBots.length > 0) {
-      console.warn(`[Store Inventory Sync] No items retrieved from bots or resell catalog. Skipping DB sync to preserve data.`);
+    // Protección: si no hay ítems y hay bots activos, no limpiar la DB
+    if (botItems.length === 0 && activeBots.length > 0) {
+      console.warn(`[Store Inventory Sync] Sin ítems de bots. Omitiendo sync para preservar datos actuales.`);
       return;
     }
 
-    const finalBotCount = finalAllItems.filter(i => i.isImmediate).length;
-    const finalResellCount = finalAllItems.filter(i => !i.isImmediate).length;
-
-    console.log(`[Store Inventory Sync] Saving ${finalBotCount} bot items and ${finalResellCount} resell items to database...`);
-    await this.storeRepository.clearAndSaveMany(finalAllItems);
-    console.log(`[Store Inventory Sync] Database sync completed successfully!`);
+    console.log(`[Store Inventory Sync] Guardando ${botItems.length} ítems de bots en la base de datos...`);
+    await this.storeRepository.clearAndSaveMany(botItems);
+    console.log(`[Store Inventory Sync] Sincronización completada.`);
   }
 
   private parseSteamInventory(data: any, botSteamId: string): StoreItem[] {

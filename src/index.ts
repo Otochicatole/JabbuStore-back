@@ -11,6 +11,7 @@ import authRoutes from './modules/auth/infrastructure/AuthRoutes';
 import userRoutes from './modules/users/infrastructure/UserRoutes';
 import adminRoutes from './modules/admins/infrastructure/AdminRoutes';
 import storeRoutes from './modules/store/infrastructure/StoreRoutes';
+import marketRoutes from './modules/market/infrastructure/MarketRoutes';
 import orderRoutes from './modules/orders/infrastructure/OrderRoutes';
 import marketplaceRoutes from './modules/marketplace/infrastructure/MarketplaceRoutes';
 import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMarketplaceRoutes';
@@ -61,6 +62,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admins', adminRoutes);
 app.use('/api/store', storeRoutes);
+app.use('/api/market', marketRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/admin/marketplace', adminMarketplaceRoutes);
@@ -77,9 +79,12 @@ app.get('/', (req, res) => {
 });
 
 import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyncScheduler';
+import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
-  // Iniciar la sincronización en segundo plano de inventarios de bots de Steam
+  // Inventario físico de bots Steam
   startStoreSyncScheduler();
+  // Catálogo de reventa de Buff/YouPin vía cs2.sh
+  startMarketSyncScheduler();
 });
