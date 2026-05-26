@@ -20,13 +20,13 @@ export class OrderController {
   async createPurchaseOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { itemIds, metadata } = req.body;
+      const { itemIds, items, metadata } = req.body;
 
       if (!Array.isArray(itemIds)) {
         return res.status(400).json({ error: 'itemIds must be an array of string' });
       }
 
-      const order = await this.createPurchaseOrderUseCase.execute(userId, itemIds, metadata);
+      const order = await this.createPurchaseOrderUseCase.execute(userId, itemIds, metadata, items);
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

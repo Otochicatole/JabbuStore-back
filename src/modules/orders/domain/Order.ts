@@ -18,6 +18,11 @@ export interface OrderItem {
   name: string;
   price: number;
   iconUrl?: string | null;
+  rarity?: string | null;
+  exterior?: string | null;
+  float?: number | null;
+  pattern?: number | null;
+  provider?: string | null;
 }
 
 export interface Order {

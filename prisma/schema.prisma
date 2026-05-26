@@ -115,6 +115,11 @@ model OrderItem {
   name      String
   price     Float
   iconUrl   String?
+  rarity    String?
+  exterior  String?
+  float     Float?
+  pattern   Int?
+  provider  String?
 }
 
 model AdminSettings {

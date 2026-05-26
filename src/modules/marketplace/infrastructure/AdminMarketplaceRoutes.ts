@@ -37,4 +37,7 @@ router.post('/trades/:purchaseId/process', AdminMarketplaceController.processTra
 // Store Manual Pricing Overrides
 router.patch('/store/items/:assetId/price', AdminMarketplaceController.updateStoreItemPrice);
 
+// Skin details lookup by assetId for historical items
+router.get('/items/details/:assetId', AdminMarketplaceController.getItemDetailsByAssetId);
+
 export default router;

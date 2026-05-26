@@ -5,7 +5,7 @@ import { WebhookService } from './WebhookService';
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
-  async execute(userId: string, assetIds: string[], metadata?: any): Promise<Order> {
+  async execute(userId: string, assetIds: string[], metadata?: any, itemsOverrides?: any[]): Promise<Order> {
     if (!assetIds || assetIds.length === 0) {
       throw new Error('No items provided for the order');
     }
@@ -23,14 +23,39 @@ export class CreatePurchaseOrderUseCase {
       throw new Error(`Some items are no longer available in the store: ${missingIds.join(', ')}`);
     }
 
+    // Map overrides list for fast lookup
+    const overridesMap = new Map<string, any>();
+    if (Array.isArray(itemsOverrides)) {
+      itemsOverrides.forEach(ov => {
+        if (ov && ov.assetId) {
+          overridesMap.set(ov.assetId, ov);
+        }
+      });
+    }
+
     let totalPrice = 0;
     const orderItemsData: Omit<OrderItem, 'id' | 'orderId'>[] = storeItems.map(item => {
       totalPrice += item.price;
+      const override = overridesMap.get(item.assetId);
+      
+      // Determine provider: use override, or database field, or fallback to bots
+      let provider = "bots";
+      if (override && override.provider) {
+        provider = override.provider;
+      } else if (item.botSteamId === "resell_market") {
+        provider = "youpin"; // resell default
+      }
+
       return {
         assetId: item.assetId,
         name: item.name,
         price: item.price,
-        iconUrl: item.iconUrl
+        iconUrl: item.iconUrl,
+        rarity: override?.rarity || item.rarity,
+        exterior: override?.exterior || item.exterior,
+        float: (override?.float !== undefined && override?.float !== null) ? override.float : item.float,
+        pattern: (override?.pattern !== undefined && override?.pattern !== null) ? override.pattern : item.pattern,
+        provider: provider
       };
     });
 
@@ -119,6 +144,11 @@ export class CreateSellOrderUseCase {
         name: inventoryItem.name,
         price: item.requestedPrice,
         iconUrl: inventoryItem.iconUrl ?? null,
+        rarity: inventoryItem.rarity,
+        exterior: inventoryItem.exterior,
+        float: inventoryItem.float,
+        pattern: inventoryItem.pattern,
+        provider: "user"
       });
 
       totalPrice += item.requestedPrice;

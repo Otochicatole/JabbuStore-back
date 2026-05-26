@@ -17,6 +17,11 @@ export class PrismaOrderRepository implements IOrderRepository {
             name: item.name,
             price: item.price,
             iconUrl: item.iconUrl || null,
+            rarity: item.rarity || null,
+            exterior: item.exterior || null,
+            float: item.float !== undefined ? item.float : null,
+            pattern: item.pattern !== undefined ? item.pattern : null,
+            provider: item.provider || null,
           }))
         }
       },
@@ -50,7 +55,7 @@ export class PrismaOrderRepository implements IOrderRepository {
       include: { 
         items: true,
         user: {
-          select: { name: true, steamId: true, avatar: true }
+          select: { name: true, steamId: true, avatar: true, tradeUrl: true }
         }
       },
       orderBy: { createdAt: 'desc' }
