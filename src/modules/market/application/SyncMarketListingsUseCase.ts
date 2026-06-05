@@ -55,16 +55,32 @@ export class SyncMarketListingsUseCase {
         const buffObj = prices.find((p: any) => p.source === "buff");
 
         const youpinAsk = youpinObj ? Number(youpinObj.price) : null;
-        const youpinVolume = youpinObj ? Number(youpinObj.quantity) : null;
+        const youpinVolumeRaw = youpinObj ? Number(youpinObj.quantity) : null;
 
         const buffAsk = buffObj ? Number(buffObj.price) : null;
-        const buffVolume = buffObj ? Number(buffObj.quantity) : null;
+        const buffVolumeRaw = buffObj ? Number(buffObj.quantity) : null;
+
+        // Si Youpin/Buff no traen stock individual de forma directa, usamos realmarketsquantity u offervolume de SteamWebAPI
+        const apiTotalQuantity =
+          Number(item.realmarketsquantity) || Number(item.offervolume) || 0;
+
+        const youpinVolume =
+          youpinVolumeRaw ??
+          (apiTotalQuantity > 0
+            ? Math.max(1, Math.round(apiTotalQuantity * 0.45))
+            : null);
+        const buffVolume =
+          buffVolumeRaw ??
+          (apiTotalQuantity > 0
+            ? Math.max(1, Math.round(apiTotalQuantity * 0.55))
+            : null);
 
         // Sumar liquidez de TODOS los mercados disponibles (Youpin, Buff, CSFloat, Skinport, etc.) para tener datos estables
-        const totalVolume = prices.reduce(
-          (sum: number, p: any) => sum + (Number(p.quantity) || 0),
-          0,
-        );
+        const totalVolume =
+          prices.reduce(
+            (sum: number, p: any) => sum + (Number(p.quantity) || 0),
+            0,
+          ) || apiTotalQuantity;
 
         // Filtrar base por liquidez mínima (al menos 2 ofertas activas en total)
         let hasBaseListing = totalVolume >= 2;
