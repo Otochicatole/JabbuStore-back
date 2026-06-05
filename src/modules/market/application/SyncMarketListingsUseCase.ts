@@ -99,14 +99,21 @@ export class SyncMarketListingsUseCase {
             provider = "buff";
             price = buffAsk;
           } else {
-            // FALLBACK DE SEGURIDAD: Si Youpin y Buff no están disponibles temporalmente en el catálogo del proveedor,
+            // FALLBACK DE SEGURIDAD: Si Youpin y Buff no están disponibles de forma directa en el catálogo del proveedor,
             // usar el precio más bajo disponible entre los otros mercados (CSFloat, Skinport, DMarket, etc.)
             const availablePrices = prices
               .map((p: any) => Number(p.price))
               .filter((p: number) => p > 0);
             if (availablePrices.length > 0) {
               price = Math.min(...availablePrices);
-              provider = "youpin"; // fallback
+
+              // Dividir equitativamente los proveedores de reventa en base al hash del nombre
+              let hash = 0;
+              for (let i = 0; i < name.length; i++) {
+                hash = (hash << 5) - hash + name.charCodeAt(i);
+                hash |= 0;
+              }
+              provider = Math.abs(hash) % 2 === 0 ? "buff" : "youpin";
             } else {
               hasBaseListing = false;
             }
@@ -185,9 +192,18 @@ export class SyncMarketListingsUseCase {
                 imagesMap.get(cleanBaseVariantName.replace("★ ", "")) ||
                 null;
 
+              // Dividir equitativamente los proveedores de variantes en base al hash del nombre
+              let varHash = 0;
+              for (let i = 0; i < variantName.length; i++) {
+                varHash = (varHash << 5) - varHash + variantName.charCodeAt(i);
+                varHash |= 0;
+              }
+              const variantProvider =
+                Math.abs(varHash) % 2 === 0 ? "buff" : "youpin";
+
               listings.push({
                 name: variantName,
-                provider: "youpin", // fallback por defecto para variantes
+                provider: variantProvider,
                 youpinAsk: finalVariantPrice,
                 youpinVolume: 10,
                 buffAsk: finalVariantPrice,
