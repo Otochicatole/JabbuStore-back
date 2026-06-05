@@ -49,17 +49,22 @@ export class SyncMarketListingsUseCase {
 
         const name = item.markethashname;
 
-        // Extraer precios
+        // Extraer precios de SteamWebAPI (ya vienen convertidos a USD por el proveedor)
         const prices = item.prices || [];
         const youpinObj = prices.find((p: any) => p.source === "youpin");
         const buffObj = prices.find((p: any) => p.source === "buff");
 
         const youpinAsk = youpinObj ? Number(youpinObj.price) : null;
         const youpinVolume = youpinObj ? Number(youpinObj.quantity) : null;
+
         const buffAsk = buffObj ? Number(buffObj.price) : null;
         const buffVolume = buffObj ? Number(buffObj.quantity) : null;
 
-        const totalVolume = (youpinVolume ?? 0) + (buffVolume ?? 0);
+        // Sumar liquidez de TODOS los mercados disponibles (Youpin, Buff, CSFloat, Skinport, etc.) para tener datos estables
+        const totalVolume = prices.reduce(
+          (sum: number, p: any) => sum + (Number(p.quantity) || 0),
+          0,
+        );
 
         // Filtrar base por liquidez mínima (al menos 2 ofertas activas en total)
         let hasBaseListing = totalVolume >= 2;
@@ -78,12 +83,35 @@ export class SyncMarketListingsUseCase {
             provider = "buff";
             price = buffAsk;
           } else {
-            hasBaseListing = false;
+            // FALLBACK DE SEGURIDAD: Si Youpin y Buff no están disponibles temporalmente en el catálogo del proveedor,
+            // usar el precio más bajo disponible entre los otros mercados (CSFloat, Skinport, DMarket, etc.)
+            const availablePrices = prices
+              .map((p: any) => Number(p.price))
+              .filter((p: number) => p > 0);
+            if (availablePrices.length > 0) {
+              price = Math.min(...availablePrices);
+              provider = "youpin"; // fallback
+            } else {
+              hasBaseListing = false;
+            }
           }
         }
 
         // Registrar base listing si califica
         if (hasBaseListing && price > 0.5) {
+          // CAP DE SEGURIDAD CONTRA PRECIOS MANIPULADOS O ERRÓNEOS:
+          // El precio de reventa de Buff/Youpin nunca debe ser superior al precio oficial del Mercado de Steam,
+          // pero únicamente aplicamos este límite a ítems de bajo/medio rango (Steam Price < $150)
+          // para no recortar ítems de alto rango (como Dragon Lore, Gungnir, Howl, etc.) que superan el límite de cartera de Steam ($2000).
+          const steamPrice =
+            Number(item.pricemedian) ||
+            Number(item.priceavg) ||
+            Number(item.pricelatestsell) ||
+            null;
+          if (steamPrice && steamPrice < 150 && price > steamPrice) {
+            price = Math.round(steamPrice * 0.8 * 100) / 100; // Cap a un 80% del valor de Steam
+          }
+
           const details =
             PriceEnrichmentService.inferDetailsFromMarketHashName(name);
           const cleanBaseName =
@@ -124,6 +152,8 @@ export class SyncMarketListingsUseCase {
             const variantPrice = Number(variant.pricereal);
 
             if (variantPrice > 0.5) {
+              const finalVariantPrice = variantPrice;
+
               const details =
                 PriceEnrichmentService.inferDetailsFromMarketHashName(
                   variantName,
@@ -142,11 +172,11 @@ export class SyncMarketListingsUseCase {
               listings.push({
                 name: variantName,
                 provider: "youpin", // fallback por defecto para variantes
-                youpinAsk: variantPrice,
+                youpinAsk: finalVariantPrice,
                 youpinVolume: 10,
-                buffAsk: variantPrice,
+                buffAsk: finalVariantPrice,
                 buffVolume: 10,
-                price: variantPrice,
+                price: finalVariantPrice,
                 iconUrl,
                 rarity: details.rarity,
                 exterior: details.exterior,
