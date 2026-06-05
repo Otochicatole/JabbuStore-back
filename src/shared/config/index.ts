@@ -7,7 +7,7 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || 'secret',
   sessionSecret: process.env.SESSION_SECRET || 'session-secret',
   steamApiKey: process.env.STEAM_API_KEY || '',
-  cs2ShApiKey: process.env.CS2_SH_API_KEY || '',
+  steamwebapiApiKey: process.env.STEAMWEBAPI_API_KEY || '',
   backendUrl: process.env.BACKEND_URL || 'http://localhost:3001',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   

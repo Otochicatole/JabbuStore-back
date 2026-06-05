@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { prisma } from './PrismaClient';
 
 export interface PriceableItem {
   assetId: string;
@@ -82,80 +83,62 @@ export class PriceEnrichmentService {
   }
 
   /**
-   * Enriquecer una lista de artículos con precios del mercado real (vía cs2.sh) o fallbacks deterministas.
+   * Enriquecer una lista de artículos con precios del mercado real (vía DB local de MarketListing) o fallbacks deterministas.
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(items: T[]): Promise<T[]> {
-    const apiKey = config.cs2ShApiKey;
-    
-    // Obtener nombres base de mercado únicos para consultar a la API de cs2.sh (evitando nombres con fase agregada)
-    const uniqueBaseNamesMap = new Map<string, string>(); // fullName -> baseName
-    for (const item of items) {
-      if (item.name) {
-        const { baseName } = this.getBaseNameAndPhase(item.name);
-        uniqueBaseNamesMap.set(item.name, baseName);
-      }
-    }
-    const uniqueBaseNames = Array.from(new Set(uniqueBaseNamesMap.values())).filter(Boolean);
+    const itemNames = items.map(item => item.name).filter(Boolean);
     const pricesMap = new Map<string, number>();
 
-    if (!apiKey) {
-      console.warn(`[Price Enrichment Service] CS2_SH_API_KEY is not set in .env. Falling back to deterministic simulation prices.`);
-    } else {
-      console.log(`[Price Enrichment Service] Querying cs2.sh latest prices for ${uniqueBaseNames.length} unique base items...`);
-      
-      // La API cs2.sh permite consultar un máximo de 100 ítems por request POST
-      const chunkSize = 100;
-      for (let i = 0; i < uniqueBaseNames.length; i += chunkSize) {
-        const chunk = uniqueBaseNames.slice(i, i + chunkSize);
-        try {
-          const response = await fetch('https://api.cs2.sh/v1/prices/latest', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-              'Accept-Encoding': 'gzip',
-            },
-            body: JSON.stringify({ items: chunk }),
-          });
+    if (itemNames.length > 0) {
+      try {
+        console.log(`[Price Enrichment Service] Buscando precios en la DB local para ${itemNames.length} ítems...`);
+        // Consultar precios exactos de una pasada
+        const dbListings = await prisma.marketListing.findMany({
+          where: { name: { in: itemNames } },
+          select: { name: true, price: true }
+        });
 
-          if (!response.ok) {
-            console.error(`[Price Enrichment Service] cs2.sh API returned error status ${response.status} for chunk ${i / chunkSize + 1}`);
-            continue;
-          }
+        for (const listing of dbListings) {
+          pricesMap.set(listing.name, listing.price);
+        }
 
-          const responseData = (await response.json()) as any;
-          if (responseData && responseData.items) {
-            // Mapear los precios de vuelta a los ítems originales (incluyendo soporte para fases)
-            for (const item of items) {
-              const baseInfo = this.getBaseNameAndPhase(item.name);
-              const itemPriceData = responseData.items[baseInfo.baseName];
-              if (itemPriceData) {
-                let price = 0;
-                // Si el ítem original tiene una fase detectada y cs2.sh tiene esa fase en sus variantes
-                if (baseInfo.phase && itemPriceData.variants && itemPriceData.variants[baseInfo.phase]) {
-                  price = this.determinePriceFromData(itemPriceData.variants[baseInfo.phase]);
-                } else {
-                  price = this.determinePriceFromData(itemPriceData);
-                }
+        // Para cualquier item faltante, intentar buscar por baseName (sin fase Doppler)
+        const missingItems = items.filter(item => !pricesMap.has(item.name));
+        if (missingItems.length > 0) {
+          const baseNamesToLookup = missingItems
+            .map(item => this.getBaseNameAndPhase(item.name).baseName)
+            .filter(Boolean);
 
-                if (price > 0) {
-                  pricesMap.set(item.name, price);
-                }
+          if (baseNamesToLookup.length > 0) {
+            const dbBaseListings = await prisma.marketListing.findMany({
+              where: { name: { in: baseNamesToLookup } },
+              select: { name: true, price: true }
+            });
+
+            const basePricesMap = new Map<string, number>();
+            for (const listing of dbBaseListings) {
+              basePricesMap.set(listing.name, listing.price);
+            }
+
+            for (const item of missingItems) {
+              const { baseName } = this.getBaseNameAndPhase(item.name);
+              const fallbackPrice = basePricesMap.get(baseName);
+              if (fallbackPrice) {
+                pricesMap.set(item.name, fallbackPrice);
               }
             }
           }
-        } catch (error) {
-          console.error(`[Price Enrichment Service Error] Failed to fetch prices from cs2.sh for chunk ${i / chunkSize + 1}:`, error);
         }
+      } catch (error) {
+        console.error('[Price Enrichment Service Error] Error al consultar precios en base de datos local:', error);
       }
     }
 
-    // Enriquecer cada ítem con el precio obtenido de la API o con el fallback determinista
+    // Enriquecer cada ítem con el precio obtenido o con el fallback determinista
     return items.map(item => {
       let finalPrice = pricesMap.get(item.name) || 0;
-      
+
       if (finalPrice === 0) {
-        // Fallback determinista idéntico al del Frontend
         finalPrice = this.calculateFallbackPrice(item.type, item.classId, item.assetId);
       }
 
@@ -164,34 +147,6 @@ export class PriceEnrichmentService {
         price: finalPrice,
       };
     });
-  }
-
-  private static determinePriceFromData(itemPriceData: any): number {
-    if (!itemPriceData) return 0;
-    
-    // Si contiene variantes (como Dopplers Phase 1-4, Ruby, Emerald, Marble Fades, etc.)
-    if (itemPriceData.variants && typeof itemPriceData.variants === 'object') {
-      const variantPrices: number[] = [];
-      for (const variantKey of Object.keys(itemPriceData.variants)) {
-        const variantData = itemPriceData.variants[variantKey];
-        const price = this.determinePriceFromData(variantData);
-        if (price > 0) {
-          variantPrices.push(price);
-        }
-      }
-      if (variantPrices.length > 0) {
-        // Retornamos el promedio de los precios reales de las variantes
-        const sum = variantPrices.reduce((a, b) => a + b, 0);
-        return Math.round((sum / variantPrices.length) * 100) / 100;
-      }
-    }
-    
-    // Usar únicamente precios de Youpin
-    if (itemPriceData.youpin?.ask) {
-      return itemPriceData.youpin.ask;
-    }
-    
-    return 0;
   }
 
   static parseItemDetails(description: any, assetId?: string): {
