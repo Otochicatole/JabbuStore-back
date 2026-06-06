@@ -1,53 +1,76 @@
-import { IOrderRepository, Order, OrderItem, OrderStatus, OrderType } from '../domain/Order';
-import { prisma } from '../../../shared/infrastructure/PrismaClient';
-import { WebhookService } from './WebhookService';
+import {
+  IOrderRepository,
+  Order,
+  OrderItem,
+  OrderStatus,
+  OrderType,
+} from "../domain/Order";
+import { prisma } from "../../../shared/infrastructure/PrismaClient";
+import { WebhookService } from "./WebhookService";
 
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
-  async execute(userId: string, assetIds: string[], metadata?: any, itemsOverrides?: any[]): Promise<Order> {
+  async execute(
+    userId: string,
+    assetIds: string[],
+    metadata?: any,
+    itemsOverrides?: any[],
+  ): Promise<Order> {
     if (!assetIds || assetIds.length === 0) {
-      throw new Error('No items provided for the order');
+      throw new Error("No items provided for the order");
     }
 
     // Separar bot items de market listings
-    const botIds = assetIds.filter(id => !id.startsWith('market-'));
-    const marketIds = assetIds
-      .filter(id => id.startsWith('market-'))
-      .map(id => id.replace(/^market-/, ''));
+    const botIds = assetIds.filter((id) => !id.startsWith("market-"));
+    const marketNames = assetIds
+      .filter((id) => id.startsWith("market-"))
+      .map((id) => id.replace(/^market-/, ""));
 
     // Resolver bot items
-    const storeItems = botIds.length > 0
-      ? await prisma.storeItem.findMany({ where: { assetId: { in: botIds } } })
-      : [];
+    const storeItems =
+      botIds.length > 0
+        ? await prisma.storeItem.findMany({
+            where: { assetId: { in: botIds } },
+          })
+        : [];
 
     if (storeItems.length !== botIds.length) {
-      const foundIds = storeItems.map(i => i.assetId);
-      const missingIds = botIds.filter(id => !foundIds.includes(id));
-      throw new Error(`Some bot items are no longer available: ${missingIds.join(', ')}`);
+      const foundIds = storeItems.map((i) => i.assetId);
+      const missingIds = botIds.filter((id) => !foundIds.includes(id));
+      throw new Error(
+        `Some bot items are no longer available: ${missingIds.join(", ")}`,
+      );
     }
 
-    // Resolver market listings
-    const marketListings = marketIds.length > 0
-      ? await prisma.marketListing.findMany({ where: { id: { in: marketIds } } })
-      : [];
+    // Resolver market listings usando su campo unique 'name'
+    const marketListings =
+      marketNames.length > 0
+        ? await prisma.marketListing.findMany({
+            where: { name: { in: marketNames } },
+          })
+        : [];
 
-    if (marketListings.length !== marketIds.length) {
-      const foundIds = marketListings.map((i: any) => i.id);
-      const missingIds = marketIds.filter(id => !foundIds.includes(id));
-      throw new Error(`Some market listings are no longer available: ${missingIds.join(', ')}`);
+    if (marketListings.length !== marketNames.length) {
+      const foundNames = marketListings.map((i: any) => i.name);
+      const missingNames = marketNames.filter(
+        (name) => !foundNames.includes(name),
+      );
+      throw new Error(
+        `Some market listings are no longer available: ${missingNames.join(", ")}`,
+      );
     }
 
     // Map overrides for fast lookup
     const overridesMap = new Map<string, any>();
     if (Array.isArray(itemsOverrides)) {
-      itemsOverrides.forEach(ov => {
+      itemsOverrides.forEach((ov) => {
         if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
       });
     }
 
     let totalPrice = 0;
-    const orderItemsData: Omit<OrderItem, 'id' | 'orderId'>[] = [];
+    const orderItemsData: Omit<OrderItem, "id" | "orderId">[] = [];
 
     // Bot items — precio real de DB, float/pattern reales
     for (const item of storeItems) {
@@ -60,9 +83,15 @@ export class CreatePurchaseOrderUseCase {
         iconUrl: item.iconUrl,
         rarity: override?.rarity || item.rarity,
         exterior: override?.exterior || item.exterior,
-        float: (override?.float !== undefined && override?.float !== null) ? override.float : item.float,
-        pattern: (override?.pattern !== undefined && override?.pattern !== null) ? override.pattern : item.pattern,
-        provider: 'bot',
+        float:
+          override?.float !== undefined && override?.float !== null
+            ? override.float
+            : item.float,
+        pattern:
+          override?.pattern !== undefined && override?.pattern !== null
+            ? override.pattern
+            : item.pattern,
+        provider: "bot",
       });
     }
 
@@ -70,7 +99,7 @@ export class CreatePurchaseOrderUseCase {
     for (const item of marketListings as any[]) {
       totalPrice += item.price;
       orderItemsData.push({
-        assetId: `market-${item.id}`,
+        assetId: `market-${item.name}`,
         name: item.name,
         price: item.price,
         iconUrl: item.iconUrl,
@@ -90,39 +119,44 @@ export class CreatePurchaseOrderUseCase {
       status: OrderStatus.PENDING_PAYMENT,
       totalPrice,
       metadata,
-      items: []
+      items: [],
     };
 
     const order = await this.orderRepository.create(orderData, orderItemsData);
-    WebhookService.sendOrderNotification(order, 'order.created');
+    WebhookService.sendOrderNotification(order, "order.created");
     return order;
   }
 }
-
 
 // === SELL ORDER ===
 export class CreateSellOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
 
-  async execute(userId: string, items: { assetId: string; requestedPrice: number }[], metadata?: any): Promise<Order> {
+  async execute(
+    userId: string,
+    items: { assetId: string; requestedPrice: number }[],
+    metadata?: any,
+  ): Promise<Order> {
     if (!items || items.length === 0) {
-      throw new Error('No items provided for the sell order');
+      throw new Error("No items provided for the sell order");
     }
 
     const settings = await prisma.adminSettings.findFirst();
     const minSellPrice = settings?.minimumUserSellPrice ?? 1.0;
 
     // Validate each item: must be in user's inventory and meet minimum price
-    const resolvedItems: Omit<OrderItem, 'id' | 'orderId'>[] = [];
+    const resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
     let totalPrice = 0;
 
     for (const item of items) {
       if (item.requestedPrice < minSellPrice) {
-        throw new Error(`El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`);
+        throw new Error(
+          `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
+        );
       }
 
       const inventoryItem = await prisma.userInventoryItem.findFirst({
-        where: { userId, assetId: item.assetId }
+        where: { userId, assetId: item.assetId },
       });
 
       if (!inventoryItem) {
@@ -130,7 +164,7 @@ export class CreateSellOrderUseCase {
       }
 
       const alreadyListed = await prisma.skinListing.findFirst({
-        where: { skinId: item.assetId, status: { in: ['active', 'reserved'] } }
+        where: { skinId: item.assetId, status: { in: ["active", "reserved"] } },
       });
 
       if (alreadyListed) {
@@ -139,23 +173,27 @@ export class CreateSellOrderUseCase {
         const lastSellOrder = await prisma.order.findFirst({
           where: {
             userId,
-            type: 'SELL',
+            type: "SELL",
             items: {
-              some: { assetId: item.assetId }
-            }
+              some: { assetId: item.assetId },
+            },
           },
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: "desc" },
         });
 
-        if (lastSellOrder && lastSellOrder.status === 'CANCELLED') {
+        if (lastSellOrder && lastSellOrder.status === "CANCELLED") {
           // Update the listing to cancelled
           await prisma.skinListing.update({
             where: { id: alreadyListed.id },
-            data: { status: 'cancelled' }
+            data: { status: "cancelled" },
           });
-          console.log(`[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`);
+          console.log(
+            `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
+          );
         } else {
-          throw new Error(`El item "${inventoryItem.name}" ya está listado para la venta.`);
+          throw new Error(
+            `El item "${inventoryItem.name}" ya está listado para la venta.`,
+          );
         }
       }
 
@@ -168,7 +206,7 @@ export class CreateSellOrderUseCase {
         exterior: inventoryItem.exterior,
         float: inventoryItem.float,
         pattern: inventoryItem.pattern,
-        provider: "user"
+        provider: "user",
       });
 
       totalPrice += item.requestedPrice;
@@ -178,25 +216,32 @@ export class CreateSellOrderUseCase {
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(
-      { userId, type: OrderType.SELL, status: OrderStatus.PENDING_PAYMENT, totalPrice, metadata, items: [] },
-      resolvedItems
+      {
+        userId,
+        type: OrderType.SELL,
+        status: OrderStatus.PENDING_PAYMENT,
+        totalPrice,
+        metadata,
+        items: [],
+      },
+      resolvedItems,
     );
 
     // Create a SkinListing for each item so it appears in the marketplace
     await prisma.skinListing.createMany({
-      data: resolvedItems.map(item => ({
+      data: resolvedItems.map((item) => ({
         userId,
         skinId: item.assetId,
         basePrice: item.price,
         finalPrice: item.price,
-        status: 'active',
-      }))
+        status: "active",
+      })),
     });
 
     // Fetch full order with items populated for the webhook dispatcher
     const fullOrder = await this.orderRepository.findById(order.id);
     if (fullOrder) {
-      WebhookService.sendOrderNotification(fullOrder, 'order.created');
+      WebhookService.sendOrderNotification(fullOrder, "order.created");
     }
 
     return order;
@@ -224,10 +269,10 @@ export class UpdateOrderStatusUseCase {
 
   async execute(orderId: string, status: OrderStatus): Promise<Order> {
     const order = await this.orderRepository.updateStatus(orderId, status);
-    
+
     // Dispatch webhook status change notification
-    WebhookService.sendOrderNotification(order, 'order.status_updated');
-    
+    WebhookService.sendOrderNotification(order, "order.status_updated");
+
     return order;
   }
 }
