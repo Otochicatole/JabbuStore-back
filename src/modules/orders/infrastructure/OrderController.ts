@@ -7,6 +7,9 @@ import {
   UpdateOrderStatusUseCase,
 } from "../application/OrderUseCases";
 import { OrderStatus } from "../domain/Order";
+import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
+import { config } from "../../../shared/config";
+import { prisma } from "../../../shared/infrastructure/PrismaClient";
 
 export class OrderController {
   constructor(
@@ -20,7 +23,7 @@ export class OrderController {
   async createPurchaseOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { itemIds, items, metadata } = req.body;
+      const { itemIds, items, paymentMethod, metadata } = req.body;
 
       if (!Array.isArray(itemIds)) {
         return res
@@ -34,6 +37,33 @@ export class OrderController {
         metadata,
         items,
       );
+
+      // Si el método seleccionado es Mercado Pago, generar la preferencia y devolver el link de redirección
+      if (paymentMethod === "mercado_pago") {
+        try {
+          const paymentUrl = await MercadoPagoService.createPreference(
+            order,
+            config.frontendUrl,
+            config.backendUrl,
+          );
+          return res.status(201).json({
+            ...order,
+            paymentUrl, // Link de Checkout Pro seguro para redirigir
+          });
+        } catch (mpError: any) {
+          console.error(
+            "[Mercado Pago] Error al generar preferencia:",
+            mpError,
+          );
+          // Retornar la orden pero indicar que falló generar Mercado Pago
+          return res.status(201).json({
+            ...order,
+            error:
+              "No se pudo generar el enlace de pago de Mercado Pago. Intente nuevamente en su perfil.",
+          });
+        }
+      }
+
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -46,12 +76,10 @@ export class OrderController {
       const { items, metadata } = req.body; // [{ assetId, requestedPrice }]
 
       if (!Array.isArray(items) || items.length === 0) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "items must be a non-empty array of { assetId, requestedPrice }",
-          });
+        return res.status(400).json({
+          error:
+            "items must be a non-empty array of { assetId, requestedPrice }",
+        });
       }
 
       const order = await this.createSellOrderUseCase.execute(
@@ -105,6 +133,126 @@ export class OrderController {
     }
   }
 
+  async handleMercadoPagoWebhook(req: Request, res: Response) {
+    try {
+      const { type, action, data } = req.body;
+      console.log(
+        `[Mercado Pago Webhook] Recibida notificación. Type: ${type}, Action: ${action}, ID:`,
+        data?.id,
+      );
+
+      // FIRMA DE WEBHOOK DE MERCADO PAGO (Fórmula oficial HMAC-SHA256 con Webhook Secret)
+      const webhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+      const xSignature = req.headers["x-signature"] as string;
+      const xRequestId = req.headers["x-request-id"] as string;
+
+      if (webhookSecret && xSignature && xRequestId) {
+        try {
+          const crypto = require("crypto");
+          const parts = xSignature.split(",");
+          const tsPart = parts.find((p) => p.startsWith("ts="));
+          const v1Part = parts.find((p) => p.startsWith("v1="));
+
+          if (tsPart && v1Part) {
+            const ts = tsPart.split("=")[1];
+            const v1 = v1Part.split("=")[1];
+
+            // Reconstruir la firma según el estándar de Mercado Pago
+            const manifest = `id:${data?.id || req.query.id};request-timestamp:${ts};`;
+            const hmac = crypto.createHmac("sha256", webhookSecret);
+            const calculatedSignature = hmac.update(manifest).digest("hex");
+
+            if (calculatedSignature !== v1) {
+              console.warn(
+                "[Mercado Pago Webhook] Firma de firma inválida. Posible intento de fraude.",
+              );
+              return res.status(401).send("Invalid signature");
+            }
+            console.log(
+              "[Mercado Pago Webhook] Firma verificada y autenticada cryptográficamente.",
+            );
+          }
+        } catch (sigErr: any) {
+          console.error(
+            "[Mercado Pago Webhook] Error al verificar firma:",
+            sigErr.message,
+          );
+        }
+      }
+
+      // Responder de inmediato con 200 OK para confirmar recepción a Mercado Pago
+      res.status(200).send("OK");
+
+      // Validar si es una notificación de pago
+      if (
+        type === "payment" ||
+        action === "payment.created" ||
+        action === "payment.updated" ||
+        req.query.topic === "payment"
+      ) {
+        const paymentId = data?.id || req.query.id;
+        if (!paymentId) return;
+
+        // Consultar los detalles reales del pago a Mercado Pago (previene Spoofing / Hacks de respuestas falsas)
+        const paymentDetails = await MercadoPagoService.getPaymentDetails(
+          String(paymentId),
+        );
+
+        const status = paymentDetails.status;
+        const orderId = paymentDetails.external_reference; // Contiene nuestro ORDER_ID de forma inviolable
+        const amount = paymentDetails.transaction_amount;
+
+        console.log(
+          `[Mercado Pago Webhook] Pago ID ${paymentId} resuelto. Status: ${status}, OrderID: ${orderId}, Monto: ${amount}`,
+        );
+
+        if (status === "approved" && orderId) {
+          // El pago está aprobado. Avanzar la orden al estado TRADE_PENDING de forma automatizada y registrar el MP Payment ID
+          console.log(
+            `[Mercado Pago Webhook] ¡Pago aprobado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y guardando ID de Operación.`,
+          );
+          try {
+            // Obtener metadata actual para no sobreescribir otros campos del cliente
+            const order = await prisma.order.findUnique({
+              where: { id: orderId },
+            });
+            const currentMetadata =
+              order && order.metadata && typeof order.metadata === "object"
+                ? order.metadata
+                : {};
+
+            await prisma.order.update({
+              where: { id: orderId },
+              data: {
+                status: "TRADE_PENDING",
+                metadata: {
+                  ...currentMetadata,
+                  mpPaymentId: String(paymentId), // Guardar ID de pago oficial criptográfico de Mercado Pago
+                  paidAt: new Date().toISOString(),
+                },
+              },
+            });
+
+            console.log(
+              `[Mercado Pago Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
+            );
+          } catch (orderError: any) {
+            console.error(
+              `[Mercado Pago Webhook] Error al actualizar la orden en DB:`,
+              orderError.message,
+            );
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(
+        "[Mercado Pago Webhook Error] Error procesando notificación:",
+        err.message,
+      );
+      // No devolvemos error HTTP ya que ya respondimos 200 OK arriba de forma asíncrona
+    }
+  }
+
   async validateOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
@@ -112,12 +260,9 @@ export class OrderController {
 
       if (type === "BUY") {
         if (!Array.isArray(itemIds) || itemIds.length === 0) {
-          return res
-            .status(400)
-            .json({
-              error:
-                "itemIds must be a non-empty array of strings for BUY type",
-            });
+          return res.status(400).json({
+            error: "itemIds must be a non-empty array of strings for BUY type",
+          });
         }
 
         const {
@@ -145,11 +290,9 @@ export class OrderController {
           const missingIds = botIds.filter(
             (id: string) => !foundIds.includes(id),
           );
-          return res
-            .status(400)
-            .json({
-              error: `Algunos items de bot ya no están disponibles: ${missingIds.join(", ")}`,
-            });
+          return res.status(400).json({
+            error: `Algunos items de bot ya no están disponibles: ${missingIds.join(", ")}`,
+          });
         }
 
         // Validar market listings usando su campo unique 'name'
@@ -165,11 +308,9 @@ export class OrderController {
           const missingNames = marketNames.filter(
             (name: string) => !foundNames.includes(name),
           );
-          return res
-            .status(400)
-            .json({
-              error: `Algunos listings de mercado ya no están disponibles: ${missingNames.join(", ")}`,
-            });
+          return res.status(400).json({
+            error: `Algunos listings de mercado ya no están disponibles: ${missingNames.join(", ")}`,
+          });
         }
 
         let totalPrice = 0;
@@ -206,12 +347,10 @@ export class OrderController {
         });
       } else if (type === "SELL") {
         if (!Array.isArray(items) || items.length === 0) {
-          return res
-            .status(400)
-            .json({
-              error:
-                "items must be a non-empty array of { assetId, requestedPrice } for SELL type",
-            });
+          return res.status(400).json({
+            error:
+              "items must be a non-empty array of { assetId, requestedPrice } for SELL type",
+          });
         }
 
         const {
@@ -225,11 +364,9 @@ export class OrderController {
 
         for (const item of items) {
           if (item.requestedPrice < minSellPrice) {
-            return res
-              .status(400)
-              .json({
-                error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
-              });
+            return res.status(400).json({
+              error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
+            });
           }
 
           const inventoryItem = await prisma.userInventoryItem.findFirst({
@@ -237,11 +374,9 @@ export class OrderController {
           });
 
           if (!inventoryItem) {
-            return res
-              .status(400)
-              .json({
-                error: `El item ${item.assetId} no se encuentra en tu inventario.`,
-              });
+            return res.status(400).json({
+              error: `El item ${item.assetId} no se encuentra en tu inventario.`,
+            });
           }
 
           const alreadyListed = await prisma.skinListing.findFirst({
@@ -275,11 +410,9 @@ export class OrderController {
                 `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
               );
             } else {
-              return res
-                .status(400)
-                .json({
-                  error: `El item "${inventoryItem.name}" ya está listado para la venta.`,
-                });
+              return res.status(400).json({
+                error: `El item "${inventoryItem.name}" ya está listado para la venta.`,
+              });
             }
           }
 
@@ -302,11 +435,9 @@ export class OrderController {
           totalPrice,
         });
       } else {
-        return res
-          .status(400)
-          .json({
-            error: "Invalid checkout validation type. Must be BUY or SELL",
-          });
+        return res.status(400).json({
+          error: "Invalid checkout validation type. Must be BUY or SELL",
+        });
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });

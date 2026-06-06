@@ -27,6 +27,7 @@
     "express-session": "^1.19.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
+    "mercadopago": "^3.1.0",
     "morgan": "^1.10.1",
     "passport": "^0.7.0",
     "passport-steam": "^1.0.18",

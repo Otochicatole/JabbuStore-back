@@ -1,19 +1,24 @@
-import { Router } from 'express';
-import { OrderController } from './OrderController';
-import { PrismaOrderRepository } from './PrismaOrderRepository';
-import { 
+import { Router } from "express";
+import { OrderController } from "./OrderController";
+import { PrismaOrderRepository } from "./PrismaOrderRepository";
+import {
   CreatePurchaseOrderUseCase,
   CreateSellOrderUseCase,
-  GetUserOrdersUseCase, 
-  GetAllOrdersUseCase, 
-  UpdateOrderStatusUseCase 
-} from '../application/OrderUseCases';
-import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
+  GetUserOrdersUseCase,
+  GetAllOrdersUseCase,
+  UpdateOrderStatusUseCase,
+} from "../application/OrderUseCases";
+import {
+  authMiddleware,
+  adminOnly,
+} from "../../../shared/infrastructure/middlewares/authMiddleware";
 
 const router = Router();
 
 const orderRepository = new PrismaOrderRepository();
-const createPurchaseOrderUseCase = new CreatePurchaseOrderUseCase(orderRepository);
+const createPurchaseOrderUseCase = new CreatePurchaseOrderUseCase(
+  orderRepository,
+);
 const createSellOrderUseCase = new CreateSellOrderUseCase(orderRepository);
 const getUserOrdersUseCase = new GetUserOrdersUseCase(orderRepository);
 const getAllOrdersUseCase = new GetAllOrdersUseCase(orderRepository);
@@ -24,17 +29,34 @@ const orderController = new OrderController(
   createSellOrderUseCase,
   getUserOrdersUseCase,
   getAllOrdersUseCase,
-  updateOrderStatusUseCase
+  updateOrderStatusUseCase,
 );
 
 // Client Routes
-router.post('/', authMiddleware, (req, res) => orderController.createPurchaseOrder(req, res));
-router.post('/sell', authMiddleware, (req, res) => orderController.createSellOrder(req, res));
-router.post('/validate', authMiddleware, (req, res) => orderController.validateOrder(req, res));
-router.get('/me', authMiddleware, (req, res) => orderController.getMyOrders(req, res));
+router.post("/", authMiddleware, (req, res) =>
+  orderController.createPurchaseOrder(req, res),
+);
+router.post("/sell", authMiddleware, (req, res) =>
+  orderController.createSellOrder(req, res),
+);
+router.post("/validate", authMiddleware, (req, res) =>
+  orderController.validateOrder(req, res),
+);
+router.get("/me", authMiddleware, (req, res) =>
+  orderController.getMyOrders(req, res),
+);
+
+// Public Webhook (Sin autenticación para recibir notificaciones asíncronas de Mercado Pago)
+router.post("/webhook/mercadopago", (req, res) =>
+  orderController.handleMercadoPagoWebhook(req, res),
+);
 
 // Admin Routes
-router.get('/all', authMiddleware, adminOnly, (req, res) => orderController.getAllOrders(req, res));
-router.patch('/:id/status', authMiddleware, adminOnly, (req, res) => orderController.updateStatus(req, res));
+router.get("/all", authMiddleware, adminOnly, (req, res) =>
+  orderController.getAllOrders(req, res),
+);
+router.patch("/:id/status", authMiddleware, adminOnly, (req, res) =>
+  orderController.updateStatus(req, res),
+);
 
 export default router;
