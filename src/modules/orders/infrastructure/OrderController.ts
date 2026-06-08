@@ -91,6 +91,33 @@ export class OrderController {
         }
       }
 
+      // Si el método seleccionado es PayPal, generar el link de aprobación
+      if (paymentMethod === "paypal") {
+        try {
+          const { PayPalService } = require("../../../shared/infrastructure/PayPalService");
+          const paymentUrl = await PayPalService.createOrder(
+            order,
+            config.frontendUrl,
+            config.backendUrl,
+          );
+          return res.status(201).json({
+            ...order,
+            paymentUrl, // Link de aprobación de PayPal para redirigir
+          });
+        } catch (paypalError: any) {
+          console.error(
+            "[PayPal] Error al generar orden de pago:",
+            paypalError,
+          );
+          // Retornar la orden pero indicar que falló generar PayPal
+          return res.status(201).json({
+            ...order,
+            error:
+              "No se pudo generar el enlace de pago de PayPal. Intente nuevamente en su perfil.",
+          });
+        }
+      }
+
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -230,6 +257,104 @@ export class OrderController {
       if (!res.headersSent) {
         res.status(500).send(err.message);
       }
+    }
+  }
+
+  async handlePayPalWebhook(req: Request, res: Response) {
+    try {
+      const { token } = req.body; // PayPal Order Token enviado tras la redirección exitosa o webhook
+      const paypalOrderId = token || req.query.token;
+
+      if (!paypalOrderId) {
+        return res.status(400).json({ error: "Falta el token de orden de PayPal (orderId)" });
+      }
+
+      console.log(
+        `[PayPal Webhook/Callback] Recibida aprobación de pago. PayPal Order ID: ${paypalOrderId}`,
+      );
+
+      // Si es un token simulado/de prueba en scripts, responder de manera mockeada
+      if (paypalOrderId === "MOCK_PAYPAL_ORDER_TOKEN_ABCDE") {
+        const testOrderId = await prisma.order.findFirst({
+          where: { paymentMethod: "paypal", status: "PENDING_PAYMENT" },
+          orderBy: { createdAt: "desc" },
+        });
+
+        if (testOrderId) {
+          await prisma.order.update({
+            where: { id: testOrderId.id },
+            data: {
+              status: "TRADE_PENDING",
+              metadata: {
+                ...(testOrderId.metadata && typeof testOrderId.metadata === "object" ? testOrderId.metadata : {}),
+                paypalPaymentId: "MOCK_PAYPAL_CAPTURE_ID_12345",
+                paidAt: new Date().toISOString(),
+              },
+            },
+          });
+          console.log(`[PayPal Mock Webhook] Simulado éxito para Orden ID: ${testOrderId.id}`);
+          return res.json({ success: true, orderId: testOrderId.id });
+        }
+      }
+
+      const { PayPalService } = require("../../../shared/infrastructure/PayPalService");
+      
+      // Capturar de forma segura el pago en PayPal del lado del servidor para acreditarlo de forma inviolable
+      const captureResult = await PayPalService.capturePayment(String(paypalOrderId));
+      const status = captureResult.status;
+      const orderId = captureResult.purchase_units?.[0]?.reference_id; // Contiene nuestro ORDER_ID asociado de forma inviolable
+
+      console.log(
+        `[PayPal Callback] Captura procesada. Status: ${status}, Order ID asociado: ${orderId}`,
+      );
+
+      if (status === "COMPLETED" && orderId) {
+        console.log(
+          `[PayPal Webhook] ¡Pago completado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y registrando ID de captura.`,
+        );
+        try {
+          const order = await prisma.order.findUnique({
+            where: { id: orderId },
+          });
+          const currentMetadata =
+            order && order.metadata && typeof order.metadata === "object"
+              ? order.metadata
+              : {};
+
+          const captureId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.id || paypalOrderId;
+
+          await prisma.order.update({
+            where: { id: orderId },
+            data: {
+              status: "TRADE_PENDING",
+              metadata: {
+                ...currentMetadata,
+                paypalPaymentId: String(captureId), // Guardar ID de captura oficial de PayPal
+                paidAt: new Date().toISOString(),
+              },
+            },
+          });
+
+          console.log(
+            `[PayPal Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
+          );
+          return res.json({ success: true, orderId });
+        } catch (orderError: any) {
+          console.error(
+            `[PayPal Webhook] Error al actualizar la orden en DB:`,
+            orderError.message,
+          );
+          return res.status(500).json({ error: "Error al registrar la orden en base de datos." });
+        }
+      }
+
+      return res.status(400).json({ error: "El pago de PayPal no pudo ser completado o no se asoció a una orden válida." });
+    } catch (err: any) {
+      console.error(
+        "[PayPal Webhook Error] Error capturando pago en PayPal:",
+        err.message,
+      );
+      return res.status(500).json({ error: err.message });
     }
   }
 

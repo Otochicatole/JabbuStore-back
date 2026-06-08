@@ -56,6 +56,11 @@ router.post("/webhook/nowpayments", (req, res) =>
   orderController.handleNOWPaymentsWebhook(req, res),
 );
 
+// Public Webhook/Callback PayPal para capturar el pago tras la aprobación del cliente
+router.post("/webhook/paypal", (req, res) =>
+  orderController.handlePayPalWebhook(req, res),
+);
+
 // Admin Routes
 router.get("/all", authMiddleware, adminOnly, (req, res) =>
   orderController.getAllOrders(req, res),
