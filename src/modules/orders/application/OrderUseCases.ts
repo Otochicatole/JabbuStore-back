@@ -14,6 +14,7 @@ export class CreatePurchaseOrderUseCase {
   async execute(
     userId: string,
     assetIds: string[],
+    paymentMethod?: string,
     metadata?: any,
     itemsOverrides?: any[],
   ): Promise<Order> {
@@ -118,6 +119,7 @@ export class CreatePurchaseOrderUseCase {
       type: OrderType.BUY,
       status: OrderStatus.PENDING_PAYMENT,
       totalPrice,
+      paymentMethod: paymentMethod || null,
       metadata,
       items: [],
     };
