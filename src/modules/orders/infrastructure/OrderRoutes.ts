@@ -51,6 +51,11 @@ router.post("/webhook/mercadopago", (req, res) =>
   orderController.handleMercadoPagoWebhook(req, res),
 );
 
+// Public Webhook NOWPayments (Sin autenticación para recibir notificaciones asíncronas de NOWPayments)
+router.post("/webhook/nowpayments", (req, res) =>
+  orderController.handleNOWPaymentsWebhook(req, res),
+);
+
 // Admin Routes
 router.get("/all", authMiddleware, adminOnly, (req, res) =>
   orderController.getAllOrders(req, res),

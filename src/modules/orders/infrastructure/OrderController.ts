@@ -64,6 +64,33 @@ export class OrderController {
         }
       }
 
+      // Si el método seleccionado es NOWPayments, generar el invoice y devolver el link de redirección
+      if (paymentMethod === "nowpayments") {
+        try {
+          const { NOWPaymentsService } = require("../../../shared/infrastructure/NOWPaymentsService");
+          const paymentUrl = await NOWPaymentsService.createInvoice(
+            order,
+            config.frontendUrl,
+            config.backendUrl,
+          );
+          return res.status(201).json({
+            ...order,
+            paymentUrl, // Link de NOWPayments seguro para redirigir
+          });
+        } catch (nowError: any) {
+          console.error(
+            "[NOWPayments] Error al generar invoice:",
+            nowError,
+          );
+          // Retornar la orden pero indicar que falló generar NOWPayments
+          return res.status(201).json({
+            ...order,
+            error:
+              "No se pudo generar el enlace de pago de NOWPayments. Intente nuevamente en su perfil.",
+          });
+        }
+      }
+
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -130,6 +157,79 @@ export class OrderController {
       res.json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
+    }
+  }
+
+  async handleNOWPaymentsWebhook(req: Request, res: Response) {
+    try {
+      const signature = req.headers["x-nowpayments-sig"] as string;
+      const rawBody = JSON.stringify(req.body); // O usar el raw-body real de express si es necesario
+
+      console.log(
+        `[NOWPayments Webhook] Recibida notificación. Payment ID: ${req.body?.payment_id || req.body?.invoice_id}, Status: ${req.body?.payment_status}`,
+      );
+
+      const { NOWPaymentsService } = require("../../../shared/infrastructure/NOWPaymentsService");
+      if (!NOWPaymentsService.verifySignature(rawBody, signature)) {
+        console.warn(
+          "[NOWPayments Webhook] Firma IPN inválida. Posible intento de fraude.",
+        );
+        return res.status(401).send("Invalid signature");
+      }
+
+      console.log(
+        "[NOWPayments Webhook] Firma verificada y autenticada cryptográficamente.",
+      );
+
+      // Confirmar recepción de inmediato a NOWPayments
+      res.status(200).send("OK");
+
+      const { payment_status, order_id, payment_id } = req.body;
+
+      // NOWPayments estados aprobados/completados: "finished" o "confirmed" (según la API de NOWPayments)
+      if ((payment_status === "finished" || payment_status === "confirmed") && order_id) {
+        console.log(
+          `[NOWPayments Webhook] ¡Pago aprobado! Transicionando Orden ID: ${order_id} a TRADE_PENDING y guardando ID de Operación.`,
+        );
+        try {
+          const order = await prisma.order.findUnique({
+            where: { id: order_id },
+          });
+          const currentMetadata =
+            order && order.metadata && typeof order.metadata === "object"
+              ? order.metadata
+              : {};
+
+          await prisma.order.update({
+            where: { id: order_id },
+            data: {
+              status: "TRADE_PENDING",
+              metadata: {
+                ...currentMetadata,
+                nowpaymentsPaymentId: String(payment_id), // Guardar ID de pago oficial criptográfico de NOWPayments
+                paidAt: new Date().toISOString(),
+              },
+            },
+          });
+
+          console.log(
+            `[NOWPayments Webhook] Orden ID ${order_id} transicionada y acreditada con éxito en DB.`,
+          );
+        } catch (orderError: any) {
+          console.error(
+            `[NOWPayments Webhook] Error al actualizar la orden en DB:`,
+            orderError.message,
+          );
+        }
+      }
+    } catch (err: any) {
+      console.error(
+        "[NOWPayments Webhook Error] Error procesando notificación:",
+        err.message,
+      );
+      if (!res.headersSent) {
+        res.status(500).send(err.message);
+      }
     }
   }
 
