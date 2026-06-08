@@ -135,6 +135,7 @@ export class CreateSellOrderUseCase {
   async execute(
     userId: string,
     items: { assetId: string; requestedPrice: number }[],
+    paymentMethod?: string,
     metadata?: any,
   ): Promise<Order> {
     if (!items || items.length === 0) {
@@ -221,6 +222,7 @@ export class CreateSellOrderUseCase {
         type: OrderType.SELL,
         status: OrderStatus.PENDING_PAYMENT,
         totalPrice,
+        paymentMethod: paymentMethod || null,
         metadata,
         items: [],
       },

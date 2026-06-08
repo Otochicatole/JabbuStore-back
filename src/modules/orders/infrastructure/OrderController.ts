@@ -127,7 +127,7 @@ export class OrderController {
   async createSellOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { items, metadata } = req.body; // [{ assetId, requestedPrice }]
+      const { items, paymentMethod, metadata } = req.body; // [{ assetId, requestedPrice }]
 
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({
@@ -139,6 +139,7 @@ export class OrderController {
       const order = await this.createSellOrderUseCase.execute(
         userId,
         items,
+        paymentMethod,
         metadata,
       );
       res.status(201).json(order);
