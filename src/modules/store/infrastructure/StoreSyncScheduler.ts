@@ -3,6 +3,10 @@ import { SyncStoreItemsUseCase } from '../application/SyncStoreItemsUseCase';
 import { config } from '../../../shared/config';
 
 export function startStoreSyncScheduler() {
+  if (!config.enableSync) {
+    console.log('[Store Sync Scheduler] Sincronización automática desactivada en la configuración (ENABLE_SYNC=false).');
+    return;
+  }
   const intervalMinutes = config.storeSyncIntervalMinutes;
   const storeRepository = new PrismaStoreRepository();
   const syncStoreItemsUseCase = new SyncStoreItemsUseCase(storeRepository);

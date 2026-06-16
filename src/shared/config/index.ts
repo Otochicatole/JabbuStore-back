@@ -17,4 +17,9 @@ export const config = {
    * Se puede configurar mediante la variable de entorno STORE_SYNC_INTERVAL_MINUTES.
    */
   storeSyncIntervalMinutes: parseInt(process.env.STORE_SYNC_INTERVAL_MINUTES || '10', 10),
+  
+  /**
+   * Habilitar o deshabilitar la sincronización automática periódica con Steam Web API.
+   */
+  enableSync: process.env.ENABLE_SYNC !== 'false',
 };

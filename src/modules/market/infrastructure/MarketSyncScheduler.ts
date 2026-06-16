@@ -7,6 +7,10 @@ import { config } from '../../../shared/config';
  * Corre en su propio intervalo, separado del sync de inventario de bots.
  */
 export function startMarketSyncScheduler(): void {
+  if (!config.enableSync) {
+    console.log('[Market Sync Scheduler] Sincronización automática desactivada en la configuración (ENABLE_SYNC=false).');
+    return;
+  }
   const intervalMinutes = config.storeSyncIntervalMinutes; // reusar configuración existente
   const marketRepository = new PrismaMarketRepository();
   const syncUseCase = new SyncMarketListingsUseCase(marketRepository);
