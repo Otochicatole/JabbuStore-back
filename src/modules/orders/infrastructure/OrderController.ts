@@ -10,6 +10,7 @@ import { OrderStatus } from "../domain/Order";
 import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
 import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
+import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
 
 export class OrderController {
   constructor(
@@ -163,7 +164,14 @@ export class OrderController {
   async getAllOrders(req: Request, res: Response) {
     try {
       const orders = await this.getAllOrdersUseCase.execute();
-      res.json(orders);
+      const enrichedOrders = await Promise.all(
+        orders.map(async (order: any) => ({
+          ...order,
+          items: await enrichOrderItemsWithYoupinLinks(order.items),
+        })),
+      );
+
+      res.json(enrichedOrders);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
