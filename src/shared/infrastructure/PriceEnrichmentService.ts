@@ -97,6 +97,35 @@ export class PriceEnrichmentService {
   }
 
   /**
+   * Corrige el precio de las variantes Doppler legendarias (Ruby, Sapphire, Black Pearl, Emerald)
+   * si el valor reportado por la API es erróneo o demasiado bajo en comparación con el precio base.
+   */
+  static adjustHighTierDopplerPrice(name: string, price: number, basePrice: number): number {
+    const isRuby = name.includes(" | Ruby");
+    const isSapphire = name.includes(" | Sapphire");
+    const isBlackPearl = name.includes(" | Black Pearl");
+    const isEmerald = name.includes(" | Emerald");
+
+    if (!isRuby && !isSapphire && !isBlackPearl && !isEmerald) {
+      return price;
+    }
+
+    let multiplier = 1.0;
+    if (isBlackPearl) multiplier = 8.0;
+    else if (isRuby) multiplier = 9.0;
+    else if (isSapphire) multiplier = 10.0;
+    else if (isEmerald) multiplier = 12.0;
+
+    const minPrice = basePrice * multiplier;
+    if (price < minPrice) {
+      console.log(`[Doppler Price Correction] Correcting price for "${name}" from $${price} to $${minPrice} (Base: $${basePrice}, Multiplier: ${multiplier}x)`);
+      return minPrice;
+    }
+
+    return price;
+  }
+
+  /**
    * Descompone un nombre completo de ítem (con fase opcional añadida) en el nombre base de mercado y la fase.
    */
   static getBaseNameAndPhase(fullName: string): {
@@ -137,6 +166,13 @@ export class PriceEnrichmentService {
     for (const item of items) {
       if (!item.name) continue;
       lookupNames.add(item.name);
+
+      // Si es un Doppler con fase, también buscar el precio de la skin base para posibles correcciones
+      const { baseName, phase } = this.getBaseNameAndPhase(item.name);
+      if (phase && baseName) {
+        lookupNames.add(baseName);
+      }
+
       if (item.name.startsWith("Sticker | ")) {
         lookupNames.add(item.name.replace("Sticker | ", "Sticker Slab | "));
       } else if (item.name.startsWith("Sticker Slab | ")) {
@@ -248,6 +284,15 @@ export class PriceEnrichmentService {
     // Enriquecer cada ítem con el precio obtenido o con el fallback determinista
     return items.map((item) => {
       let finalPrice = pricesMap.get(item.name) || 0;
+
+      // Aplicar corrección para Doppler de alto tier (Ruby, Sapphire, Black Pearl, Emerald)
+      const { baseName, phase } = this.getBaseNameAndPhase(item.name);
+      if (phase && baseName) {
+        const basePrice = pricesMap.get(baseName) || 0;
+        if (basePrice > 0) {
+          finalPrice = this.adjustHighTierDopplerPrice(item.name, finalPrice, basePrice);
+        }
+      }
 
       if (finalPrice === 0) {
         finalPrice = this.calculateFallbackPrice(

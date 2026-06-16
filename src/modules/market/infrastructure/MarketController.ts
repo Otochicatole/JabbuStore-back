@@ -26,22 +26,31 @@ export class MarketController {
   /** POST /market/sync — dispara sincronización manual completa (catálogo + bots) desde el panel de admin */
   async triggerSync(_req: Request, res: Response): Promise<void> {
     try {
-      console.log('[Market Controller] Iniciando sincronización manual completa (Catálogo + Bots)...');
-      
-      // 1. Sincronizar catálogo de YouPin
-      const result = await this.syncMarketListingsUseCase.execute();
-      
-      // 2. Sincronizar inventario de los bots
-      await this.syncStoreItemsUseCase.execute();
+      console.log('[Market Controller] Solicitud de sincronización manual completa recibida. Ejecutando en segundo plano para evitar timeouts...');
 
+      // Responder de inmediato para evitar timeout HTTP en el navegador o proxy (p. ej. Cloudflare o Nginx)
       res.json({
-        message: `Sincronización completada con éxito. Catálogo: ${result.synced} items sincronizados, ${result.skipped} omitidos. Inventario de bots actualizado.`,
-        synced: result.synced,
-        skipped: result.skipped,
+        message: 'Sincronización manual completa iniciada en segundo plano con éxito. El proceso demorará entre 30 y 45 segundos en actualizar el catálogo de YouPin y el stock de los bots.',
       });
+
+      // Ejecución asíncrona en segundo plano sin bloquear la respuesta HTTP
+      (async () => {
+        try {
+          console.log('[Market Sync Background] Iniciando actualización del catálogo...');
+          const result = await this.syncMarketListingsUseCase.execute();
+          console.log(`[Market Sync Background] Catálogo actualizado: ${result.synced} items guardados, ${result.skipped} omitidos.`);
+
+          console.log('[Market Sync Background] Iniciando actualización de inventario de bots...');
+          await this.syncStoreItemsUseCase.execute();
+          console.log('[Market Sync Background] Sincronización completa finalizada con éxito.');
+        } catch (err: any) {
+          console.error('[Market Sync Background Error] Error durante la sincronización en segundo plano:', err.message || err);
+        }
+      })();
+
     } catch (error: any) {
-      console.error('[Market Controller] Error en sincronización:', error);
-      res.status(500).json({ error: error.message || 'Error durante la sincronización completa.' });
+      console.error('[Market Controller] Error al iniciar sincronización:', error);
+      res.status(500).json({ error: error.message || 'Error al iniciar la sincronización.' });
     }
   }
 

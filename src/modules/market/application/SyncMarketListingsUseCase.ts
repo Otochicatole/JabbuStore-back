@@ -149,7 +149,27 @@ export class SyncMarketListingsUseCase {
             const variantPrice = Number(variant.pricereal);
 
             if (variantPrice > 0.5) {
-              const finalVariantPrice = variantPrice;
+              let finalVariantPrice = variantPrice;
+
+              // Corregir precios de variantes Doppler de alto tier si vienen con error desde la API (p. ej. Black Pearl, Ruby, Sapphire, Emerald)
+              const isRuby = variant.phase === "Ruby";
+              const isSapphire = variant.phase === "Sapphire";
+              const isBlackPearl = variant.phase === "Black Pearl";
+              const isEmerald = variant.phase === "Emerald";
+
+              if (isRuby || isSapphire || isBlackPearl || isEmerald) {
+                let multiplier = 1.0;
+                if (isBlackPearl) multiplier = 8.0;
+                else if (isRuby) multiplier = 9.0;
+                else if (isSapphire) multiplier = 10.0;
+                else if (isEmerald) multiplier = 12.0;
+
+                const minPrice = price * multiplier;
+                if (finalVariantPrice < minPrice) {
+                  console.log(`[Doppler Variant Correction] Correcting price for "${variantName}" from $${finalVariantPrice} to $${minPrice} (Base: $${price}, Multiplier: ${multiplier}x)`);
+                  finalVariantPrice = minPrice;
+                }
+              }
 
               const details =
                 PriceEnrichmentService.inferDetailsFromMarketHashName(
