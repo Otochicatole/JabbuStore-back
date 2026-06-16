@@ -265,14 +265,69 @@ export class OrderController {
   async handlePayPalWebhook(req: Request, res: Response) {
     try {
       const { token } = req.body; // PayPal Order Token enviado tras la redirección exitosa o webhook
-      const paypalOrderId = token || req.query.token;
+      let paypalOrderId = token || req.query.token;
+
+      console.log(
+        `[PayPal Webhook/Callback] Recibida petición. EventType: ${req.body?.event_type}, BodyKeys: ${Object.keys(req.body || {})}, Query: ${JSON.stringify(req.query)}`
+      );
+
+      // Si es un evento de webhook indicando que la captura ya completó
+      if (req.body && req.body.event_type === "PAYMENT.CAPTURE.COMPLETED") {
+        const captureId = req.body.resource?.id;
+        const paypalOrderToken = req.body.resource?.supplementary_data?.related_ids?.order_id;
+        console.log(`[PayPal Webhook] Captura ya completada (PAYMENT.CAPTURE.COMPLETED). Capture ID: ${captureId}, Order Token: ${paypalOrderToken}`);
+        
+        // Buscar la orden correspondiente en los últimos registros
+        const recentOrders = await prisma.order.findMany({
+          where: { paymentMethod: "paypal" },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        });
+
+        const matchingOrder = recentOrders.find(order => {
+          const meta = order.metadata && typeof order.metadata === "object" ? (order.metadata as any) : {};
+          return meta.paypalPaymentId === captureId || meta.paypalPaymentId === paypalOrderToken;
+        });
+
+        if (matchingOrder) {
+          if (matchingOrder.status === "PENDING_PAYMENT") {
+            const currentMetadata = matchingOrder.metadata && typeof matchingOrder.metadata === "object" ? matchingOrder.metadata : {};
+            await prisma.order.update({
+              where: { id: matchingOrder.id },
+              data: {
+                status: "TRADE_PENDING",
+                metadata: {
+                  ...currentMetadata,
+                  paypalPaymentId: String(captureId),
+                  paidAt: new Date().toISOString(),
+                }
+              }
+            });
+            console.log(`[PayPal Webhook] Orden ${matchingOrder.id} transicionada exitosamente a TRADE_PENDING desde webhook.`);
+          } else {
+            console.log(`[PayPal Webhook] La orden ${matchingOrder.id} ya estaba en estado ${matchingOrder.status}.`);
+          }
+          return res.json({ success: true, orderId: matchingOrder.id });
+        }
+
+        console.log(`[PayPal Webhook] No se encontró orden local para Capture ID: ${captureId}. Retornando 200 OK.`);
+        return res.json({ success: true, message: "Captura recibida pero no se asoció a ninguna orden local." });
+      }
+
+      // Si no hay token directo pero es un webhook de PayPal, extraer el ID del recurso
+      if (!paypalOrderId && req.body) {
+        // En eventos como CHECKOUT.ORDER.APPROVED, el ID de la orden de PayPal está en resource.id
+        if (req.body.resource?.id) {
+          paypalOrderId = req.body.resource.id;
+        }
+      }
 
       if (!paypalOrderId) {
         return res.status(400).json({ error: "Falta el token de orden de PayPal (orderId)" });
       }
 
       console.log(
-        `[PayPal Webhook/Callback] Recibida aprobación de pago. PayPal Order ID: ${paypalOrderId}`,
+        `[PayPal Webhook/Callback] Procesando PayPal Order ID: ${paypalOrderId}`,
       );
 
       // Si es un token simulado/de prueba en scripts, responder de manera mockeada
@@ -299,10 +354,64 @@ export class OrderController {
         }
       }
 
+      // Intentar deducir el ID de la orden de nuestra BD antes de capturar
+      // Esto sirve si el webhook se dispara múltiples veces o después de la captura del frontend
+      const dbOrderIdFromPayload = req.body.resource?.purchase_units?.[0]?.reference_id;
+      if (dbOrderIdFromPayload) {
+        const order = await prisma.order.findUnique({
+          where: { id: dbOrderIdFromPayload },
+        });
+        if (order && (order.status === "TRADE_PENDING" || order.status === "PAID")) {
+          console.log(
+            `[PayPal Webhook] La orden ${dbOrderIdFromPayload} ya está transicionada a ${order.status}. Retornando éxito sin re-capturar.`
+          );
+          return res.json({ success: true, orderId: dbOrderIdFromPayload });
+        }
+      }
+
       const { PayPalService } = require("../../../shared/infrastructure/PayPalService");
       
       // Capturar de forma segura el pago en PayPal del lado del servidor para acreditarlo de forma inviolable
-      const captureResult = await PayPalService.capturePayment(String(paypalOrderId));
+      let captureResult;
+      try {
+        captureResult = await PayPalService.capturePayment(String(paypalOrderId));
+      } catch (captureErr: any) {
+        console.warn(`[PayPal Webhook Warning] Falló capturePayment: ${captureErr.message}`);
+        
+        // Si falló la captura porque la orden ya fue capturada previamente,
+        // buscamos si la orden en base de datos ya está en TRADE_PENDING o PAID.
+        if (
+          captureErr.message?.includes("ORDER_ALREADY_CAPTURED") ||
+          captureErr.message?.includes("already been captured")
+        ) {
+          const orderIdToFind = dbOrderIdFromPayload;
+          if (orderIdToFind) {
+            const order = await prisma.order.findUnique({
+              where: { id: orderIdToFind },
+            });
+            if (order && (order.status === "TRADE_PENDING" || order.status === "PAID")) {
+              console.log(`[PayPal Webhook] Confirmado: Orden ${orderIdToFind} ya capturada previamente. Retornando éxito.`);
+              return res.json({ success: true, orderId: orderIdToFind });
+            }
+          }
+        }
+        
+        // Si el recurso no existe en PayPal (por ejemplo, IDs simulados en el panel de PayPal o expirados),
+        // respondemos 200 OK para evitar que PayPal reintente infinitamente.
+        if (
+          captureErr.message?.includes("The specified resource does not exist") ||
+          captureErr.message?.includes("RESOURCE_NOT_FOUND")
+        ) {
+          console.warn(`[PayPal Webhook Warning] Recurso no encontrado en PayPal. Evitando reintento del webhook.`);
+          return res.status(200).json({
+            success: false,
+            error: "El recurso especificado no existe en PayPal (posible evento simulado o expirado)."
+          });
+        }
+        
+        throw captureErr;
+      }
+
       const status = captureResult.status;
       const orderId = captureResult.purchase_units?.[0]?.reference_id; // Contiene nuestro ORDER_ID asociado de forma inviolable
 
