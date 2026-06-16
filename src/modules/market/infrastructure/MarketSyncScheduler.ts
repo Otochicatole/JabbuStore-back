@@ -3,7 +3,7 @@ import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseC
 import { config } from '../../../shared/config';
 
 /**
- * Scheduler independiente para el catálogo de market listings (Buff/YouPin).
+ * Scheduler independiente para el catálogo de market listings (YouPin).
  * Corre en su propio intervalo, separado del sync de inventario de bots.
  */
 export function startMarketSyncScheduler(): void {

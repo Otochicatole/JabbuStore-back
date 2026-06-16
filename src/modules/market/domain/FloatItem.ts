@@ -3,7 +3,7 @@ export interface FloatItem {
   assetId: string;
   floatValue: number;
   paintSeed: number;
-  market: 'BUFF' | 'YOUPIN';
+  market: 'YOUPIN';
   price: number; // Original market price in USD
   inspectLink?: string | null;
   available?: boolean;

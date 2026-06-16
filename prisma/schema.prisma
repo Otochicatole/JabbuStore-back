@@ -57,16 +57,14 @@ model StoreItem {
   updatedAt     DateTime @updatedAt
 }
 
-/// Catálogo de ítems de reventa provenientes de Buff163 y YouPin via cs2.sh
+/// Catálogo de ítems de reventa provenientes de YouPin via cs2.sh
 model MarketListing {
   id            String   @id @default(cuid())
   name          String   @unique
-  provider      String   // 'buff' | 'youpin' — plataforma con mejor precio/volumen
+  provider      String   // 'youpin' — plataforma de reventa
   youpinAsk     Float?
   youpinVolume  Int?
-  buffAsk       Float?
-  buffVolume    Int?
-  price         Float    @default(0.0) // precio base seleccionado (mejor entre ambos)
+  price         Float    @default(0.0) // precio base seleccionado (YouPin)
   iconUrl       String?
   rarity        String   @default("common")
   exterior      String?
@@ -156,7 +154,7 @@ model AdminSettings {
   userSellModifierValue      Float    @default(0.0)
   userSellModifierEnabled    Boolean  @default(false)
 
-  // Modificador para market listings (Buff/YouPin) — independiente de bots
+  // Modificador para market listings (YouPin) — independiente de bots
   marketModifierType         String   @default("percentage_increase")
   marketModifierValue        Float    @default(0.0)
   marketModifierEnabled      Boolean  @default(false)
@@ -249,7 +247,7 @@ model FloatItem {
   assetId      String
   floatValue   Float
   paintSeed    Int
-  market       String        // 'BUFF' | 'YOUPIN'
+  market       String        // 'YOUPIN'
   price        Float         // Precio original de mercado en USD
   inspectLink  String?
   available    Boolean       @default(true)

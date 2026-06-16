@@ -708,7 +708,7 @@ export class OrderController {
                   name: item.name,
                   price: floatPrice,
                   iconUrl: item.iconUrl || null,
-                  provider: dbFloat.market.toLowerCase(), // 'buff' | 'youpin'
+                  provider: 'youpin',
                   float: dbFloat.floatValue,
                   pattern: dbFloat.paintSeed,
                 };
@@ -720,7 +720,7 @@ export class OrderController {
               name: item.name,
               price: item.price,
               iconUrl: item.iconUrl || null,
-              provider: item.provider,
+              provider: 'youpin',
               float: null,
               pattern: null,
             };

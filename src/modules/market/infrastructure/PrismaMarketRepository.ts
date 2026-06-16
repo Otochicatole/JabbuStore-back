@@ -11,7 +11,7 @@ export class PrismaMarketRepository implements IMarketRepository {
 
     return rows.map((row) => ({
       ...row,
-      provider: row.provider as 'buff' | 'youpin',
+      provider: row.provider as 'youpin',
     }));
   }
 
@@ -31,8 +31,6 @@ export class PrismaMarketRepository implements IMarketRepository {
         provider: listing.provider,
         youpinAsk: listing.youpinAsk,
         youpinVolume: listing.youpinVolume,
-        buffAsk: listing.buffAsk,
-        buffVolume: listing.buffVolume,
         price: manualPrice ?? listing.price,
         iconUrl: listing.iconUrl ?? null,
         rarity: listing.rarity || 'common',
@@ -69,8 +67,6 @@ export class PrismaMarketRepository implements IMarketRepository {
           provider: listing.provider,
           youpinAsk: listing.youpinAsk,
           youpinVolume: listing.youpinVolume,
-          buffAsk: listing.buffAsk,
-          buffVolume: listing.buffVolume,
           iconUrl: listing.iconUrl,
           rarity: listing.rarity,
           exterior: listing.exterior,
@@ -124,7 +120,7 @@ export class PrismaMarketRepository implements IMarketRepository {
       assetId: row.assetId,
       floatValue: row.floatValue,
       paintSeed: row.paintSeed,
-      market: row.market as 'BUFF' | 'YOUPIN',
+      market: row.market as 'YOUPIN',
       price: row.price,
       inspectLink: row.inspectLink,
       available: row.available,

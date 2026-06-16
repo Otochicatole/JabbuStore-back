@@ -4,9 +4,8 @@ import { PriceEnrichmentService } from "../../../shared/infrastructure/PriceEnri
 import { config } from "../../../shared/config";
 
 /**
- * Sincroniza el catálogo de market listings (Buff163 + YouPin) desde la API de cs2.sh.
- * Guarda el proveedor real, ambos precios (ask de youpin y buff) y detecta cuál tiene
- * mejor liquidez para usarlo como precio base.
+ * Sincroniza el catálogo de market listings (YouPin) desde la API de cs2.sh.
+ * Guarda YouPin como proveedor de datos y su precio ask para usarlo como precio base.
  */
 export class SyncMarketListingsUseCase {
   constructor(private marketRepository: IMarketRepository) {}
@@ -52,15 +51,11 @@ export class SyncMarketListingsUseCase {
         // Extraer precios de SteamWebAPI (ya vienen convertidos a USD por el proveedor)
         const prices = item.prices || [];
         const youpinObj = prices.find((p: any) => p.source === "youpin");
-        const buffObj = prices.find((p: any) => p.source === "buff");
 
         const youpinAsk = youpinObj ? Number(youpinObj.price) : null;
         const youpinVolumeRaw = youpinObj ? Number(youpinObj.quantity) : null;
 
-        const buffAsk = buffObj ? Number(buffObj.price) : null;
-        const buffVolumeRaw = buffObj ? Number(buffObj.quantity) : null;
-
-        // Si Youpin/Buff no traen stock individual de forma directa, usamos realmarketsquantity u offervolume de SteamWebAPI
+        // Si Youpin no trae stock individual de forma directa, usamos realmarketsquantity u offervolume de SteamWebAPI
         const apiTotalQuantity =
           Number(item.realmarketsquantity) || Number(item.offervolume) || 0;
 
@@ -69,13 +64,8 @@ export class SyncMarketListingsUseCase {
           (apiTotalQuantity > 0
             ? Math.max(1, Math.round(apiTotalQuantity * 0.45))
             : null);
-        const buffVolume =
-          buffVolumeRaw ??
-          (apiTotalQuantity > 0
-            ? Math.max(1, Math.round(apiTotalQuantity * 0.55))
-            : null);
 
-        // Sumar liquidez de TODOS los mercados disponibles (Youpin, Buff, CSFloat, Skinport, etc.) para tener datos estables
+        // Sumar liquidez de TODOS los mercados disponibles para tener datos estables
         const totalVolume =
           prices.reduce(
             (sum: number, p: any) => sum + (Number(p.quantity) || 0),
@@ -85,35 +75,21 @@ export class SyncMarketListingsUseCase {
         // Filtrar base por liquidez mínima (al menos 2 ofertas activas en total)
         let hasBaseListing = totalVolume >= 2;
         let price = 0;
-        let provider: "buff" | "youpin" = "youpin";
+        let provider: "youpin" = "youpin";
 
         if (hasBaseListing) {
-          if (
-            youpinAsk &&
-            youpinVolume &&
-            (!buffAsk || youpinVolume >= (buffVolume ?? 0))
-          ) {
+          if (youpinAsk && youpinVolume) {
             provider = "youpin";
             price = youpinAsk;
-          } else if (buffAsk) {
-            provider = "buff";
-            price = buffAsk;
           } else {
-            // FALLBACK DE SEGURIDAD: Si Youpin y Buff no están disponibles de forma directa en el catálogo del proveedor,
+            // FALLBACK DE SEGURIDAD: Si Youpin no está disponible de forma directa en el catálogo del proveedor,
             // usar el precio más bajo disponible entre los otros mercados (CSFloat, Skinport, DMarket, etc.)
             const availablePrices = prices
               .map((p: any) => Number(p.price))
               .filter((p: number) => p > 0);
             if (availablePrices.length > 0) {
               price = Math.min(...availablePrices);
-
-              // Dividir equitativamente los proveedores de reventa en base al hash del nombre
-              let hash = 0;
-              for (let i = 0; i < name.length; i++) {
-                hash = (hash << 5) - hash + name.charCodeAt(i);
-                hash |= 0;
-              }
-              provider = Math.abs(hash) % 2 === 0 ? "buff" : "youpin";
+              provider = "youpin";
             } else {
               hasBaseListing = false;
             }
@@ -123,7 +99,7 @@ export class SyncMarketListingsUseCase {
         // Registrar base listing si califica
         if (hasBaseListing && price > 0.5) {
           // CAP DE SEGURIDAD CONTRA PRECIOS MANIPULADOS O ERRÓNEOS:
-          // El precio de reventa de Buff/Youpin nunca debe ser superior al precio oficial del Mercado de Steam,
+          // El precio de reventa de Youpin nunca debe ser superior al precio oficial del Mercado de Steam,
           // pero únicamente aplicamos este límite a ítems de bajo/medio rango (Steam Price < $150)
           // para no recortar ítems de alto rango (como Dragon Lore, Gungnir, Howl, etc.) que superan el límite de cartera de Steam ($2000).
           const steamPrice =
@@ -152,8 +128,6 @@ export class SyncMarketListingsUseCase {
             provider,
             youpinAsk,
             youpinVolume,
-            buffAsk,
-            buffVolume,
             price,
             iconUrl,
             rarity: details.rarity,
@@ -192,22 +166,11 @@ export class SyncMarketListingsUseCase {
                 imagesMap.get(cleanBaseVariantName.replace("★ ", "")) ||
                 null;
 
-              // Dividir equitativamente los proveedores de variantes en base al hash del nombre
-              let varHash = 0;
-              for (let i = 0; i < variantName.length; i++) {
-                varHash = (varHash << 5) - varHash + variantName.charCodeAt(i);
-                varHash |= 0;
-              }
-              const variantProvider =
-                Math.abs(varHash) % 2 === 0 ? "buff" : "youpin";
-
               listings.push({
                 name: variantName,
-                provider: variantProvider,
+                provider: "youpin",
                 youpinAsk: finalVariantPrice,
                 youpinVolume: 10,
-                buffAsk: finalVariantPrice,
-                buffVolume: 10,
                 price: finalVariantPrice,
                 iconUrl,
                 rarity: details.rarity,

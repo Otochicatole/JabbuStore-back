@@ -21,10 +21,8 @@ export class SyncResaleItemFloatsUseCase {
 
     console.log(`[Sync Resale Floats] Buscando floats para "${marketHashName}" (Resale ID: ${resaleItemId})...`);
 
-    // El plan Float Small requiere filtrar por fuente específica.
-    // Llamar sin source retorna solo items de inventario (source=inventory) sin precios.
-    // Debemos hacer llamadas separadas por cada marketplace para obtener sus listados con precios.
-    const sources = ["youpin", "buff"] as const;
+    // Soportar únicamente YouPin en reventa
+    const sources = ["youpin"] as const;
 
     const fetchSource = async (source: string): Promise<any[]> => {
       try {
@@ -63,25 +61,23 @@ export class SyncResaleItemFloatsUseCase {
     };
 
     try {
-      // Ejecutamos en serie para respetar límites de la API (una llamada por source)
       const allAssets: any[] = [];
       for (const source of sources) {
         const assets = await fetchSource(source);
         allAssets.push(...assets);
       }
 
-      // Filtrar únicamente los listados con precio disponible
+      // Filtrar únicamente los listados con precio disponible de YouPin
       const marketAssets = allAssets.filter(
         (asset) =>
           asset &&
-          (asset.source === "buff" || asset.source === "youpin") &&
+          asset.source === "youpin" &&
           asset.price !== undefined &&
           asset.price !== null &&
           Number(asset.price) > 0
       );
 
       const floats: FloatItem[] = marketAssets.map((asset) => {
-        const sourceMarket = (asset.source || "youpin").toUpperCase() as "BUFF" | "YOUPIN";
         const price = Number(asset.price);
 
         // Reconstrucción del inspect link de CS:GO siguiendo la estructura preview de Steam
@@ -96,7 +92,7 @@ export class SyncResaleItemFloatsUseCase {
           assetId: String(asset.assetid),
           floatValue: Number(asset.float),
           paintSeed: Number(asset.paintseed) || 0,
-          market: sourceMarket,
+          market: "YOUPIN" as const,
           price: price,
           inspectLink: inspectLink,
           available: true,

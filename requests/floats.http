@@ -25,20 +25,6 @@ Accept: application/json
 
 ###
 
-# ─────────────────────────────────────────────────────────────
-# Buff — siempre devuelve data:[] (no expone floats individuales)
-# ─────────────────────────────────────────────────────────────
-
-### Buff — AK-47 | Redline (Field-Tested)
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&source=buff
-Accept: application/json
-
-###
-
-### Buff — ★ Sport Gloves | Hedge Maze (Factory New)
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=%E2%98%85%20Sport%20Gloves%20%7C%20Hedge%20Maze%20%28Factory%20New%29&source=buff
-Accept: application/json
-
 ###
 
 # ─────────────────────────────────────────────────────────────
