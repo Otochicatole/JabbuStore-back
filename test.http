@@ -13,6 +13,10 @@ Accept: application/json
 GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=AWP%20%7C%20Dragon%20Lore%20%28Factory%20New%29&source=youpin
 Accept: application/json
 
+### YouPin — Sticker | Reason Gaming | Katowice 2014
+GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=Sticker%20%7C%20Reason%20Gaming%20%7C%20Katowice%202014&source=youpin
+Accept: application/json
+
 ### Catálogo Global — Todos los ítems y precios de CS2 (Global Endpoint)
 GET https://www.steamwebapi.com/steam/api/items?key={{apiKey}}&appid=730
 Accept: application/json
