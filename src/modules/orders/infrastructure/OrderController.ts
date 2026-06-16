@@ -680,6 +680,8 @@ export class OrderController {
             provider: "bot",
             float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
             pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
+            exterior: item.exterior ?? null,
+            rarity: item.rarity ?? null,
           };
         });
 
@@ -719,6 +721,8 @@ export class OrderController {
                   provider: 'youpin',
                   float: dbFloat.floatValue,
                   pattern: dbFloat.paintSeed,
+                  exterior: item.exterior ?? null,
+                  rarity: item.rarity ?? null,
                 };
               }
             }
@@ -731,6 +735,8 @@ export class OrderController {
               provider: 'youpin',
               float: null,
               pattern: null,
+              exterior: item.exterior ?? null,
+              rarity: item.rarity ?? null,
             };
           })
         );
@@ -822,6 +828,11 @@ export class OrderController {
             name: inventoryItem.name,
             price: item.requestedPrice,
             iconUrl: inventoryItem.iconUrl ?? null,
+            provider: "user",
+            float: inventoryItem.float,
+            pattern: inventoryItem.pattern,
+            exterior: inventoryItem.exterior,
+            rarity: inventoryItem.rarity,
           });
 
           totalPrice += item.requestedPrice;
