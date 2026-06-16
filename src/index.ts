@@ -80,6 +80,7 @@ app.get('/', (req, res) => {
 
 import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyncScheduler';
 import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
+import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
@@ -87,4 +88,6 @@ app.listen(PORT, () => {
   startStoreSyncScheduler();
   // Catálogo de reventa de Buff/YouPin vía cs2.sh
   startMarketSyncScheduler();
+  // Sincronizador periódico de floats del plan Float Small
+  startMarketFloatsSyncScheduler();
 });

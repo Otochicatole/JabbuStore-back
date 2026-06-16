@@ -76,6 +76,7 @@ model MarketListing {
   isPriceManual Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  floats        FloatItem[]
 }
 
 model UserInventoryItem {
@@ -241,4 +242,22 @@ model Trade {
   cancelledAt       DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+model FloatItem {
+  id           String        @id @default(uuid())
+  assetId      String
+  floatValue   Float
+  paintSeed    Int
+  market       String        // 'BUFF' | 'YOUPIN'
+  price        Float         // Precio original de mercado en USD
+  inspectLink  String?
+  available    Boolean       @default(true)
+  externalId   String?
+  lastSyncAt   DateTime      @default(now())
+  
+  resaleItemId String
+  resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
+
+  @@map("floats")
 }

@@ -648,30 +648,88 @@ export class OrderController {
           });
         }
 
-        let totalPrice = 0;
+        const overridesMap = new Map<string, any>();
+        if (Array.isArray(items)) {
+          items.forEach((ov) => {
+            if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+          });
+        }
+
+        const settings = await prisma.adminSettings.findFirst();
+        const settingsData = settings ?? {
+          marketModifierEnabled: false,
+          marketModifierType: 'percentage_increase',
+          marketModifierValue: 0,
+        };
 
         const resolvedBotItems = storeItems.map((item: any) => {
-          totalPrice += item.price;
+          const override = overridesMap.get(item.assetId);
           return {
             assetId: item.assetId,
             name: item.name,
             price: item.price,
             iconUrl: item.iconUrl || null,
             provider: "bot",
+            float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
+            pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
           };
         });
 
-        const resolvedMarketItems = marketItems.map((item: any) => {
-          totalPrice += item.price;
-          return {
-            assetId: `market-${item.name}`,
-            name: item.name,
-            price: item.price,
-            iconUrl: item.iconUrl || null,
-            provider: item.provider, // 'buff' | 'youpin'
-          };
-        });
+        const resolvedMarketItems = await Promise.all(
+          marketItems.map(async (item: any) => {
+            const override = overridesMap.get(`market-${item.name}`);
+            if (override && override.float !== undefined && override.float !== null) {
+              const floatQueryWhere: any = {
+                resaleItemId: item.id,
+                floatValue: Number(override.float),
+              };
+              if (override.pattern !== undefined && override.pattern !== null) {
+                floatQueryWhere.paintSeed = Number(override.pattern);
+              }
+              const dbFloat = await prisma.floatItem.findFirst({
+                where: floatQueryWhere,
+              });
 
+              if (dbFloat) {
+                let floatPrice = dbFloat.price;
+                if (settingsData.marketModifierEnabled) {
+                  let modifier = 0;
+                  switch (settingsData.marketModifierType) {
+                    case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
+                    case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
+                    case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
+                    case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
+                  }
+                  floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
+                }
+
+                return {
+                  assetId: `market-${item.name}`,
+                  name: item.name,
+                  price: floatPrice,
+                  iconUrl: item.iconUrl || null,
+                  provider: dbFloat.market.toLowerCase(), // 'buff' | 'youpin'
+                  float: dbFloat.floatValue,
+                  pattern: dbFloat.paintSeed,
+                };
+              }
+            }
+
+            return {
+              assetId: `market-${item.name}`,
+              name: item.name,
+              price: item.price,
+              iconUrl: item.iconUrl || null,
+              provider: item.provider,
+              float: null,
+              pattern: null,
+            };
+          })
+        );
+
+        let totalPrice = 0;
+        resolvedBotItems.forEach((item) => totalPrice += item.price);
+        resolvedMarketItems.forEach((item) => totalPrice += item.price);
         totalPrice = Math.round(totalPrice * 100) / 100;
 
         return res.json({

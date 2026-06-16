@@ -1,6 +1,7 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
+import { FloatItem } from '../domain/FloatItem';
 
 export class PrismaMarketRepository implements IMarketRepository {
   async findAll(): Promise<MarketListing[]> {
@@ -89,5 +90,47 @@ export class PrismaMarketRepository implements IMarketRepository {
       where: { id },
       data: { price, isPriceManual: true },
     });
+  }
+
+  async saveFloats(resaleItemId: string, floats: FloatItem[]): Promise<void> {
+    await prisma.$transaction([
+      prisma.floatItem.deleteMany({
+        where: { resaleItemId }
+      }),
+      prisma.floatItem.createMany({
+        data: floats.map((f) => ({
+          assetId: f.assetId,
+          floatValue: f.floatValue,
+          paintSeed: f.paintSeed,
+          market: f.market,
+          price: f.price,
+          inspectLink: f.inspectLink || null,
+          available: f.available ?? true,
+          externalId: f.externalId || null,
+          lastSyncAt: f.lastSyncAt || new Date(),
+          resaleItemId: resaleItemId,
+        }))
+      })
+    ]);
+  }
+
+  async findFloatsByResaleItemId(resaleItemId: string): Promise<FloatItem[]> {
+    const rows = await prisma.floatItem.findMany({
+      where: { resaleItemId },
+      orderBy: { price: 'asc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      assetId: row.assetId,
+      floatValue: row.floatValue,
+      paintSeed: row.paintSeed,
+      market: row.market as 'BUFF' | 'YOUPIN',
+      price: row.price,
+      inspectLink: row.inspectLink,
+      available: row.available,
+      externalId: row.externalId,
+      lastSyncAt: row.lastSyncAt,
+      resaleItemId: row.resaleItemId,
+    }));
   }
 }

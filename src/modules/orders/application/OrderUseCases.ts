@@ -96,19 +96,64 @@ export class CreatePurchaseOrderUseCase {
       });
     }
 
-    // Market listings — precio del catálogo, sin float/pattern individuales
+    const settings = await prisma.adminSettings.findFirst();
+    const settingsData = settings ?? {
+      marketModifierEnabled: false,
+      marketModifierType: 'percentage_increase',
+      marketModifierValue: 0,
+    };
+
+    // Market listings — precio del catálogo u override de float individual
     for (const item of marketListings as any[]) {
-      totalPrice += item.price;
+      const override = overridesMap.get(`market-${item.name}`);
+      let itemPrice = item.price;
+      let itemFloat: number | null = null;
+      let itemPattern: number | null = null;
+      let itemProvider = item.provider;
+
+      if (override && override.float !== undefined && override.float !== null) {
+        const floatQueryWhere: any = {
+          resaleItemId: item.id,
+          floatValue: Number(override.float),
+        };
+        if (override.pattern !== undefined && override.pattern !== null) {
+          floatQueryWhere.paintSeed = Number(override.pattern);
+        }
+        const dbFloat = await prisma.floatItem.findFirst({
+          where: floatQueryWhere,
+        });
+
+        if (dbFloat) {
+          let floatPrice = dbFloat.price;
+          if (settingsData.marketModifierEnabled) {
+            let modifier = 0;
+            switch (settingsData.marketModifierType) {
+              case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
+              case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
+              case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
+              case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
+            }
+            floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
+          }
+
+          itemPrice = floatPrice;
+          itemFloat = dbFloat.floatValue;
+          itemPattern = dbFloat.paintSeed;
+          itemProvider = dbFloat.market.toLowerCase();
+        }
+      }
+
+      totalPrice += itemPrice;
       orderItemsData.push({
         assetId: `market-${item.name}`,
         name: item.name,
-        price: item.price,
+        price: itemPrice,
         iconUrl: item.iconUrl,
         rarity: item.rarity,
         exterior: item.exterior,
-        float: null,
-        pattern: null,
-        provider: item.provider, // 'buff' | 'youpin'
+        float: itemFloat,
+        pattern: itemPattern,
+        provider: itemProvider,
       });
     }
 
