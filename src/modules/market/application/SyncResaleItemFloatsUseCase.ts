@@ -176,12 +176,21 @@ export class SyncResaleItemFloatsUseCase {
       const floats: FloatItem[] = marketAssets.map((asset) => {
         const price = Number(asset.resolvedPrice || asset.price);
 
-        // Reconstrucción del inspect link de CS:GO siguiendo la estructura preview de Steam
+        // Reconstrucción del inspect link de CS:GO/CS2 siguiendo la estructura preview de Steam
         let inspectLink: string | null = null;
-        if (asset.marketid && asset.certificate) {
-          inspectLink = `steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20M${asset.marketid}A${asset.assetid}D${asset.certificate}`;
-        } else if (asset.steamid && asset.certificate) {
-          inspectLink = `steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20S${asset.steamid}A${asset.assetid}D${asset.certificate}`;
+        if (asset.certificate) {
+          const cert = String(asset.certificate);
+          if (cert.length > 30) {
+            // Formato de certificado hex moderno de CS2
+            inspectLink = `steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20${cert}`;
+          } else {
+            // Formato legado M/A/D o S/A/D
+            if (asset.marketid) {
+              inspectLink = `steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20M${asset.marketid}A${asset.assetid}D${cert}`;
+            } else if (asset.steamid) {
+              inspectLink = `steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20S${asset.steamid}A${asset.assetid}D${cert}`;
+            }
+          }
         }
 
         return {
