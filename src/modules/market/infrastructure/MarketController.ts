@@ -2,12 +2,14 @@ import { Request, Response } from 'express';
 import { GetMarketListingsUseCase } from '../application/GetMarketListingsUseCase';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
+import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
 
 export class MarketController {
   constructor(
     private getMarketListingsUseCase: GetMarketListingsUseCase,
     private syncMarketListingsUseCase: SyncMarketListingsUseCase,
     private getResaleItemFloatsUseCase: GetResaleItemFloatsUseCase,
+    private syncStoreItemsUseCase: SyncStoreItemsUseCase,
   ) {}
 
   /** GET /market/listings — devuelve todos los listings con displayPrice */
@@ -21,17 +23,25 @@ export class MarketController {
     }
   }
 
-  /** POST /market/sync — dispara sincronización manual desde el panel de admin */
+  /** POST /market/sync — dispara sincronización manual completa (catálogo + bots) desde el panel de admin */
   async triggerSync(_req: Request, res: Response): Promise<void> {
     try {
+      console.log('[Market Controller] Iniciando sincronización manual completa (Catálogo + Bots)...');
+      
+      // 1. Sincronizar catálogo de YouPin
       const result = await this.syncMarketListingsUseCase.execute();
+      
+      // 2. Sincronizar inventario de los bots
+      await this.syncStoreItemsUseCase.execute();
+
       res.json({
-        message: `Sincronización completada. ${result.synced} listings guardados, ${result.skipped} omitidos.`,
-        ...result,
+        message: `Sincronización completada con éxito. Catálogo: ${result.synced} items sincronizados, ${result.skipped} omitidos. Inventario de bots actualizado.`,
+        synced: result.synced,
+        skipped: result.skipped,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('[Market Controller] Error en sincronización:', error);
-      res.status(500).json({ error: 'Error durante la sincronización del catálogo de mercado.' });
+      res.status(500).json({ error: error.message || 'Error durante la sincronización completa.' });
     }
   }
 

@@ -4,19 +4,25 @@ import { PrismaMarketRepository } from './PrismaMarketRepository';
 import { GetMarketListingsUseCase } from '../application/GetMarketListingsUseCase';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
+import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
+import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
 
 const router = Router();
 
 // Inyección de dependencias del módulo market
 const marketRepository = new PrismaMarketRepository();
+const storeRepository = new PrismaStoreRepository();
 const getMarketListingsUseCase = new GetMarketListingsUseCase(marketRepository);
 const syncMarketListingsUseCase = new SyncMarketListingsUseCase(marketRepository);
 const getResaleItemFloatsUseCase = new GetResaleItemFloatsUseCase(marketRepository);
+const syncStoreItemsUseCase = new SyncStoreItemsUseCase(storeRepository);
+
 const marketController = new MarketController(
   getMarketListingsUseCase,
   syncMarketListingsUseCase,
-  getResaleItemFloatsUseCase
+  getResaleItemFloatsUseCase,
+  syncStoreItemsUseCase
 );
 
 // Ruta pública — catálogo de market listings con displayPrice
