@@ -11,7 +11,8 @@ type OrderItemLike = {
 export function isYoupinOrderItem(item: OrderItemLike): boolean {
   return (
     item.provider === "youpin" ||
-    (typeof item.assetId === "string" && item.assetId.startsWith("market-"))
+    (typeof item.assetId === "string" &&
+      (item.assetId.startsWith("market-") || item.assetId.startsWith("youpin-")))
   );
 }
 
@@ -22,7 +23,20 @@ export function isYoupinOrderItem(item: OrderItemLike): boolean {
 export async function resolveYoupinExternalId(
   item: OrderItemLike,
 ): Promise<string | null> {
-  if (!isYoupinOrderItem(item) || item.float == null || item.float === undefined) {
+  if (!isYoupinOrderItem(item)) {
+    return null;
+  }
+
+  if (item.assetId.startsWith("youpin-")) {
+    const floatId = item.assetId.replace(/^youpin-/, "");
+    const floatItem = await prisma.floatItem.findUnique({
+      where: { id: floatId },
+      select: { externalId: true },
+    });
+    return floatItem?.externalId ?? null;
+  }
+
+  if (item.float == null || item.float === undefined) {
     return null;
   }
 

@@ -86,7 +86,7 @@ app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
   // Inventario físico de bots Steam
   startStoreSyncScheduler();
-  // Catálogo de reventa de YouPin vía cs2.sh
+  // Catálogo de reventa YouPin vía /steam/api/float/assets (precios incluidos por asset)
   startMarketSyncScheduler();
   // Sincronizador periódico de floats del plan Float Small
   startMarketFloatsSyncScheduler();

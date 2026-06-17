@@ -56,6 +56,7 @@ export class PrismaStoreRepository implements IStoreRepository {
       isSouvenir: item.isSouvenir ?? false,
       float: (item.float !== undefined && item.float !== null && !isNaN(item.float)) ? item.float : null,
       pattern: (item.pattern !== undefined && item.pattern !== null && !isNaN(item.pattern)) ? Math.round(item.pattern) : null,
+      inspectLink: item.inspectLink || null,
     }));
 
     // Chunk array into batches of 1000 items to bypass PostgreSQL parameter limit (max 65,535 parameters)

@@ -4,7 +4,12 @@ import { BotService } from '../application/BotService';
 import { PurchaseService } from '../application/PurchaseService';
 import { TradeService } from '../application/TradeService';
 import { ListingService } from '../application/ListingService';
+import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
+import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+
+const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
+let botInventorySyncRunning = false;
 
 export class AdminMarketplaceController {
   // Settings
@@ -89,6 +94,7 @@ export class AdminMarketplaceController {
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
+      res.setHeader('Cache-Control', 'no-store');
       const bots = await BotService.getAllBots();
       res.json(bots);
     } catch (err: any) {
@@ -103,6 +109,26 @@ export class AdminMarketplaceController {
       res.status(201).json(bot);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  /** POST /admin/marketplace/bots/sync — inventario Steam + precios de mercado */
+  static async syncBotsInventory(_req: Request, res: Response) {
+    if (botInventorySyncRunning) {
+      res.status(409).json({ error: 'Ya hay una sincronización de bots en curso.' });
+      return;
+    }
+
+    botInventorySyncRunning = true;
+    try {
+      console.log('[Admin] Sincronizando inventario y precios de bots...');
+      const result = await syncStoreItemsUseCase.execute();
+      res.json(result);
+    } catch (err: any) {
+      console.error('[Admin] Error sincronizando bots:', err);
+      res.status(500).json({ error: err.message || 'Error al sincronizar bots.' });
+    } finally {
+      botInventorySyncRunning = false;
     }
   }
 

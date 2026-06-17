@@ -45,4 +45,21 @@ export class BotService {
     });
     return bots.find(bot => bot.currentItems < bot.maxItems) || null;
   }
+
+  static async updateInventoryCounts(countsBySteamId: Map<string, number>) {
+    const bots = await prisma.bot.findMany();
+    const now = new Date();
+
+    await Promise.all(
+      bots.map((bot) =>
+        prisma.bot.update({
+          where: { id: bot.id },
+          data: {
+            currentItems: countsBySteamId.get(bot.steamId) ?? 0,
+            lastSyncAt: now,
+          },
+        }),
+      ),
+    );
+  }
 }

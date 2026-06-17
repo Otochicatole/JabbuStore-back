@@ -1,22 +1,43 @@
 @apiKey = T6QI93RPV43NN0KF
-@baseUrl = https://www.steamwebapi.com/steam/api/float/assets
+@floatAssetsUrl = https://www.steamwebapi.com/steam/api/float/assets
+@youpinPricesUrl = https://www.steamwebapi.com/market/youpin/prices
 
 ### YouPin — AK-47 | Redline (Field-Tested)
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&source=youpin
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&source=youpin
 Accept: application/json
 
 ### YouPin — ★ Sport Gloves | Hedge Maze (Factory New)
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=%E2%98%85%20Sport%20Gloves%20%7C%20Hedge%20Maze%20%28Factory%20New%29&source=youpin
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=%E2%98%85%20Sport%20Gloves%20%7C%20Hedge%20Maze%20%28Factory%20New%29&source=youpin
 Accept: application/json
 
 ### YouPin — AWP | Dragon Lore (Factory New)
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=AWP%20%7C%20Dragon%20Lore%20%28Factory%20New%29&source=youpin
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=AWP%20%7C%20Dragon%20Lore%20%28Factory%20New%29&source=youpin
 Accept: application/json
 
 ### YouPin — Sticker | Reason Gaming | Katowice 2014
-GET {{baseUrl}}?key={{apiKey}}&appid=730&market_hash_name=Sticker%20%7C%20Reason%20Gaming%20%7C%20Katowice%202014&source=youpin
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=Sticker%20%7C%20Reason%20Gaming%20%7C%20Katowice%202014&source=youpin
 Accept: application/json
 
-### Catálogo Global — Todos los ítems y precios de CS2 (Global Endpoint)
-GET https://www.steamwebapi.com/steam/api/items?key={{apiKey}}&appid=730
+### Catálogo YouPin — scan sin market_hash_name (20 assets/página, MCP float/assets)
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&source=youpin&only_market_id=1&with_items=1&limit=20&offset=0&sort=lowest_float
+Accept: application/json
+
+###
+### Market Prices — YouPin (precios bots / GET /market/youpin/prices)
+###
+
+### YouPin prices — catálogo completo (USD)
+GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD
+Accept: application/json
+
+### YouPin prices — AK-47 | Redline (Field-Tested)
+GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29
+Accept: application/json
+
+### YouPin prices — ★ Butterfly Knife | Doppler (Minimal Wear) (puede incluir variants)
+GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=%E2%98%85%20Butterfly%20Knife%20%7C%20Doppler%20%28Minimal%20Wear%29
+Accept: application/json
+
+### YouPin prices — AWP | Dragon Lore (Factory New)
+GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=AWP%20%7C%20Dragon%20Lore%20%28Factory%20New%29
 Accept: application/json

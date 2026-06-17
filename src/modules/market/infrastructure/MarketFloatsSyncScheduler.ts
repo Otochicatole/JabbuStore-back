@@ -1,53 +1,58 @@
-import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
 import { SyncResaleItemFloatsUseCase } from '../application/SyncResaleItemFloatsUseCase';
+import { ReindexMarketFloatsUseCase } from '../application/ReindexMarketFloatsUseCase';
 import { config } from '../../../shared/config';
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
+/**
+ * Scheduler de reindexado de floats.
+ *
+ * Recorre los listings elegibles (con desgaste) en pasadas diarias que respetan el
+ * presupuesto del plan Float Small. Como el catálogo elegible es grande (~13k ítems)
+ * y el límite diario es 5.000 requests, una pasada completa puede tomar varios días;
+ * el scheduler avanza un poco cada ciclo priorizando lo menos actualizado.
+ */
 export function startMarketFloatsSyncScheduler(): void {
+  // Por defecto NO se reindexa en background: consumiría el cupo del plan.
+  // Los floats se obtienen bajo demanda al abrir el modal de cada ítem.
+  if (!config.floatSync.enableReindex) {
+    console.log(
+      '[Market Floats Sync Scheduler] Reindexado masivo DESACTIVADO. Los floats se piden bajo demanda. ' +
+        'Para precalentar el catálogo manualmente: npm run reindex-floats. ' +
+        'Para activarlo en background: FLOAT_SYNC_ENABLE_REINDEX=true.',
+    );
+    return;
+  }
+
   if (!config.enableSync) {
-    console.log('[Market Floats Sync Scheduler] Sincronización automática de floats desactivada (ENABLE_SYNC=false).');
+    console.log('[Market Floats Sync Scheduler] Reindexado automático de floats desactivado (ENABLE_SYNC=false).');
     return;
   }
 
   const marketRepository = new PrismaMarketRepository();
   const syncUseCase = new SyncResaleItemFloatsUseCase(marketRepository);
+  const reindexUseCase = new ReindexMarketFloatsUseCase(marketRepository, syncUseCase);
 
-  const runSyncJob = async () => {
-    console.log('[Market Floats Sync Scheduler] Starting scheduled resale floats synchronization...');
+  let running = false;
+
+  const runReindexJob = async () => {
+    if (running) {
+      console.log('[Market Floats Sync Scheduler] Job anterior aún en curso; se omite este ciclo.');
+      return;
+    }
+    running = true;
     try {
-      const listings = await prisma.marketListing.findMany({
-        select: { id: true, name: true }
-      });
-      
-      console.log(`[Market Floats Sync Scheduler] Found ${listings.length} listings to update.`);
-
-      for (const listing of listings) {
-        try {
-          await syncUseCase.execute(listing.id, listing.name);
-        } catch (itemErr: any) {
-          console.error(`[Market Floats Sync Scheduler Error] Failed for listing "${listing.name}":`, itemErr.message || itemErr);
-        }
-        
-        // Espera de cortesía de 1.5s entre llamadas para evitar bloqueos por límite de peticiones de la API
-        await sleep(1500);
-      }
-      
-      console.log('[Market Floats Sync Scheduler] Resale floats sync job completed.');
+      await reindexUseCase.execute();
     } catch (err: any) {
-      console.error('[Market Floats Sync Scheduler Error] Sync job crashed:', err.message || err);
+      console.error('[Market Floats Sync Scheduler] Job crashed:', err.message || err);
+    } finally {
+      running = false;
     }
   };
 
-  // Ejecución inicial 5 minutos después del arranque para no competir con el inicio del servidor
-  setTimeout(() => {
-    runSyncJob();
-  }, 5 * 60 * 1000);
+  // Primera pasada 2 minutos después del arranque (no competir con el boot).
+  setTimeout(runReindexJob, 2 * 60 * 1000);
 
-  // Ejecución periódica cada 4 horas
-  const intervalMs = 4 * 60 * 60 * 1000;
-  setInterval(() => {
-    runSyncJob();
-  }, intervalMs);
+  // Pasada periódica cada 6 horas (4 ciclos/día). Cada ciclo respeta su propio presupuesto.
+  const intervalMs = 6 * 60 * 60 * 1000;
+  setInterval(runReindexJob, intervalMs);
 }

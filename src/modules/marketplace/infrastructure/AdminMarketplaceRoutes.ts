@@ -17,6 +17,7 @@ router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUr
 
 // Bots
 router.get('/bots', AdminMarketplaceController.getBots);
+router.post('/bots/sync', AdminMarketplaceController.syncBotsInventory);
 router.post('/bots', AdminMarketplaceController.createBot);
 router.patch('/bots/:id', AdminMarketplaceController.updateBot);
 router.patch('/bots/:id/deactivate', AdminMarketplaceController.deactivateBot);

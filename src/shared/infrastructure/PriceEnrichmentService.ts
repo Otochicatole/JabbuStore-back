@@ -1,5 +1,7 @@
 import { config } from "../config";
-import { prisma } from "./PrismaClient";
+import { SteamWebApiYoupinPricesClient } from "./SteamWebApiYoupinPricesClient";
+
+const youpinPricesClient = new SteamWebApiYoupinPricesClient();
 
 export interface PriceableItem {
   assetId: string;
@@ -136,7 +138,7 @@ export class PriceEnrichmentService {
 
     const parts = fullName.split(" | ");
     if (parts.length >= 2) {
-      const lastPart = parts[parts.length - 1]!;
+      const lastPart = parts[parts.length - 1]!.replace(/\s*\([^)]+\)\s*$/, "").trim();
       const phaseNames = [
         "Phase 1",
         "Phase 2",
@@ -156,143 +158,52 @@ export class PriceEnrichmentService {
   }
 
   /**
-   * Enriquecer una lista de artículos con precios del mercado real (vía DB local de MarketListing) o fallbacks deterministas.
+   * Enriquece ítems (bots / inventario usuario) con precios YouPin vía
+   * GET /market/youpin/prices?currency=USD (catálogo completo en una pasada).
+   * Fallback determinista si el ítem no está en YouPin.
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(
     items: T[],
   ): Promise<T[]> {
-    // Generar nombres de búsqueda primarios y alternativos (ej: Sticker | vs Sticker Slab |)
-    const lookupNames = new Set<string>();
+    if (items.length === 0) return items;
+
+    let catalog = await youpinPricesClient.fetchCatalog();
+
+    const missingNames = new Set<string>();
+    const resolveForItem = (item: T): number | null =>
+      youpinPricesClient.resolvePriceFromCatalog(
+        item.name,
+        catalog,
+        this.getBaseNameAndPhase.bind(this),
+      );
+
     for (const item of items) {
       if (!item.name) continue;
-      lookupNames.add(item.name);
-
-      // Si es un Doppler con fase, también buscar el precio de la skin base para posibles correcciones
-      const { baseName, phase } = this.getBaseNameAndPhase(item.name);
-      if (phase && baseName) {
-        lookupNames.add(baseName);
-      }
-
-      if (item.name.startsWith("Sticker | ")) {
-        lookupNames.add(item.name.replace("Sticker | ", "Sticker Slab | "));
-      } else if (item.name.startsWith("Sticker Slab | ")) {
-        lookupNames.add(item.name.replace("Sticker Slab | ", "Sticker | "));
+      if (resolveForItem(item) == null) {
+        missingNames.add(item.name);
+        const { baseName } = this.getBaseNameAndPhase(item.name);
+        if (baseName) missingNames.add(baseName);
       }
     }
 
-    const lookupList = Array.from(lookupNames);
-    const pricesMap = new Map<string, number>();
-
-    if (lookupList.length > 0) {
-      try {
-        console.log(
-          `[Price Enrichment Service] Buscando precios en la DB local para ${lookupList.length} nombres de ítem...`,
-        );
-        // Consultar precios de una pasada
-        const dbListings = await prisma.marketListing.findMany({
-          where: { name: { in: lookupList } },
-          select: { name: true, price: true },
-        });
-
-        const dbPricesMap = new Map<string, number>();
-        for (const listing of dbListings) {
-          dbPricesMap.set(listing.name, listing.price);
+    if (missingNames.size > 0 && missingNames.size <= 25 && config.steamwebapiApiKey) {
+      console.log(
+        `[Price Enrichment Service] Consultando ${missingNames.size} ítems puntuales en /market/youpin/prices...`,
+      );
+      for (const name of missingNames) {
+        if (catalog.has(name)) continue;
+        const price = await youpinPricesClient.fetchPriceByMarketHashName(name);
+        if (price != null) {
+          catalog.set(name, {
+            market_hash_name: name,
+            price,
+          });
         }
-
-        // Mapear los precios de vuelta a los ítems, considerando alternativas
-        for (const item of items) {
-          let price = dbPricesMap.get(item.name);
-          if (price === undefined) {
-            if (item.name.startsWith("Sticker | ")) {
-              price = dbPricesMap.get(
-                item.name.replace("Sticker | ", "Sticker Slab | "),
-              );
-            } else if (item.name.startsWith("Sticker Slab | ")) {
-              price = dbPricesMap.get(
-                item.name.replace("Sticker Slab | ", "Sticker | "),
-              );
-            }
-          }
-
-          if (price !== undefined) {
-            pricesMap.set(item.name, price);
-          }
-        }
-
-        // Para cualquier item faltante, intentar buscar por baseName (sin fase Doppler)
-        const missingItems = items.filter((item) => !pricesMap.has(item.name));
-        if (missingItems.length > 0) {
-          const baseNamesToLookup = missingItems
-            .map((item) => this.getBaseNameAndPhase(item.name).baseName)
-            .filter(Boolean);
-
-          if (baseNamesToLookup.length > 0) {
-            // Generar alternativos también para los nombres base
-            const baseLookupNames = new Set<string>();
-            for (const bName of baseNamesToLookup) {
-              baseLookupNames.add(bName);
-              if (bName.startsWith("Sticker | ")) {
-                baseLookupNames.add(
-                  bName.replace("Sticker | ", "Sticker Slab | "),
-                );
-              } else if (bName.startsWith("Sticker Slab | ")) {
-                baseLookupNames.add(
-                  bName.replace("Sticker Slab | ", "Sticker | "),
-                );
-              }
-            }
-
-            const dbBaseListings = await prisma.marketListing.findMany({
-              where: { name: { in: Array.from(baseLookupNames) } },
-              select: { name: true, price: true },
-            });
-
-            const basePricesMap = new Map<string, number>();
-            for (const listing of dbBaseListings) {
-              basePricesMap.set(listing.name, listing.price);
-            }
-
-            for (const item of missingItems) {
-              const { baseName } = this.getBaseNameAndPhase(item.name);
-              let fallbackPrice = basePricesMap.get(baseName);
-              if (fallbackPrice === undefined) {
-                if (baseName.startsWith("Sticker | ")) {
-                  fallbackPrice = basePricesMap.get(
-                    baseName.replace("Sticker | ", "Sticker Slab | "),
-                  );
-                } else if (baseName.startsWith("Sticker Slab | ")) {
-                  fallbackPrice = basePricesMap.get(
-                    baseName.replace("Sticker Slab | ", "Sticker | "),
-                  );
-                }
-              }
-
-              if (fallbackPrice) {
-                pricesMap.set(item.name, fallbackPrice);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error(
-          "[Price Enrichment Service Error] Error al consultar precios en base de datos local:",
-          error,
-        );
       }
     }
 
-    // Enriquecer cada ítem con el precio obtenido o con el fallback determinista
     return items.map((item) => {
-      let finalPrice = pricesMap.get(item.name) || 0;
-
-      // Aplicar corrección para Doppler de alto tier (Ruby, Sapphire, Black Pearl, Emerald)
-      const { baseName, phase } = this.getBaseNameAndPhase(item.name);
-      if (phase && baseName) {
-        const basePrice = pricesMap.get(baseName) || 0;
-        if (basePrice > 0) {
-          finalPrice = this.adjustHighTierDopplerPrice(item.name, finalPrice, basePrice);
-        }
-      }
+      let finalPrice = resolveForItem(item) ?? 0;
 
       if (finalPrice === 0) {
         finalPrice = this.calculateFallbackPrice(

@@ -20,12 +20,26 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
  * Devuelve todos los market listings activos con el precio de display
  * calculado en base al modificador de mercado configurado en AdminSettings.
  */
+export interface GetMarketListingsOptions {
+  /** Si true, incluye listings del catálogo global aunque no tengan floats (panel admin). */
+  includeWithoutFloats?: boolean;
+}
+
 export class GetMarketListingsUseCase {
   constructor(private marketRepository: IMarketRepository) {}
 
-  async execute(): Promise<(MarketListing & { displayPrice: number })[]> {
+  async execute(
+    options: GetMarketListingsOptions = {},
+  ): Promise<(MarketListing & { displayPrice: number; floatCount?: number })[]> {
+    const includeWithoutFloats = options.includeWithoutFloats === true;
+
+    // Catálogo público = todo el catálogo de YouPin con precio válido.
+    // Los floats se piden BAJO DEMANDA cuando el usuario abre el modal de un ítem,
+    // para no consumir el cupo del plan indexando miles de ítems por adelantado.
     const [listings, settings] = await Promise.all([
-      this.marketRepository.findAll(),
+      includeWithoutFloats
+        ? this.marketRepository.findAll()
+        : this.marketRepository.findAllForStore(),
       prisma.adminSettings.findFirst(),
     ]);
 

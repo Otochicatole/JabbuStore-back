@@ -1,7 +1,6 @@
 /**
- * Representa un ítem de reventa obtenido del catálogo de cs2.sh (YouPin).
- * A diferencia de StoreItem, estos ítems NO están en el inventario físico de los bots.
- * Son listings de mercados externos que se sincronizán periódicamente.
+ * Representa un ítem de reventa indexado desde YouPin vía /steam/api/float/assets.
+ * Cada listing agrupa uno o más assets reales con float; ver FloatItem.
  */
 export interface MarketListing {
   id: string;
@@ -23,7 +22,7 @@ export interface MarketListing {
   updatedAt: Date;
 }
 
-/** Payload para crear/actualizar un listing desde cs2.sh */
+/** Payload para crear/actualizar un listing desde /steam/api/float/assets (precio = mínimo de sus FloatItem). */
 export interface MarketListingUpsert {
   name: string;
   provider: 'youpin';

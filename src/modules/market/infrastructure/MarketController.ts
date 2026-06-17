@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { GetMarketListingsUseCase } from '../application/GetMarketListingsUseCase';
+import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
 import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
@@ -7,16 +8,34 @@ import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUse
 export class MarketController {
   constructor(
     private getMarketListingsUseCase: GetMarketListingsUseCase,
+    private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
     private syncMarketListingsUseCase: SyncMarketListingsUseCase,
     private getResaleItemFloatsUseCase: GetResaleItemFloatsUseCase,
     private syncStoreItemsUseCase: SyncStoreItemsUseCase,
   ) {}
 
-  /** GET /market/listings — devuelve todos los listings con displayPrice */
-  async getListings(_req: Request, res: Response): Promise<void> {
+  /** GET /market/listings — tienda pública: assets YouPin con float; ?all=true = catálogo agrupado (admin) */
+  async getListings(req: Request, res: Response): Promise<void> {
     try {
-      const listings = await this.getMarketListingsUseCase.execute();
-      res.json(listings);
+      const includeWithoutFloats =
+        req.query.all === "true" || req.query.includeWithoutFloats === "true";
+
+      if (includeWithoutFloats) {
+        const listings = await this.getMarketListingsUseCase.execute({
+          includeWithoutFloats: true,
+        });
+        res.json(listings);
+        return;
+      }
+
+      const assets = await this.getMarketStoreAssetsUseCase.execute();
+      res.json(
+        assets.map((asset) => ({
+          ...asset,
+          float: asset.floatValue,
+          pattern: asset.paintSeed,
+        })),
+      );
     } catch (error) {
       console.error('[Market Controller] Error obteniendo listings:', error);
       res.status(500).json({ error: 'Error al obtener el catálogo de mercado.' });
@@ -38,7 +57,7 @@ export class MarketController {
         try {
           console.log('[Market Sync Background] Iniciando actualización del catálogo...');
           const result = await this.syncMarketListingsUseCase.execute();
-          console.log(`[Market Sync Background] Catálogo actualizado: ${result.synced} items guardados, ${result.skipped} omitidos.`);
+          console.log(`[Market Sync Background] Catálogo YouPin actualizado: ${result.synced} listings, ${result.skipped} assets omitidos, ${result.assetsFetched} assets (${result.rowsUsed} filas API).`);
 
           console.log('[Market Sync Background] Iniciando actualización de inventario de bots...');
           await this.syncStoreItemsUseCase.execute();
@@ -57,12 +76,12 @@ export class MarketController {
   /** GET /market/listings/:id/floats — devuelve floats para un resale item con displayPrice */
   async getFloats(req: Request, res: Response): Promise<void> {
     try {
-      const { id } = req.params;
+      const id = decodeURIComponent(req.params.id as string);
       if (!id) {
         res.status(400).json({ error: 'Falta el ID del artículo de reventa.' });
         return;
       }
-      const floats = await this.getResaleItemFloatsUseCase.execute(id as string);
+      const floats = await this.getResaleItemFloatsUseCase.execute(id);
       res.json(floats);
     } catch (error: any) {
       console.error('[Market Controller] Error obteniendo floats:', error);

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { GetStoreItemsUseCase } from '../application/GetStoreItemsUseCase';
 import { PrismaStoreRepository } from './PrismaStoreRepository';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import { SteamWebApiYoupinPricesClient } from '../../../shared/infrastructure/SteamWebApiYoupinPricesClient';
 
 export class StoreController {
   constructor(
@@ -21,7 +22,8 @@ export class StoreController {
 
   async syncPrices(req: Request, res: Response) {
     try {
-      console.log('[StoreController] Sincronizando precios de inventario de bots con catálogo...');
+      console.log('[StoreController] Sincronizando precios de bots con YouPin (/market/youpin/prices)...');
+      SteamWebApiYoupinPricesClient.clearCache();
       const items = await this.storeRepository.findAll();
       const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(items);
       await this.storeRepository.clearAndSaveMany(pricedItems);

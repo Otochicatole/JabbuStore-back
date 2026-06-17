@@ -22,8 +22,13 @@ export class CreatePurchaseOrderUseCase {
       throw new Error("No items provided for the order");
     }
 
-    // Separar bot items de market listings
-    const botIds = assetIds.filter((id) => !id.startsWith("market-"));
+    // Separar bot items, assets YouPin individuales y listings legacy
+    const youpinFloatIds = assetIds
+      .filter((id) => id.startsWith("youpin-"))
+      .map((id) => id.replace(/^youpin-/, ""));
+    const botIds = assetIds.filter(
+      (id) => !id.startsWith("market-") && !id.startsWith("youpin-"),
+    );
     const marketNames = assetIds
       .filter((id) => id.startsWith("market-"))
       .map((id) => id.replace(/^market-/, ""));
@@ -59,6 +64,22 @@ export class CreatePurchaseOrderUseCase {
       );
       throw new Error(
         `Some market listings are no longer available: ${missingNames.join(", ")}`,
+      );
+    }
+
+    const youpinFloatItems =
+      youpinFloatIds.length > 0
+        ? await prisma.floatItem.findMany({
+            where: { id: { in: youpinFloatIds }, available: true },
+            include: { resaleItem: true },
+          })
+        : [];
+
+    if (youpinFloatItems.length !== youpinFloatIds.length) {
+      const foundIds = youpinFloatItems.map((f) => f.id);
+      const missingIds = youpinFloatIds.filter((id) => !foundIds.includes(id));
+      throw new Error(
+        `Some YouPin assets are no longer available: ${missingIds.join(", ")}`,
       );
     }
 
@@ -154,6 +175,34 @@ export class CreatePurchaseOrderUseCase {
         float: itemFloat,
         pattern: itemPattern,
         provider: itemProvider,
+      });
+    }
+
+    for (const dbFloat of youpinFloatItems) {
+      let floatPrice = dbFloat.price;
+      if (settingsData.marketModifierEnabled) {
+        let modifier = 0;
+        switch (settingsData.marketModifierType) {
+          case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
+          case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
+          case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
+          case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
+        }
+        floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
+      }
+
+      const listing = dbFloat.resaleItem;
+      totalPrice += floatPrice;
+      orderItemsData.push({
+        assetId: `youpin-${dbFloat.id}`,
+        name: listing.name,
+        price: floatPrice,
+        iconUrl: listing.iconUrl,
+        rarity: listing.rarity,
+        exterior: listing.exterior,
+        float: dbFloat.floatValue,
+        pattern: dbFloat.paintSeed,
+        provider: 'youpin',
       });
     }
 

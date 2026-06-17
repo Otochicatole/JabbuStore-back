@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model User {
@@ -53,6 +53,7 @@ model StoreItem {
   isSouvenir    Boolean  @default(false)
   float         Float?
   pattern       Int?
+  inspectLink   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -72,9 +73,13 @@ model MarketListing {
   isStatTrak    Boolean  @default(false)
   isSouvenir    Boolean  @default(false)
   isPriceManual Boolean  @default(false)
+  /// Último intento de indexar floats (se setea aunque no se encuentren), para priorizar el reindexado.
+  floatsSyncedAt DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   floats        FloatItem[]
+
+  @@index([exterior, floatsSyncedAt])
 }
 
 model UserInventoryItem {

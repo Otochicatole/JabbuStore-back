@@ -2,6 +2,46 @@ import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
 import { FloatItem } from '../domain/FloatItem';
+import { MarketStoreAsset } from '../domain/MarketStoreAsset';
+
+function mapMarketListingRow(
+  row: {
+    id: string;
+    name: string;
+    provider: string;
+    youpinAsk: number | null;
+    youpinVolume: number | null;
+    price: number;
+    iconUrl: string | null;
+    rarity: string;
+    exterior: string | null;
+    category: string;
+    isStatTrak: boolean;
+    isSouvenir: boolean;
+    isPriceManual: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  priceOverride?: number,
+): MarketListing {
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider as 'youpin',
+    youpinAsk: row.youpinAsk,
+    youpinVolume: row.youpinVolume,
+    price: priceOverride ?? row.price,
+    iconUrl: row.iconUrl,
+    rarity: row.rarity,
+    exterior: row.exterior,
+    category: row.category,
+    isStatTrak: row.isStatTrak,
+    isSouvenir: row.isSouvenir,
+    isPriceManual: row.isPriceManual,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 export class PrismaMarketRepository implements IMarketRepository {
   async findAll(): Promise<MarketListing[]> {
@@ -9,10 +49,86 @@ export class PrismaMarketRepository implements IMarketRepository {
       orderBy: { price: 'desc' },
     });
 
+    return rows.map((row) => mapMarketListingRow(row));
+  }
+
+  async findAllForStore(): Promise<MarketListing[]> {
+    const rows = await prisma.marketListing.findMany({
+      where: {
+        price: { gt: 0.5 },
+        floats: { some: { available: true } },
+      },
+      include: {
+        floats: {
+          where: { available: true },
+          orderBy: { price: 'asc' },
+          take: 1,
+          select: { price: true },
+        },
+      },
+      orderBy: { price: 'desc' },
+    });
+
+    return rows.map((row) => {
+      const minFloatPrice = row.floats[0]?.price;
+      return mapMarketListingRow(row, minFloatPrice ?? row.price);
+    });
+  }
+
+  async findStoreAssets(): Promise<Omit<MarketStoreAsset, 'id'>[]> {
+    const rows = await prisma.floatItem.findMany({
+      where: {
+        available: true,
+        price: { gt: 0.5 },
+      },
+      include: { resaleItem: true },
+      orderBy: { price: 'asc' },
+    });
+
     return rows.map((row) => ({
-      ...row,
-      provider: row.provider as 'youpin',
+      floatItemId: row.id,
+      assetId: row.assetId,
+      listingId: row.resaleItemId,
+      name: row.resaleItem.name,
+      provider: 'youpin' as const,
+      youpinAsk: row.resaleItem.youpinAsk,
+      youpinVolume: row.resaleItem.youpinVolume,
+      price: row.price,
+      floatValue: row.floatValue,
+      paintSeed: row.paintSeed,
+      inspectLink: row.inspectLink,
+      externalId: row.externalId,
+      iconUrl: row.resaleItem.iconUrl,
+      rarity: row.resaleItem.rarity,
+      exterior: row.resaleItem.exterior,
+      category: row.resaleItem.category,
+      isStatTrak: row.resaleItem.isStatTrak,
+      isSouvenir: row.resaleItem.isSouvenir,
     }));
+  }
+
+  async findAllWithAvailableFloats(): Promise<MarketListing[]> {
+    const rows = await prisma.marketListing.findMany({
+      where: {
+        floats: {
+          some: { available: true },
+        },
+      },
+      include: {
+        floats: {
+          where: { available: true },
+          orderBy: { price: 'asc' },
+          take: 1,
+          select: { price: true },
+        },
+      },
+      orderBy: { price: 'desc' },
+    });
+
+    return rows.map((row) => {
+      const minFloatPrice = row.floats[0]?.price;
+      return mapMarketListingRow(row, minFloatPrice ?? row.price);
+    });
   }
 
   async replaceAll(listings: MarketListingUpsert[]): Promise<void> {
@@ -42,25 +158,15 @@ export class PrismaMarketRepository implements IMarketRepository {
       };
     });
 
-    // Separar entre los que tienen precio manual (update individual) y los que no (delete+create)
+    // Upsert por nombre para preservar IDs de listing y floats indexados
     const manualNames = new Set(manualMap.keys());
-    const nonManualToSave = sanitized.filter(s => !manualNames.has(s.name));
-    const manualToUpdate = sanitized.filter(s => manualNames.has(s.name));
+    const manualCount = sanitized.filter((s) => manualNames.has(s.name)).length;
+    const autoCount = sanitized.length - manualCount;
+    const syncStartedAt = new Date();
 
-    // 1. Eliminar todos los listings no-manuales actuales de una sola pasada
-    await prisma.marketListing.deleteMany({ where: { isPriceManual: false } });
-
-    // 2. Insertar los nuevos listings no-manuales en lotes de 500
-    const chunkSize = 500;
-    console.log(`[Prisma Market Repository] Insertando ${nonManualToSave.length} listings en lotes de ${chunkSize}...`);
-    for (let i = 0; i < nonManualToSave.length; i += chunkSize) {
-      const batch = nonManualToSave.slice(i, i + chunkSize);
-      await prisma.marketListing.createMany({ data: batch, skipDuplicates: true });
-    }
-
-    // 3. Actualizar los listings con precio manual de forma individual (son pocos)
-    for (const listing of manualToUpdate) {
-      await prisma.marketListing.upsert({
+    const upsertOne = (listing: (typeof sanitized)[number]) => {
+      const isManual = manualNames.has(listing.name);
+      return prisma.marketListing.upsert({
         where: { name: listing.name },
         create: listing,
         update: {
@@ -73,12 +179,68 @@ export class PrismaMarketRepository implements IMarketRepository {
           category: listing.category,
           isStatTrak: listing.isStatTrak,
           isSouvenir: listing.isSouvenir,
-          // NO actualizar price ni isPriceManual — son manuales
+          ...(isManual ? {} : { price: listing.price }),
         },
       });
+    };
+
+    const parallelSize = 10;
+    console.log(
+      `[Prisma Market Repository] Upsert de ${sanitized.length} listings (${parallelSize} en paralelo, preservando IDs y floats)...`,
+    );
+
+    for (let i = 0; i < sanitized.length; i += parallelSize) {
+      const batch = sanitized.slice(i, i + parallelSize);
+      await Promise.all(batch.map((listing) => upsertOne(listing)));
+
+      const done = Math.min(i + parallelSize, sanitized.length);
+      if (done % 1000 === 0 || done === sanitized.length) {
+        console.log(
+          `[Prisma Market Repository] Upsert progreso: ${done}/${sanitized.length}`,
+        );
+      }
     }
 
-    console.log(`[Prisma Market Repository] Sync completo: ${nonManualToSave.length} insertados, ${manualToUpdate.length} manuales preservados.`);
+    const removed = await prisma.marketListing.deleteMany({
+      where: {
+        isPriceManual: false,
+        updatedAt: { lt: syncStartedAt },
+      },
+    });
+
+    console.log(
+      `[Prisma Market Repository] Sync completo: ${autoCount} automáticos, ${manualCount} manuales preservados, ${removed.count} obsoletos eliminados.`,
+    );
+  }
+
+  async syncCatalogWithFloats(
+    listings: MarketListingUpsert[],
+    floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
+  ): Promise<void> {
+    await this.replaceAll(listings);
+
+    const names = listings.map((l) => l.name);
+    const rows = await prisma.marketListing.findMany({
+      where: { name: { in: names } },
+      select: { id: true, name: true },
+    });
+
+    console.log(
+      `[Prisma Market Repository] Guardando floats para ${rows.length} listings...`,
+    );
+
+    for (const row of rows) {
+      const floatRows = floatsByName.get(row.name) ?? [];
+      if (floatRows.length === 0) continue;
+
+      await this.saveFloats(
+        row.id,
+        floatRows.map((f) => ({
+          ...f,
+          resaleItemId: row.id,
+        })),
+      );
+    }
   }
 
   async updatePrice(id: string, price: number): Promise<void> {
@@ -88,7 +250,34 @@ export class PrismaMarketRepository implements IMarketRepository {
     });
   }
 
+  async syncListingPriceFromFloats(resaleItemId: string): Promise<void> {
+    const minFloat = await prisma.floatItem.findFirst({
+      where: { resaleItemId, available: true, price: { gt: 0 } },
+      orderBy: { price: 'asc' },
+      select: { price: true },
+    });
+    if (!minFloat) return;
+
+    await prisma.marketListing.updateMany({
+      where: { id: resaleItemId, isPriceManual: false },
+      data: { price: minFloat.price, youpinAsk: minFloat.price },
+    });
+  }
+
   async saveFloats(resaleItemId: string, floats: FloatItem[]): Promise<void> {
+    // Marcar el intento de sync aunque no se encuentren floats (para no reintentar en vano).
+    const markAttempt = prisma.marketListing
+      .update({
+        where: { id: resaleItemId },
+        data: { floatsSyncedAt: new Date() },
+      })
+      .catch(() => undefined);
+
+    if (floats.length === 0) {
+      await markAttempt;
+      return;
+    }
+
     await prisma.$transaction([
       prisma.floatItem.deleteMany({
         where: { resaleItemId }
@@ -108,6 +297,24 @@ export class PrismaMarketRepository implements IMarketRepository {
         }))
       })
     ]);
+    await this.syncListingPriceFromFloats(resaleItemId);
+    await markAttempt;
+  }
+
+  async findFloatEligibleForReindex(
+    limit: number,
+  ): Promise<{ id: string; name: string }[]> {
+    // Ítems con desgaste (skins/cuchillos/guantes = elegibles para float),
+    // priorizando los nunca intentados (floatsSyncedAt null) y luego los más desactualizados.
+    return prisma.marketListing.findMany({
+      where: { NOT: { exterior: null } },
+      select: { id: true, name: true },
+      orderBy: [
+        { floatsSyncedAt: { sort: 'asc', nulls: 'first' } },
+        { price: 'desc' },
+      ],
+      take: limit,
+    });
   }
 
   async findFloatsByResaleItemId(resaleItemId: string): Promise<FloatItem[]> {
@@ -120,7 +327,7 @@ export class PrismaMarketRepository implements IMarketRepository {
       assetId: row.assetId,
       floatValue: row.floatValue,
       paintSeed: row.paintSeed,
-      market: row.market as 'YOUPIN',
+      market: row.market as 'YOUPIN' | 'CSFLOAT',
       price: row.price,
       inspectLink: row.inspectLink,
       available: row.available,

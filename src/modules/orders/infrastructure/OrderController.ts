@@ -612,9 +612,13 @@ export class OrderController {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
 
-        // Separar ids: bots (assetId normal) vs market listings (prefijo "market-")
+        // Separar ids: bots | assets YouPin (youpin-) | listings legacy (market-)
+        const youpinFloatIds = itemIds
+          .filter((id: string) => id.startsWith("youpin-"))
+          .map((id: string) => id.replace(/^youpin-/, ""));
         const botIds = itemIds.filter(
-          (id: string) => !id.startsWith("market-"),
+          (id: string) =>
+            !id.startsWith("market-") && !id.startsWith("youpin-"),
         );
         const marketNames = itemIds
           .filter((id: string) => id.startsWith("market-"))
@@ -653,6 +657,24 @@ export class OrderController {
           );
           return res.status(400).json({
             error: `Algunos listings de mercado ya no están disponibles: ${missingNames.join(", ")}`,
+          });
+        }
+
+        const youpinFloatItems =
+          youpinFloatIds.length > 0
+            ? await prisma.floatItem.findMany({
+                where: { id: { in: youpinFloatIds }, available: true },
+                include: { resaleItem: true },
+              })
+            : [];
+
+        if (youpinFloatItems.length !== youpinFloatIds.length) {
+          const foundIds = youpinFloatItems.map((f: any) => f.id);
+          const missingIds = youpinFloatIds.filter(
+            (id: string) => !foundIds.includes(id),
+          );
+          return res.status(400).json({
+            error: `Algunos assets YouPin ya no están disponibles: ${missingIds.join(", ")}`,
           });
         }
 
@@ -741,15 +763,43 @@ export class OrderController {
           })
         );
 
+        const resolvedYoupinItems = youpinFloatItems.map((dbFloat: any) => {
+          let floatPrice = dbFloat.price;
+          if (settingsData.marketModifierEnabled) {
+            let modifier = 0;
+            switch (settingsData.marketModifierType) {
+              case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
+              case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
+              case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
+              case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
+            }
+            floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
+          }
+
+          const listing = dbFloat.resaleItem;
+          return {
+            assetId: `youpin-${dbFloat.id}`,
+            name: listing.name,
+            price: floatPrice,
+            iconUrl: listing.iconUrl || null,
+            provider: 'youpin',
+            float: dbFloat.floatValue,
+            pattern: dbFloat.paintSeed,
+            exterior: listing.exterior ?? null,
+            rarity: listing.rarity ?? null,
+          };
+        });
+
         let totalPrice = 0;
         resolvedBotItems.forEach((item) => totalPrice += item.price);
         resolvedMarketItems.forEach((item) => totalPrice += item.price);
+        resolvedYoupinItems.forEach((item) => totalPrice += item.price);
         totalPrice = Math.round(totalPrice * 100) / 100;
 
         return res.json({
           valid: true,
           type: "BUY",
-          items: [...resolvedBotItems, ...resolvedMarketItems],
+          items: [...resolvedBotItems, ...resolvedMarketItems, ...resolvedYoupinItems],
           totalPrice,
         });
       } else if (type === "SELL") {

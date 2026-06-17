@@ -2,11 +2,89 @@ import { StoreItem } from '../domain/Item';
 import { IStoreRepository } from '../domain/IStoreRepository';
 import { BotService } from '../../marketplace/application/BotService';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import { SteamWebApiYoupinPricesClient } from '../../../shared/infrastructure/SteamWebApiYoupinPricesClient';
+import { config } from '../../../shared/config';
+import {
+  buildInspectLinkFromCertificateHex,
+  normalizeSteamWebApiInspectLink,
+} from '../../../shared/infrastructure/inspectLinkHelpers';
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Global inventory API: 2 req/min en plan Float Small. */
+const INVENTORY_API_GAP_MS = 31_000;
+let lastInventoryApiCallAt = 0;
 
 export class SyncStoreItemsUseCase {
   constructor(private storeRepository: IStoreRepository) {}
 
-  async execute(): Promise<void> {
+  /**
+   * Obtiene inspect links resueltos (certificate hex) desde SteamWebAPI inventory.
+   * El inventario crudo de Steam Community devuelve plantillas con %propid:N% que no funcionan in-game.
+   */
+  private async fetchInspectLinksByAssetId(
+    botSteamId: string,
+  ): Promise<Map<string, string>> {
+    const apiKey = config.steamwebapiApiKey;
+    const map = new Map<string, string>();
+    if (!apiKey) return map;
+
+    const elapsed = Date.now() - lastInventoryApiCallAt;
+    if (lastInventoryApiCallAt > 0 && elapsed < INVENTORY_API_GAP_MS) {
+      await sleep(INVENTORY_API_GAP_MS - elapsed);
+    }
+
+    const params = new URLSearchParams({
+      key: apiKey,
+      steam_id: botSteamId,
+      game: 'cs2',
+      parse: '1',
+      with_no_tradable: '1',
+      limit: '10000',
+    });
+    const url = `https://www.steamwebapi.com/steam/api/inventory?${params.toString()}`;
+
+    try {
+      lastInventoryApiCallAt = Date.now();
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(
+          `[Store Inventory Sync] SteamWebAPI inventory HTTP ${res.status} para bot ${botSteamId}.`,
+        );
+        return map;
+      }
+
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : [];
+      for (const item of items) {
+        const assetId = String(item.assetid ?? item.asset_id ?? '');
+        if (!assetId) continue;
+
+        const fromApi = normalizeSteamWebApiInspectLink(item.inspectlink);
+        const fromCert = item.float?.certificate
+          ? buildInspectLinkFromCertificateHex(String(item.float.certificate))
+          : null;
+        const link = fromApi ?? fromCert;
+        if (link) map.set(assetId, link);
+      }
+
+      console.log(
+        `[Store Inventory Sync] ${map.size} inspect links para bot ${botSteamId}.`,
+      );
+    } catch (err: any) {
+      console.warn(
+        `[Store Inventory Sync] Error obteniendo inspect links para ${botSteamId}: ${err.message}`,
+      );
+    }
+
+    return map;
+  }
+
+  async execute(): Promise<{
+    itemsSynced: number;
+    activeBots: number;
+    skipped: boolean;
+    message: string;
+  }> {
     const appId = 730; // AppID de CS:GO / CS2
     const contextId = 2; // ContextID para inventario de skins
 
@@ -41,7 +119,8 @@ export class SyncStoreItemsUseCase {
     for (const result of results) {
       if (result.status === 'fulfilled') {
         const { steamId, data } = result.value;
-        const parsedItems = this.parseSteamInventory(data, steamId);
+        const inspectLinks = await this.fetchInspectLinksByAssetId(steamId);
+        const parsedItems = this.parseSteamInventory(data, steamId, inspectLinks);
         aggregatedItems.push(...parsedItems);
       } else {
         console.error(`[Store Inventory Sync Error] Failed to fetch bot inventory:`, result.reason);
@@ -55,14 +134,29 @@ export class SyncStoreItemsUseCase {
       console.warn(`[Store Inventory Sync] No se obtuvieron ítems intercambiables de los bots.`);
       if (activeBots.length > 0) {
         console.warn(`[Store Inventory Sync] Hay bots activos pero sin ítems. Omitiendo sync para preservar datos actuales.`);
-        return;
+        return {
+          itemsSynced: 0,
+          activeBots: activeBots.length,
+          skipped: true,
+          message: 'No se encontraron ítems intercambiables en los bots activos.',
+        };
       }
     }
 
-    // Enriquecer ítems de bots con precios reales de mercado via cs2.sh
+    if (activeBots.length === 0) {
+      return {
+        itemsSynced: 0,
+        activeBots: 0,
+        skipped: true,
+        message: 'No hay bots activos para sincronizar.',
+      };
+    }
+
+    // Enriquecer ítems de bots con precios YouPin (GET /market/youpin/prices)
     let botItems: any[] = [];
     if (tradableAggregatedItems.length > 0) {
-      console.log(`[Store Inventory Sync] ${tradableAggregatedItems.length} ítems intercambiables. Obteniendo precios de mercado...`);
+      console.log(`[Store Inventory Sync] ${tradableAggregatedItems.length} ítems intercambiables. Obteniendo precios YouPin...`);
+      SteamWebApiYoupinPricesClient.clearCache();
       const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
 
       // Deduplicar por assetId
@@ -76,15 +170,40 @@ export class SyncStoreItemsUseCase {
     // Protección: si no hay ítems y hay bots activos, no limpiar la DB
     if (botItems.length === 0 && activeBots.length > 0) {
       console.warn(`[Store Inventory Sync] Sin ítems de bots. Omitiendo sync para preservar datos actuales.`);
-      return;
+      return {
+        itemsSynced: 0,
+        activeBots: activeBots.length,
+        skipped: true,
+        message: 'No hay ítems de bots para guardar.',
+      };
     }
 
     console.log(`[Store Inventory Sync] Guardando ${botItems.length} ítems de bots en la base de datos...`);
     await this.storeRepository.clearAndSaveMany(botItems);
+
+    const countsBySteamId = new Map<string, number>();
+    for (const item of botItems) {
+      countsBySteamId.set(
+        item.botSteamId,
+        (countsBySteamId.get(item.botSteamId) ?? 0) + 1,
+      );
+    }
+    await BotService.updateInventoryCounts(countsBySteamId);
+
     console.log(`[Store Inventory Sync] Sincronización completada.`);
+    return {
+      itemsSynced: botItems.length,
+      activeBots: activeBots.length,
+      skipped: false,
+      message: `${botItems.length} ítems sincronizados con precios de mercado.`,
+    };
   }
 
-  private parseSteamInventory(data: any, botSteamId: string): StoreItem[] {
+  private parseSteamInventory(
+    data: any,
+    botSteamId: string,
+    inspectLinks: Map<string, string>,
+  ): StoreItem[] {
     if (!data || !data.assets || !data.descriptions) return [];
 
     const descriptionsMap = new Map<string, any>(
@@ -164,6 +283,7 @@ export class SyncStoreItemsUseCase {
         marketable: description?.marketable === 1,
         botSteamId: botSteamId,
         price: 0, // Se actualizará en el siguiente paso de enriquecimiento
+        inspectLink: inspectLinks.get(String(asset.assetid)) ?? null,
         ...details,
         float: floatVal,
         pattern: patternVal,
