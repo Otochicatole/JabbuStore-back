@@ -192,7 +192,10 @@ export class PriceEnrichmentService {
       );
       for (const name of missingNames) {
         if (catalog.has(name)) continue;
-        const price = await youpinPricesClient.fetchPriceByMarketHashName(name);
+        const price = await youpinPricesClient.fetchPriceByMarketHashName(
+          name,
+          this.getBaseNameAndPhase.bind(this),
+        );
         if (price != null) {
           catalog.set(name, {
             market_hash_name: name,

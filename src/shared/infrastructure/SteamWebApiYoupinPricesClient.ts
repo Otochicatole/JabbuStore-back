@@ -94,7 +94,10 @@ export class SteamWebApiYoupinPricesClient {
   }
 
   /** Consulta puntual: GET /market/youpin/prices?market_hash_name=... */
-  async fetchPriceByMarketHashName(marketHashName: string): Promise<number | null> {
+  async fetchPriceByMarketHashName(
+    marketHashName: string,
+    getBaseNameAndPhase: (name: string) => { baseName: string; phase: string | null },
+  ): Promise<number | null> {
     if (!this.apiKey || !marketHashName) return null;
 
     const params = new URLSearchParams({
@@ -112,13 +115,18 @@ export class SteamWebApiYoupinPricesClient {
     const rows = (await res.json()) as YoupinMarketPriceRow[];
     if (!Array.isArray(rows) || rows.length === 0) return null;
 
-    const row = rows.find(
-      (r) => normalizeKey(r.market_hash_name) === normalizeKey(marketHashName),
-    ) ?? rows[0];
-    if (!row) return null;
+    const tempCatalog = new Map<string, YoupinMarketPriceRow>();
+    for (const row of rows) {
+      if (row?.market_hash_name) {
+        tempCatalog.set(row.market_hash_name, row);
+      }
+    }
 
-    const price = Number(row.price);
-    return price > 0 ? price : null;
+    return this.resolvePriceFromCatalog(
+      marketHashName,
+      tempCatalog,
+      getBaseNameAndPhase,
+    );
   }
 
   resolvePriceFromCatalog(

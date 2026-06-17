@@ -33,9 +33,7 @@ export class GetMarketListingsUseCase {
   ): Promise<(MarketListing & { displayPrice: number; floatCount?: number })[]> {
     const includeWithoutFloats = options.includeWithoutFloats === true;
 
-    // Catálogo público = todo el catálogo de YouPin con precio válido.
-    // Los floats se piden BAJO DEMANDA cuando el usuario abre el modal de un ítem,
-    // para no consumir el cupo del plan indexando miles de ítems por adelantado.
+    // Catálogo público = assets YouPin indexados (FloatItem); admin ?all=true = listings agrupados.
     const [listings, settings] = await Promise.all([
       includeWithoutFloats
         ? this.marketRepository.findAll()

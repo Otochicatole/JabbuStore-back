@@ -18,26 +18,15 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
 
 /**
  * Devuelve floats persistidos en DB para un listing de reventa.
- * Los precios vienen exclusivamente del sync de catálogo (/steam/api/float/assets);
- * no se vuelve a consultar la API aquí.
+ * Acepta: MarketListing.id, `market-{name}` (legacy) o `youpin-{floatItemId}`.
+ * Los precios vienen del sync de catálogo (/steam/api/float/assets); no re-consulta la API.
  */
 export class GetResaleItemFloatsUseCase {
   constructor(private marketRepository: IMarketRepository) {}
 
   async execute(resaleItemId: string): Promise<(FloatItem & { displayPrice: number })[]> {
-    const listing = resaleItemId.startsWith("market-")
-      ? await prisma.marketListing.findUnique({
-          where: { name: resaleItemId.replace(/^market-/, "") },
-        })
-      : await prisma.marketListing.findUnique({
-          where: { id: resaleItemId },
-        });
-
-    if (!listing) {
-      throw new Error(`Market listing con ID ${resaleItemId} no existe.`);
-    }
-
-    const floats = await this.marketRepository.findFloatsByResaleItemId(listing.id);
+    const listingId = await this.resolveListingId(resaleItemId);
+    const floats = await this.marketRepository.findFloatsByResaleItemId(listingId);
 
     const settings = await prisma.adminSettings.findFirst();
     const settingsData = settings ?? {
@@ -55,5 +44,37 @@ export class GetResaleItemFloatsUseCase {
         settingsData.marketModifierValue,
       ),
     }));
+  }
+
+  private async resolveListingId(resaleItemId: string): Promise<string> {
+    if (resaleItemId.startsWith("youpin-")) {
+      const floatId = resaleItemId.replace(/^youpin-/, "");
+      const floatRow = await prisma.floatItem.findUnique({
+        where: { id: floatId },
+        select: { resaleItemId: true },
+      });
+      if (!floatRow) {
+        throw new Error(`FloatItem youpin-${floatId} no existe.`);
+      }
+      return floatRow.resaleItemId;
+    }
+
+    if (resaleItemId.startsWith("market-")) {
+      const listing = await prisma.marketListing.findUnique({
+        where: { name: resaleItemId.replace(/^market-/, "") },
+      });
+      if (!listing) {
+        throw new Error(`Market listing "${resaleItemId}" no existe.`);
+      }
+      return listing.id;
+    }
+
+    const listing = await prisma.marketListing.findUnique({
+      where: { id: resaleItemId },
+    });
+    if (!listing) {
+      throw new Error(`Market listing con ID ${resaleItemId} no existe.`);
+    }
+    return listing.id;
   }
 }
