@@ -1,4 +1,5 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import { config } from '../../../shared/config';
 import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
 import { FloatItem } from '../domain/FloatItem';
@@ -43,6 +44,12 @@ function mapMarketListingRow(
   };
 }
 
+/** Alineado con MARKET_SYNC_MIN_PRICE: 0 → solo oculta precio 0 en tienda. */
+function storeMinPriceGt(): number {
+  const min = config.marketSync.minPrice;
+  return min > 0 ? min : 0;
+}
+
 export class PrismaMarketRepository implements IMarketRepository {
   async findAll(): Promise<MarketListing[]> {
     const rows = await prisma.marketListing.findMany({
@@ -55,7 +62,7 @@ export class PrismaMarketRepository implements IMarketRepository {
   async findAllForStore(): Promise<MarketListing[]> {
     const rows = await prisma.marketListing.findMany({
       where: {
-        price: { gt: 0.5 },
+        price: { gt: storeMinPriceGt() },
         floats: { some: { available: true } },
       },
       include: {
@@ -79,7 +86,7 @@ export class PrismaMarketRepository implements IMarketRepository {
     const rows = await prisma.floatItem.findMany({
       where: {
         available: true,
-        price: { gt: 0.5 },
+        price: { gt: storeMinPriceGt() },
       },
       include: { resaleItem: true },
       orderBy: { price: 'asc' },

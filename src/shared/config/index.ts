@@ -31,8 +31,14 @@ export const config = {
    * tantas unidades como el parámetro `limit`. Cupo: 100 filas/min, 5.000/día, 50.000/mes.
    */
   floatSync: {
-    /** Máximo de floats que se guardan/piden por listing (los de menor float primero). */
+    /** Máximo de floats que se guardan/piden por listing (on-demand; luego se ordena por precio). */
     maxPerItem: parseInt(process.env.FLOAT_SYNC_MAX_PER_ITEM || '12', 10),
+    /** sort en float/assets para sync por skin (modal): lowest_float = mejor wear primero. */
+    sort: (process.env.FLOAT_SYNC_SORT || 'lowest_float') as
+      | 'newest'
+      | 'oldest'
+      | 'lowest_float'
+      | 'highest_float',
     /** Tamaño de página para escanear Dopplers (necesitan barrer varias fases). Tope API = 50. */
     pageSize: parseInt(process.env.FLOAT_SYNC_PAGE_SIZE || '50', 10),
     /** Páginas máximas a escanear en Dopplers para encontrar la fase correcta. */
@@ -57,12 +63,19 @@ export const config = {
 
   /**
    * Sync del catálogo YouPin vía GET /steam/api/float/assets (source=youpin).
-   * Cada fila = un asset real con float; limit=20 por página según plan Float Small.
+   * Query params: source=youpin, only_market_id=1, with_items=1, sort=newest (catálogo vivo).
+   * Cada fila = un asset real con float; limit=50 por página (tope plan Float Small).
    */
   marketSync: {
-    pageSize: parseInt(process.env.MARKET_SYNC_PAGE_SIZE || '20', 10),
+    pageSize: parseInt(process.env.MARKET_SYNC_PAGE_SIZE || '50', 10),
     maxPages: parseInt(process.env.MARKET_SYNC_MAX_PAGES || '50', 10),
-    minPrice: parseFloat(process.env.MARKET_SYNC_MIN_PRICE || '0.5'),
+    /** Filtro local post-API; 0 = solo descarta precio ≤ 0. No existe en query params de SteamWebAPI. */
+    minPrice: parseFloat(process.env.MARKET_SYNC_MIN_PRICE || '0'),
+    sort: (process.env.MARKET_SYNC_SORT || 'newest') as
+      | 'newest'
+      | 'oldest'
+      | 'lowest_float'
+      | 'highest_float',
   },
 
   /** Precios YouPin para bots: GET /market/youpin/prices (MCP Market Prices). */

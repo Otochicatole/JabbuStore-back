@@ -161,7 +161,7 @@ export class SteamWebApiFloatAssetsClient {
         withItems: options.withItems ?? true,
         limit: pageSize,
         offset: page * pageSize,
-        // sort: options.sort ?? "lowest_float", // desactivado: usa default API (newest)
+        sort: options.sort ?? "newest",
       });
 
       rowsUsed += result.rowsUsed;

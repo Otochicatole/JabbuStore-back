@@ -18,8 +18,12 @@ Accept: application/json
 GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=Sticker%20%7C%20Reason%20Gaming%20%7C%20Katowice%202014&source=youpin
 Accept: application/json
 
-### Catálogo YouPin — scan sin market_hash_name (20 assets/página, MCP float/assets)
-GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&source=youpin&only_market_id=1&with_items=1&limit=20&offset=0&sort=lowest_float
+### Catálogo YouPin — sync masivo (igual que backend: newest, limit=50)
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&source=youpin&only_market_id=1&with_items=1&limit=50&offset=0&sort=newest
+Accept: application/json
+
+### On-demand por skin — mejor float primero (igual que modal)
+GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&source=youpin&only_market_id=1&with_items=1&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&limit=12&offset=0&sort=lowest_float
 Accept: application/json
 
 ###

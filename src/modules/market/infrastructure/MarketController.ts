@@ -57,7 +57,7 @@ export class MarketController {
         try {
           console.log('[Market Sync Background] Iniciando actualización del catálogo...');
           const result = await this.syncMarketListingsUseCase.execute();
-          console.log(`[Market Sync Background] Catálogo YouPin actualizado: ${result.synced} listings, ${result.skipped} assets omitidos, ${result.assetsFetched} assets (${result.rowsUsed} filas API).`);
+          console.log(`[Market Sync Background] Catálogo YouPin actualizado: ${result.floatsIndexed} floats en tienda (${result.synced} listings), ${result.skipped} omitidos en sync, ${result.assetsFetched} assets API (${result.rowsUsed} filas).`);
 
           console.log('[Market Sync Background] Iniciando actualización de inventario de bots...');
           await this.syncStoreItemsUseCase.execute();

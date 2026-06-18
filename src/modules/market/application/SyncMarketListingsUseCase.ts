@@ -20,6 +20,7 @@ export class SyncMarketListingsUseCase {
     assetsFetched: number;
     rowsUsed: number;
     rateLimited: boolean;
+    floatsIndexed: number;
   }> {
     if (!config.steamwebapiApiKey) {
       console.warn(
@@ -31,11 +32,12 @@ export class SyncMarketListingsUseCase {
         assetsFetched: 0,
         rowsUsed: 0,
         rateLimited: false,
+        floatsIndexed: 0,
       };
     }
 
     console.log(
-      `[Market Sync] Escaneando catálogo YouPin vía float/assets (limit=${config.marketSync.pageSize}, maxPages=${config.marketSync.maxPages})...`,
+      `[Market Sync] Escaneando catálogo YouPin vía float/assets (limit=${config.marketSync.pageSize}, maxPages=${config.marketSync.maxPages}, sort=${config.marketSync.sort})...`,
     );
 
     try {
@@ -43,7 +45,7 @@ export class SyncMarketListingsUseCase {
         await this.floatClient.fetchYoupinCatalogPages({
           pageSize: config.marketSync.pageSize,
           maxPages: config.marketSync.maxPages,
-          // sort: "lowest_float", // desactivado: usa default API (newest)
+          sort: config.marketSync.sort,
           withItems: true,
         });
 
@@ -58,6 +60,7 @@ export class SyncMarketListingsUseCase {
           assetsFetched: 0,
           rowsUsed,
           rateLimited,
+          floatsIndexed: 0,
         };
       }
 
@@ -70,6 +73,10 @@ export class SyncMarketListingsUseCase {
       const floatsByName = new Map(
         [...groups.entries()].map(([name, g]) => [name, g.floats]),
       );
+      const totalFloats = [...groups.values()].reduce(
+        (n, g) => n + g.floats.length,
+        0,
+      );
 
       if (listings.length === 0) {
         console.warn(
@@ -81,13 +88,14 @@ export class SyncMarketListingsUseCase {
           assetsFetched: assets.length,
           rowsUsed,
           rateLimited,
+          floatsIndexed: 0,
         };
       }
 
       await this.marketRepository.syncCatalogWithFloats(listings, floatsByName);
 
       console.log(
-        `[Market Sync] ${listings.length} listings con floats sincronizados (${skipped} assets omitidos).`,
+        `[Market Sync] ${listings.length} listings, ${totalFloats} floats indexados (${skipped} assets omitidos en sync).`,
       );
 
       return {
@@ -96,6 +104,7 @@ export class SyncMarketListingsUseCase {
         assetsFetched: assets.length,
         rowsUsed,
         rateLimited,
+        floatsIndexed: totalFloats,
       };
     } catch (error) {
       console.error("[Market Sync Error] Error al obtener float/assets:", error);

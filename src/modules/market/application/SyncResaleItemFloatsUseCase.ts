@@ -57,7 +57,7 @@ export class SyncResaleItemFloatsUseCase {
 
     const { baseName, phase } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
     const queryName = baseName || marketHashName;
-    const { pageSize, maxPages, maxPerItem } = config.floatSync;
+    const { pageSize, maxPages, maxPerItem, sort: floatSort } = config.floatSync;
 
     let rowsUsed = 0;
     let rateLimited = false;
@@ -112,7 +112,7 @@ export class SyncResaleItemFloatsUseCase {
             withItems: true,
             limit: pageLimit,
             offset: page * pageLimit,
-            // sort: "lowest_float", // desactivado: usa default API (newest)
+            sort: floatSort,
             paintIndex,
           };
           if (wear) query.wear = wear;
@@ -143,7 +143,7 @@ export class SyncResaleItemFloatsUseCase {
         withItems: true,
         limit: pageLimit,
         offset: page * pageLimit,
-        // sort: "lowest_float", // desactivado: usa default API (newest)
+        sort: floatSort,
         marketHashName: queryName,
       }));
 
