@@ -43,7 +43,7 @@ export class SyncMarketListingsUseCase {
         await this.floatClient.fetchYoupinCatalogPages({
           pageSize: config.marketSync.pageSize,
           maxPages: config.marketSync.maxPages,
-          sort: "lowest_float",
+          // sort: "lowest_float", // desactivado: usa default API (newest)
           withItems: true,
         });
 

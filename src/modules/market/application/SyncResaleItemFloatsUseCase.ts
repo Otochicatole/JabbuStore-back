@@ -112,7 +112,7 @@ export class SyncResaleItemFloatsUseCase {
             withItems: true,
             limit: pageLimit,
             offset: page * pageLimit,
-            sort: "lowest_float",
+            // sort: "lowest_float", // desactivado: usa default API (newest)
             paintIndex,
           };
           if (wear) query.wear = wear;
@@ -143,7 +143,7 @@ export class SyncResaleItemFloatsUseCase {
         withItems: true,
         limit: pageLimit,
         offset: page * pageLimit,
-        sort: "lowest_float",
+        // sort: "lowest_float", // desactivado: usa default API (newest)
         marketHashName: queryName,
       }));
 
