@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { GetMarketListingsUseCase } from '../application/GetMarketListingsUseCase';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
@@ -7,27 +6,15 @@ import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUse
 
 export class MarketController {
   constructor(
-    private getMarketListingsUseCase: GetMarketListingsUseCase,
     private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
     private syncMarketListingsUseCase: SyncMarketListingsUseCase,
     private getResaleItemFloatsUseCase: GetResaleItemFloatsUseCase,
     private syncStoreItemsUseCase: SyncStoreItemsUseCase,
   ) {}
 
-  /** GET /market/listings — tienda pública: assets YouPin con float; ?all=true = catálogo agrupado (admin) */
-  async getListings(req: Request, res: Response): Promise<void> {
+  /** GET /market/listings — catálogo YouPin: un ítem por FloatItem (admin y tienda pública). */
+  async getListings(_req: Request, res: Response): Promise<void> {
     try {
-      const includeWithoutFloats =
-        req.query.all === "true" || req.query.includeWithoutFloats === "true";
-
-      if (includeWithoutFloats) {
-        const listings = await this.getMarketListingsUseCase.execute({
-          includeWithoutFloats: true,
-        });
-        res.json(listings);
-        return;
-      }
-
       const assets = await this.getMarketStoreAssetsUseCase.execute();
       res.json(
         assets.map((asset) => ({
