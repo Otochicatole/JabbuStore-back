@@ -15,6 +15,7 @@ export interface UserInventoryItem {
   isSouvenir: boolean;
   float: number | null;
   pattern: number | null;
+  paintIndex?: number | null;
   createdAt?: Date;
   updatedAt?: Date;
 }

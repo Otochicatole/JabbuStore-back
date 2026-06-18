@@ -1,9 +1,16 @@
 import { Request, Response } from 'express';
 import { GetStoreItemsUseCase } from '../application/GetStoreItemsUseCase';
 import { PrismaStoreRepository } from './PrismaStoreRepository';
-import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
-import { SteamWebApiYoupinPricesClient } from '../../../shared/infrastructure/SteamWebApiYoupinPricesClient';
+import {
+  BotPriceSyncService,
+  SteamWebApiItemsCatalogClient,
+  SteamWebApiItemsCatalogStore,
+} from '../../../modules/pricing';
 import { BotService } from '../../marketplace/application/BotService';
+
+const botPriceSyncService = new BotPriceSyncService();
+const itemsCatalogClient = new SteamWebApiItemsCatalogClient();
+const itemsCatalogStore = new SteamWebApiItemsCatalogStore();
 
 export class StoreController {
   constructor(
@@ -29,7 +36,7 @@ export class StoreController {
 
       res.json({
         message:
-          'Sincronización de precios de bots iniciada en segundo plano. El proceso puede demorar varios minutos según el inventario y las consultas Doppler a YouPin.',
+          'Sincronización de precios de bots iniciada en segundo plano. Fuente: catálogo local Items API (/steam/api/items).',
       });
 
       (async () => {
@@ -52,13 +59,31 @@ export class StoreController {
             return;
           }
 
-          SteamWebApiYoupinPricesClient.clearCache();
-          const pricedItems =
-            await PriceEnrichmentService.enrichItemsWithMarketPrices(items);
-          await this.storeRepository.clearAndSaveMany(pricedItems);
+          const { items: pricedItems, catalogAvailable } =
+            await botPriceSyncService.enrichItems(items, {
+              forceRefreshCatalog: true,
+              preserveExistingWhenMissing: true,
+              useFallbackWhenMissing: false,
+              logWarnings: true,
+            });
+
+          if (!catalogAvailable) {
+            console.error(
+              "[Store Sync Prices Background] Catálogo no disponible — precios no modificados.",
+            );
+            return;
+          }
+
+          const updated = await this.storeRepository.updatePricesMany(
+            pricedItems.map((item) => ({
+              assetId: item.assetId,
+              name: item.name,
+              price: item.price,
+            })),
+          );
 
           console.log(
-            `[Store Sync Prices Background] Precios actualizados para ${pricedItems.length} ítems de bots activos.`,
+            `[Store Sync Prices Background] Precios actualizados desde catálogo local Items API: ${updated}/${pricedItems.length} ítems.`,
           );
         } catch (err: any) {
           console.error(
@@ -70,6 +95,51 @@ export class StoreController {
     } catch (error: any) {
       console.error('[StoreController Error] Failed to sync bot prices:', error);
       res.status(500).json({ error: error.message || 'Failed to sync bot prices.' });
+    }
+  }
+
+  async getPriceCatalogStatus(req: Request, res: Response) {
+    try {
+      const status = await itemsCatalogStore.getStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error('[StoreController Error] Failed to get price catalog status:', error);
+      res.status(500).json({ error: error.message || 'Failed to get price catalog status.' });
+    }
+  }
+
+  async refreshPriceCatalog(req: Request, res: Response) {
+    try {
+      console.log('[StoreController] Actualizando catálogo local Items API...');
+      const result = await itemsCatalogClient.fetchCatalog({ forceRefresh: true });
+
+      if (!result.snapshot) {
+        const status = await itemsCatalogStore.getStatus();
+        return res.status(502).json({
+          error: 'No se pudo actualizar el catálogo local Items API.',
+          status: result.status,
+          errors: result.errors,
+          previousCatalog: status,
+        });
+      }
+
+      await itemsCatalogStore.writeCatalog(result.snapshot);
+      const status = await itemsCatalogStore.getStatus();
+
+      res.json({
+        message: `Catálogo de precios actualizado: ${result.snapshot.itemCount} items en ${result.snapshot.pageCount} páginas.`,
+        ok: result.ok,
+        status: result.status,
+        errors: result.errors,
+        catalog: status,
+      });
+    } catch (error: any) {
+      console.error('[StoreController Error] Failed to refresh price catalog:', error);
+      const status = await itemsCatalogStore.getStatus().catch(() => null);
+      res.status(500).json({
+        error: error.message || 'Failed to refresh price catalog.',
+        previousCatalog: status,
+      });
     }
   }
 }

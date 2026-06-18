@@ -1,6 +1,10 @@
 @apiKey = T6QI93RPV43NN0KF
 @floatAssetsUrl = https://www.steamwebapi.com/steam/api/float/assets
 @youpinPricesUrl = https://www.steamwebapi.com/market/youpin/prices
+@itemsUrl = https://www.steamwebapi.com/steam/api/items
+@itemUrl = https://www.steamwebapi.com/steam/api/item
+@itemsPreviewUrl = https://www.steamwebapi.com/steam/api/items/preview
+@backendUrl = http://localhost:3001/api
 
 ### YouPin — AK-47 | Redline (Field-Tested)
 GET {{floatAssetsUrl}}?key={{apiKey}}&appid=730&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&source=youpin
@@ -42,6 +46,51 @@ Accept: application/json
 GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=%E2%98%85%20Butterfly%20Knife%20%7C%20Doppler%20%28Minimal%20Wear%29
 Accept: application/json
 
+### YouPin prices — ★ M9 Bayonet | Doppler (Factory New) | Black Pearl
+GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=%E2%98%85%20M9%20Bayonet%20%7C%20Doppler%20%28Factory%20New%29%20%7C%20Black%20Pearl
+Accept: application/json
+
 ### YouPin prices — AWP | Dragon Lore (Factory New)
 GET {{youpinPricesUrl}}?key={{apiKey}}&currency=USD&market_hash_name=AWP%20%7C%20Dragon%20Lore%20%28Factory%20New%29
+Accept: application/json
+
+###
+### Items API — pruebas precios YouPin con fases Doppler
+###
+
+### Items API — buscar M9 Bayonet Doppler en mercado YouPin
+GET {{itemsUrl}}?key={{apiKey}}&game=cs2&search=M9%20Bayonet%20Doppler&item_group=knife&wear=fn&markets=youpin&currency=USD&select=markethashname,pricereal,pricemix,pricelatest,image&production=1
+Accept: application/json
+
+### Items API — catálogo global CS2 con precios YouPin/USD (misma base del JSON local)
+GET {{itemsUrl}}?key={{apiKey}}&game=cs2&page=1&max=50000&markets=youpin&currency=USD&production=1&select=markethashname,marketname,normalizedname,pricereal,pricemix,pricelatest,prices,paintindex,variants,itemgroup,itemname,itemtype,wear,isstattrak,issouvenir,image
+Accept: application/json
+
+### Item API — detalle base con groups/variants y precios YouPin
+GET {{itemUrl}}?key={{apiKey}}&market_hash_name=%E2%98%85%20M9%20Bayonet%20%7C%20Doppler%20%28Factory%20New%29&currency=USD&with_groups=true&markets=youpin&production=1
+Accept: application/json
+
+### Item API — AK-47 | Redline (Field-Tested) precio YouPin USD
+GET {{itemUrl}}?key={{apiKey}}&market_hash_name=AK-47%20%7C%20Redline%20%28Field-Tested%29&currency=USD&with_groups=true&markets=youpin&production=1
+Accept: application/json
+
+### Item API — StatTrak™ AK-47 | Redline (Field-Tested) precio YouPin USD
+GET {{itemUrl}}?key={{apiKey}}&market_hash_name=StatTrak%E2%84%A2%20AK-47%20%7C%20Redline%20%28Field-Tested%29&currency=USD&with_groups=true&markets=youpin&production=1
+Accept: application/json
+
+### Item API — Souvenir AK-47 | Safari Mesh (Field-Tested) precio YouPin USD
+GET {{itemUrl}}?key={{apiKey}}&market_hash_name=Souvenir%20AK-47%20%7C%20Safari%20Mesh%20%28Field-Tested%29&currency=USD&with_groups=true&markets=youpin&production=1
+Accept: application/json
+
+### Items Preview — fases disponibles para M9 Bayonet Doppler (sin precios)
+GET {{itemsPreviewUrl}}?key={{apiKey}}&search=M9%20Bayonet%20Doppler&only_phases=true&grouped=true&pretty=1
+Accept: application/json
+
+###
+### Backend — estado del catálogo local de precios
+GET {{backendUrl}}/store/prices/catalog/status
+Accept: application/json
+
+### Backend — refrescar catálogo local de precios desde /steam/api/items
+POST {{backendUrl}}/store/prices/catalog/refresh
 Accept: application/json

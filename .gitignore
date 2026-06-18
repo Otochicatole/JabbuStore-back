@@ -6,6 +6,7 @@ dist
 
 /src/generated/prisma
 steamwebapi json data/
+steamwebapi-json-data/
 
 # SQLite local
 prisma/dev.db

@@ -234,6 +234,7 @@ export class GetUserInventoryUseCase {
         ...details,
         float: floatVal,
         pattern: patternVal,
+        paintIndex: paintIndexVal,
       };
     });
   }

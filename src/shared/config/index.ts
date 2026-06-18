@@ -78,10 +78,44 @@ export const config = {
       | 'highest_float',
   },
 
-  /** Precios YouPin para bots: GET /market/youpin/prices (MCP Market Prices). */
+  /** Legacy/diagnóstico: GET /market/youpin/prices (MCP Market Prices). */
   youpinPrices: {
     market: 'youpin' as const,
     currency: process.env.YOUPIN_PRICES_CURRENCY || 'USD',
     cacheTtlMs: parseInt(process.env.YOUPIN_PRICES_CACHE_TTL_MS || '300000', 10),
+  },
+
+  /** Legacy/diagnóstico puntual: GET /steam/api/item?markets=youpin. */
+  itemsPrices: {
+    market: process.env.ITEMS_PRICES_MARKET || 'youpin',
+    currency: process.env.ITEMS_PRICES_CURRENCY || 'USD',
+    cacheTtlMs: parseInt(process.env.ITEMS_PRICES_CACHE_TTL_MS || '300000', 10),
+    enableItemsApiPricing: process.env.ITEMS_PRICES_ENABLE !== 'false',
+  },
+
+  /** Catálogo local de precios de bots vía GET /steam/api/items. */
+  itemsCatalog: {
+    path: process.env.ITEMS_CATALOG_PATH || 'steamwebapi-json-data/items-catalog.json',
+    market: process.env.ITEMS_CATALOG_MARKET || process.env.ITEMS_PRICES_MARKET || 'youpin',
+    currency: process.env.ITEMS_CATALOG_CURRENCY || process.env.ITEMS_PRICES_CURRENCY || 'USD',
+    pageSize: parseInt(process.env.ITEMS_CATALOG_PAGE_SIZE || '50000', 10),
+    maxPages: parseInt(process.env.ITEMS_CATALOG_MAX_PAGES || '10', 10),
+    staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),
+    select:
+      process.env.ITEMS_CATALOG_SELECT ||
+      'markethashname,marketname,normalizedname,pricereal,pricemix,pricelatest,prices,paintindex,variants,itemgroup,itemname,itemtype,wear,isstattrak,issouvenir,image',
+  },
+
+  /**
+   * Respaldo de precios para bots cuando YouPin no tiene fila/variant.
+   * GET /markets/prices?markets=buff,csfloat&market_hash_name=...
+   */
+  botPrices: {
+    enableSecondaryMarkets: process.env.BOT_PRICE_ENABLE_SECONDARY !== 'false',
+    /** Mercados de respaldo; `buff` se descarga en bulk junto a YouPin al sync de bots. */
+    secondaryMarkets: (process.env.BOT_PRICE_SECONDARY_MARKETS || 'buff')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
   },
 };

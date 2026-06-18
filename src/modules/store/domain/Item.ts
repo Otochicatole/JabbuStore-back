@@ -17,5 +17,6 @@ export interface StoreItem {
   isSouvenir: boolean;
   float: number | null;
   pattern: number | null;
+  paintIndex?: number | null;
   inspectLink?: string | null;
 }

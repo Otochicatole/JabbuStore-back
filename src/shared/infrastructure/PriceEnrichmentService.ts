@@ -1,6 +1,10 @@
-import { SteamWebApiYoupinPricesClient } from "./SteamWebApiYoupinPricesClient";
+import {
+  BotPriceSyncService,
+  MarketHashNameNormalizer,
+} from "../../modules/pricing";
 
-const youpinPricesClient = new SteamWebApiYoupinPricesClient();
+const botPriceSyncService = new BotPriceSyncService();
+const marketHashNameNormalizer = new MarketHashNameNormalizer();
 
 export interface PriceableItem {
   assetId: string;
@@ -10,18 +14,8 @@ export interface PriceableItem {
   price: number;
   iconUrl?: string | null;
   pattern?: number | null;
+  paintIndex?: number | null;
 }
-
-const DOPPLER_PHASE_DISPLAY: Record<string, string> = {
-  phase1: "Phase 1",
-  phase2: "Phase 2",
-  phase3: "Phase 3",
-  phase4: "Phase 4",
-  ruby: "Ruby",
-  sapphire: "Sapphire",
-  blackpearl: "Black Pearl",
-  emerald: "Emerald",
-};
 
 export class PriceEnrichmentService {
   private static byMykelImagesMap: Map<string, string> | null = null;
@@ -34,80 +28,11 @@ export class PriceEnrichmentService {
     iconUrl: string | null,
     paintIndex?: number | null,
   ): string | null {
-    if (!marketHashName) return null;
-    if (!marketHashName.includes("Doppler")) return null;
-
-    // 1. Detección exacta mediante Paint Index (Finish Catalog) si está disponible
-    if (paintIndex !== undefined && paintIndex !== null) {
-      const paintIndexMap: Record<number, string> = {
-        // Doppler Gen 1
-        418: "phase1",
-        419: "phase2",
-        420: "phase3",
-        421: "phase4",
-        415: "ruby",
-        416: "sapphire",
-        417: "blackpearl",
-        // Doppler Gen 2 (Spectrum: Butterfly, Huntsman, Falchion, Shadow Daggers, Bowie)
-        618: "phase2",
-        619: "sapphire",
-        617: "blackpearl",
-        // Doppler Gen 3 (Prisma: Talon, Ursus, Navaja, Stiletto)
-        852: "phase1",
-        853: "phase2",
-        854: "phase3",
-        855: "phase4",
-        849: "ruby",
-        850: "sapphire",
-        851: "blackpearl",
-
-        // Gamma Doppler Gen 1
-        569: "phase1",
-        570: "phase2",
-        571: "phase3",
-        572: "phase4",
-        568: "emerald",
-        // Gamma Doppler Gen 2 (Dreams & Nightmares, etc)
-        1119: "phase1",
-        1120: "phase2",
-        1121: "phase3",
-        1122: "phase4",
-        1118: "emerald",
-      };
-      if (paintIndexMap[paintIndex]) {
-        return paintIndexMap[paintIndex];
-      }
-    }
-
-    // 2. Intentar usar la librería offline si el hash tiene el formato clásico de CS:GO (-9a8)
-    if (iconUrl && iconUrl.startsWith("-9a8")) {
-      try {
-        const dopplerPhaseDetector = require("csgo-doppler-phase");
-        let cleanIconUrl = iconUrl;
-        if (iconUrl.includes("economy/image/")) {
-          cleanIconUrl = iconUrl.split("economy/image/")[1] || iconUrl;
-        }
-
-        const detected = dopplerPhaseDetector.detect(
-          marketHashName,
-          cleanIconUrl,
-        );
-        if (
-          detected &&
-          typeof detected === "string" &&
-          !detected.startsWith("Something wrong")
-        ) {
-          return detected;
-        }
-      } catch (error) {
-        console.error(
-          "[PriceEnrichmentService] Error detecting Doppler phase via library:",
-          error,
-        );
-      }
-    }
-
-    return null;
+    return marketHashNameNormalizer.detectDopplerPhase({
+      marketHashName,
+      iconUrl,
+      paintIndex,
+    });
   }
 
   /**
@@ -143,111 +68,56 @@ export class PriceEnrichmentService {
     baseName: string;
     phase: string | null;
   } {
-    if (!fullName) return { baseName: "", phase: null };
-
-    const parts = fullName.split(" | ");
-    if (parts.length >= 2) {
-      const lastPart = parts[parts.length - 1]!.replace(/\s*\([^)]+\)\s*$/, "").trim();
-      const phaseNames = [
-        "Phase 1",
-        "Phase 2",
-        "Phase 3",
-        "Phase 4",
-        "Ruby",
-        "Sapphire",
-        "Black Pearl",
-        "Emerald",
-      ];
-      if (phaseNames.includes(lastPart)) {
-        const baseName = parts.slice(0, -1).join(" | ");
-        return { baseName, phase: lastPart };
-      }
-    }
-    return { baseName: fullName, phase: null };
+    return marketHashNameNormalizer.splitDopplerPhase(fullName);
   }
 
   static buildPricingMarketHashName(item: PriceableItem): string {
-    let name = item.name?.trim() ?? "";
-    if (!name || !name.includes("Doppler")) return name;
-
-    const { phase: existingPhase } = this.getBaseNameAndPhase(name);
-    if (existingPhase) return name;
-
-    const iconHash = item.iconUrl?.includes("economy/image/")
-      ? item.iconUrl.split("economy/image/")[1] ?? null
-      : item.iconUrl ?? null;
-
-    const detected = this.detectDopplerPhase(name, iconHash, null);
-    if (!detected) return name;
-
-    const phaseLabel = DOPPLER_PHASE_DISPLAY[detected];
-    if (!phaseLabel || name.includes(phaseLabel)) return name;
-
-    return `${name} | ${phaseLabel}`;
+    return marketHashNameNormalizer.buildPricingMarketHashName({
+      marketHashName: item.name,
+      iconUrl: item.iconUrl,
+    });
   }
 
   /**
-   * Enriquece ítems (bots / inventario usuario) con precios YouPin vía
-   * GET /market/youpin/prices?currency=USD (catálogo completo en una pasada).
-   * Dopplers: variants del catálogo market; si falta la fase, estimación desde el row base.
+   * Enriquece ítems de bots con precios vía módulo `pricing`
+   * (catálogo local SteamWebAPI Items API).
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(
     items: T[],
+    options?: { preserveExistingWhenMissing?: boolean },
   ): Promise<T[]> {
-    if (items.length === 0) return items;
-
-    const catalog = await youpinPricesClient.fetchCatalog();
-
-    const enriched: T[] = [];
-    for (const item of items) {
-      if (!item.name) {
-        enriched.push({ ...item, price: 0 });
-        continue;
-      }
-
-      const pricingName = this.buildPricingMarketHashName(item);
-      let finalPrice = youpinPricesClient.resolvePriceForItem(
-        pricingName,
-        catalog,
-        this.getBaseNameAndPhase.bind(this),
-      );
-
-      if (finalPrice != null && finalPrice > 0) {
-        const { baseName, phase } = this.getBaseNameAndPhase(pricingName);
-        const baseRow = baseName ? catalog.get(baseName) : undefined;
-        const basePrice = baseRow ? Number(baseRow.price) : 0;
-        if (phase && basePrice > 0) {
-          finalPrice = this.adjustHighTierDopplerPrice(
-            pricingName,
-            finalPrice,
-            basePrice,
-          );
-        }
-      } else {
-        finalPrice = this.calculateFallbackPrice(
-          item.type,
-          item.classId,
-          item.assetId,
-        );
-        console.warn(
-          `[Price Enrichment Service] Sin precio YouPin para "${pricingName}"${pricingName !== item.name ? ` (inventario: "${item.name}")` : ""}. Fallback: $${finalPrice}`,
-        );
-      }
-
-      const nameHasPhase =
-        pricingName.includes(" | Phase") ||
-        pricingName.includes(" | Ruby") ||
-        pricingName.includes(" | Sapphire") ||
-        pricingName.includes(" | Black Pearl") ||
-        pricingName.includes(" | Emerald");
-
-      enriched.push({
-        ...item,
-        name: nameHasPhase ? pricingName : item.name,
-        price: finalPrice,
+    const { items: enriched, catalogAvailable } =
+      await botPriceSyncService.enrichItems(items, {
+        forceRefreshCatalog: false,
+        preserveExistingWhenMissing:
+          options?.preserveExistingWhenMissing ?? false,
+        useFallbackWhenMissing: true,
+        logWarnings: true,
       });
+    if (!catalogAvailable) {
+      console.warn(
+        "[PriceEnrichment] Catálogo no disponible; ítems sin re-pricing.",
+      );
     }
+    return enriched;
+  }
 
+  /** Solo recalcular precios desde el catálogo local sin re-importar inventario Steam. */
+  static async refreshMarketPricesOnly<T extends PriceableItem>(
+    items: T[],
+  ): Promise<T[]> {
+    const { items: enriched, catalogAvailable } =
+      await botPriceSyncService.enrichItems(items, {
+        forceRefreshCatalog: true,
+        preserveExistingWhenMissing: true,
+        useFallbackWhenMissing: false,
+        logWarnings: true,
+      });
+    if (!catalogAvailable) {
+      console.warn(
+        "[PriceEnrichment] Sync de precios omitido: catálogo local Items API no disponible.",
+      );
+    }
     return enriched;
   }
 

@@ -2,12 +2,14 @@ import { StoreItem } from '../domain/Item';
 import { IStoreRepository } from '../domain/IStoreRepository';
 import { BotService } from '../../marketplace/application/BotService';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
-import { SteamWebApiYoupinPricesClient } from '../../../shared/infrastructure/SteamWebApiYoupinPricesClient';
+import { BotPriceSyncService } from '../../../modules/pricing';
 import { config } from '../../../shared/config';
 import {
   buildInspectLinkFromCertificateHex,
   normalizeSteamWebApiInspectLink,
 } from '../../../shared/infrastructure/inspectLinkHelpers';
+
+const botPriceSyncService = new BotPriceSyncService();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Global inventory API: 2 req/min en plan Float Small. */
@@ -157,16 +159,41 @@ export class SyncStoreItemsUseCase {
       };
     }
 
-    // Enriquecer ítems de bots con precios YouPin (GET /market/youpin/prices)
+    // Enriquecer ítems de bots con precios del catálogo local Items API
     let botItems: any[] = [];
     if (tradableAggregatedItems.length > 0) {
-      console.log(`[Store Inventory Sync] ${tradableAggregatedItems.length} ítems intercambiables. Obteniendo precios YouPin...`);
-      SteamWebApiYoupinPricesClient.clearCache();
-      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableAggregatedItems);
+      console.log(`[Store Inventory Sync] ${tradableAggregatedItems.length} ítems intercambiables. Obteniendo precios desde catálogo local Items API...`);
+
+      const existingItems = await this.storeRepository.findAll();
+      const existingByAsset = new Map(
+        existingItems.map((item) => [item.assetId, item]),
+      );
+
+      const { items: pricedItems, catalogAvailable } =
+        await botPriceSyncService.enrichItems(tradableAggregatedItems, {
+          forceRefreshCatalog: false,
+          preserveExistingWhenMissing: true,
+          useFallbackWhenMissing: true,
+          logWarnings: true,
+        });
+
+      let mergedItems = pricedItems;
+      if (!catalogAvailable) {
+        console.warn(
+          "[Store Inventory Sync] Catálogo de precios no disponible — se conservan precios previos de la DB.",
+        );
+        mergedItems = pricedItems.map((item) => {
+          const prev = existingByAsset.get(item.assetId);
+          if (prev && prev.price > 0) {
+            return { ...item, price: prev.price, name: prev.name || item.name };
+          }
+          return item;
+        });
+      }
 
       // Deduplicar por assetId
       const uniqueMap = new Map<string, any>();
-      for (const item of pricedItems) {
+      for (const item of mergedItems) {
         uniqueMap.set(item.assetId, item);
       }
       botItems = Array.from(uniqueMap.values());
@@ -292,6 +319,7 @@ export class SyncStoreItemsUseCase {
         ...details,
         float: floatVal,
         pattern: patternVal,
+        paintIndex: paintIndexVal,
       };
     });
   }

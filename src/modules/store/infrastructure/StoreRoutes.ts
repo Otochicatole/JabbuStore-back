@@ -14,7 +14,15 @@ const storeController = new StoreController(getStoreItemsUseCase, storeRepositor
 // Ruta pública para obtener todos los artículos disponibles para la venta
 router.get('/items', (req, res) => storeController.getItems(req, res));
 
-// Ruta protegida para que el admin fuerce un recálculo rápido de precios locales con YouPin
+// Ruta protegida para consultar/actualizar el catálogo local de precios Items API
+router.get('/prices/catalog/status', authMiddleware, adminOnly, (req, res) =>
+  storeController.getPriceCatalogStatus(req, res),
+);
+router.post('/prices/catalog/refresh', authMiddleware, adminOnly, (req, res) =>
+  storeController.refreshPriceCatalog(req, res),
+);
+
+// Ruta protegida para que el admin fuerce un recálculo rápido de precios locales
 router.post('/sync-prices', authMiddleware, adminOnly, (req, res) => storeController.syncPrices(req, res));
 
 export default router;

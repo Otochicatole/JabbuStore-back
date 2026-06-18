@@ -122,24 +122,33 @@ export class AdminMarketplaceController {
     }
   }
 
-  /** POST /admin/marketplace/bots/sync — inventario Steam + precios de mercado */
+  /** POST /admin/marketplace/bots/sync — inventario Steam + precios (background) */
   static async syncBotsInventory(_req: Request, res: Response) {
     if (botInventorySyncRunning) {
       res.status(409).json({ error: 'Ya hay una sincronización de bots en curso.' });
       return;
     }
 
+    res.json({
+      message:
+        'Sincronización de inventario y precios de bots iniciada en segundo plano. Puede demorar 1–3 minutos según el inventario y consultas Doppler a YouPin.',
+      started: true,
+    });
+
     botInventorySyncRunning = true;
-    try {
-      console.log('[Admin] Sincronizando inventario y precios de bots...');
-      const result = await syncStoreItemsUseCase.execute();
-      res.json(result);
-    } catch (err: any) {
-      console.error('[Admin] Error sincronizando bots:', err);
-      res.status(500).json({ error: err.message || 'Error al sincronizar bots.' });
-    } finally {
-      botInventorySyncRunning = false;
-    }
+    (async () => {
+      try {
+        console.log('[Admin] Sincronizando inventario y precios de bots (background)...');
+        const result = await syncStoreItemsUseCase.execute();
+        console.log(
+          `[Admin] Sync bots completado: ${result.itemsSynced} ítems, ${result.activeBots} bot(s) activos.`,
+        );
+      } catch (err: any) {
+        console.error('[Admin] Error sincronizando bots (background):', err);
+      } finally {
+        botInventorySyncRunning = false;
+      }
+    })();
   }
 
   static async updateBot(req: Request, res: Response) {
