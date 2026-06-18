@@ -241,6 +241,18 @@ export class PrismaMarketRepository implements IMarketRepository {
         })),
       );
     }
+
+    const orphanCleanup = await prisma.marketListing.deleteMany({
+      where: {
+        isPriceManual: false,
+        floats: { none: {} },
+      },
+    });
+    if (orphanCleanup.count > 0) {
+      console.log(
+        `[Prisma Market Repository] ${orphanCleanup.count} listings sin floats eliminados.`,
+      );
+    }
   }
 
   async updatePrice(id: string, price: number): Promise<void> {

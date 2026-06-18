@@ -16,7 +16,12 @@ export class AdminMarketplaceController {
   static async getSettings(req: Request, res: Response) {
     try {
       const settings = await AdminSettingsService.getSettings();
-      res.json(settings);
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -85,7 +90,12 @@ export class AdminMarketplaceController {
         resellModifierValue,
         resellModifierEnabled
       });
-      res.json(settings);
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

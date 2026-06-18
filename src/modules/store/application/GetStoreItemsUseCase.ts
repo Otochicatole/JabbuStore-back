@@ -1,6 +1,7 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { StoreItem } from '../domain/Item';
 import { IStoreRepository } from '../domain/IStoreRepository';
+import { BotService } from '../../marketplace/application/BotService';
 
 function applyModifier(basePrice: number, enabled: boolean, type: string, value: number): number {
   if (!enabled) return basePrice;
@@ -22,6 +23,8 @@ export class GetStoreItemsUseCase {
   constructor(private storeRepository: IStoreRepository) {}
 
   async execute(): Promise<(StoreItem & { displayPrice: number })[]> {
+    await BotService.purgeStoreItemsForInactiveBots();
+
     const [items, settings] = await Promise.all([
       this.storeRepository.findAll(),
       prisma.adminSettings.findFirst(),

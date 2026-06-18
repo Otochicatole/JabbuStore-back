@@ -11,6 +11,7 @@ import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoSe
 import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
+import { BotService } from "../../marketplace/application/BotService";
 
 export class OrderController {
   constructor(
@@ -640,6 +641,12 @@ export class OrderController {
           return res.status(400).json({
             error: `Algunos items de bot ya no están disponibles: ${missingIds.join(", ")}`,
           });
+        }
+
+        try {
+          await BotService.assertStoreItemsFromActiveBots(storeItems);
+        } catch (err: any) {
+          return res.status(400).json({ error: err.message });
         }
 
         // Validar market listings usando su campo unique 'name'

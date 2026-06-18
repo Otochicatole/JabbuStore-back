@@ -144,11 +144,16 @@ export class SyncStoreItemsUseCase {
     }
 
     if (activeBots.length === 0) {
+      console.log(
+        '[Store Inventory Sync] No hay bots activos. Limpiando StoreItem en DB...',
+      );
+      await this.storeRepository.clearAndSaveMany([]);
+      await BotService.updateInventoryCounts(new Map());
       return {
         itemsSynced: 0,
         activeBots: 0,
-        skipped: true,
-        message: 'No hay bots activos para sincronizar.',
+        skipped: false,
+        message: 'No hay bots activos; inventario de tienda vaciado.',
       };
     }
 

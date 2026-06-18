@@ -60,7 +60,17 @@ export class AdminSettingsService {
     const settings = await this.getSettings();
     return prisma.adminSettings.update({
       where: { id: settings.id },
-      data
+      data: {
+        ...(data.resellModifierType !== undefined
+          ? { marketModifierType: data.resellModifierType }
+          : {}),
+        ...(data.resellModifierValue !== undefined
+          ? { marketModifierValue: data.resellModifierValue }
+          : {}),
+        ...(data.resellModifierEnabled !== undefined
+          ? { marketModifierEnabled: data.resellModifierEnabled }
+          : {}),
+      },
     });
   }
 }

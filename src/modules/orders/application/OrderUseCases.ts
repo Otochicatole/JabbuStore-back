@@ -7,6 +7,7 @@ import {
 } from "../domain/Order";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
+import { BotService } from "../../marketplace/application/BotService";
 
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
@@ -48,6 +49,8 @@ export class CreatePurchaseOrderUseCase {
         `Some bot items are no longer available: ${missingIds.join(", ")}`,
       );
     }
+
+    await BotService.assertStoreItemsFromActiveBots(storeItems);
 
     // Resolver market listings usando su campo unique 'name'
     const marketListings =

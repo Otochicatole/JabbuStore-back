@@ -36,7 +36,7 @@ export class GetMarketListingsUseCase {
     // Catálogo público = assets YouPin indexados (FloatItem); admin ?all=true = listings agrupados.
     const [listings, settings] = await Promise.all([
       includeWithoutFloats
-        ? this.marketRepository.findAll()
+        ? this.marketRepository.findAllWithAvailableFloats()
         : this.marketRepository.findAllForStore(),
       prisma.adminSettings.findFirst(),
     ]);
