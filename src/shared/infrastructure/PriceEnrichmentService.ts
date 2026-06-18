@@ -1,4 +1,3 @@
-import { config } from "../config";
 import { SteamWebApiYoupinPricesClient } from "./SteamWebApiYoupinPricesClient";
 
 const youpinPricesClient = new SteamWebApiYoupinPricesClient();
@@ -9,7 +8,20 @@ export interface PriceableItem {
   name: string;
   type: string;
   price: number;
+  iconUrl?: string | null;
+  pattern?: number | null;
 }
+
+const DOPPLER_PHASE_DISPLAY: Record<string, string> = {
+  phase1: "Phase 1",
+  phase2: "Phase 2",
+  phase3: "Phase 3",
+  phase4: "Phase 4",
+  ruby: "Ruby",
+  sapphire: "Sapphire",
+  blackpearl: "Black Pearl",
+  emerald: "Emerald",
+};
 
 export class PriceEnrichmentService {
   private static byMykelImagesMap: Map<string, string> | null = null;
@@ -127,9 +139,6 @@ export class PriceEnrichmentService {
     return price;
   }
 
-  /**
-   * Descompone un nombre completo de ítem (con fase opcional añadida) en el nombre base de mercado y la fase.
-   */
   static getBaseNameAndPhase(fullName: string): {
     baseName: string;
     phase: string | null;
@@ -157,70 +166,89 @@ export class PriceEnrichmentService {
     return { baseName: fullName, phase: null };
   }
 
+  static buildPricingMarketHashName(item: PriceableItem): string {
+    let name = item.name?.trim() ?? "";
+    if (!name || !name.includes("Doppler")) return name;
+
+    const { phase: existingPhase } = this.getBaseNameAndPhase(name);
+    if (existingPhase) return name;
+
+    const iconHash = item.iconUrl?.includes("economy/image/")
+      ? item.iconUrl.split("economy/image/")[1] ?? null
+      : item.iconUrl ?? null;
+
+    const detected = this.detectDopplerPhase(name, iconHash, null);
+    if (!detected) return name;
+
+    const phaseLabel = DOPPLER_PHASE_DISPLAY[detected];
+    if (!phaseLabel || name.includes(phaseLabel)) return name;
+
+    return `${name} | ${phaseLabel}`;
+  }
+
   /**
    * Enriquece ítems (bots / inventario usuario) con precios YouPin vía
    * GET /market/youpin/prices?currency=USD (catálogo completo en una pasada).
-   * Fallback determinista si el ítem no está en YouPin.
+   * Dopplers: variants del catálogo market; si falta la fase, estimación desde el row base.
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(
     items: T[],
   ): Promise<T[]> {
     if (items.length === 0) return items;
 
-    let catalog = await youpinPricesClient.fetchCatalog();
+    const catalog = await youpinPricesClient.fetchCatalog();
 
-    const missingNames = new Set<string>();
-    const resolveForItem = (item: T): number | null =>
-      youpinPricesClient.resolvePriceFromCatalog(
-        item.name,
+    const enriched: T[] = [];
+    for (const item of items) {
+      if (!item.name) {
+        enriched.push({ ...item, price: 0 });
+        continue;
+      }
+
+      const pricingName = this.buildPricingMarketHashName(item);
+      let finalPrice = youpinPricesClient.resolvePriceForItem(
+        pricingName,
         catalog,
         this.getBaseNameAndPhase.bind(this),
       );
 
-    for (const item of items) {
-      if (!item.name) continue;
-      if (resolveForItem(item) == null) {
-        missingNames.add(item.name);
-        const { baseName } = this.getBaseNameAndPhase(item.name);
-        if (baseName) missingNames.add(baseName);
-      }
-    }
-
-    if (missingNames.size > 0 && missingNames.size <= 25 && config.steamwebapiApiKey) {
-      console.log(
-        `[Price Enrichment Service] Consultando ${missingNames.size} ítems puntuales en /market/youpin/prices...`,
-      );
-      for (const name of missingNames) {
-        if (catalog.has(name)) continue;
-        const price = await youpinPricesClient.fetchPriceByMarketHashName(
-          name,
-          this.getBaseNameAndPhase.bind(this),
-        );
-        if (price != null) {
-          catalog.set(name, {
-            market_hash_name: name,
-            price,
-          });
+      if (finalPrice != null && finalPrice > 0) {
+        const { baseName, phase } = this.getBaseNameAndPhase(pricingName);
+        const baseRow = baseName ? catalog.get(baseName) : undefined;
+        const basePrice = baseRow ? Number(baseRow.price) : 0;
+        if (phase && basePrice > 0) {
+          finalPrice = this.adjustHighTierDopplerPrice(
+            pricingName,
+            finalPrice,
+            basePrice,
+          );
         }
-      }
-    }
-
-    return items.map((item) => {
-      let finalPrice = resolveForItem(item) ?? 0;
-
-      if (finalPrice === 0) {
+      } else {
         finalPrice = this.calculateFallbackPrice(
           item.type,
           item.classId,
           item.assetId,
         );
+        console.warn(
+          `[Price Enrichment Service] Sin precio YouPin para "${pricingName}"${pricingName !== item.name ? ` (inventario: "${item.name}")` : ""}. Fallback: $${finalPrice}`,
+        );
       }
 
-      return {
+      const nameHasPhase =
+        pricingName.includes(" | Phase") ||
+        pricingName.includes(" | Ruby") ||
+        pricingName.includes(" | Sapphire") ||
+        pricingName.includes(" | Black Pearl") ||
+        pricingName.includes(" | Emerald");
+
+      enriched.push({
         ...item,
+        name: nameHasPhase ? pricingName : item.name,
         price: finalPrice,
-      };
-    });
+      });
+    }
+
+    return enriched;
   }
 
   static parseItemDetails(
