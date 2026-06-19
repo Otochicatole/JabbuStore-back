@@ -7,7 +7,7 @@ import {
   UpdateOrderStatusUseCase,
   findOpenSellOrderForAsset,
 } from "../application/OrderUseCases";
-import { OrderStatus } from "../domain/Order";
+import { OrderStatus, OrderType } from "../domain/Order";
 import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
 import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
@@ -241,6 +241,57 @@ export class OrderController {
       res.status(201).json(order);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
+    }
+  }
+
+  async cancelPaymentOrder(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado para cancelar esta orden" });
+      }
+
+      if (order.type !== OrderType.BUY) {
+        return res.status(400).json({ error: "Solo se pueden cancelar órdenes de compra desde el retorno de pago" });
+      }
+
+      if (order.status === OrderStatus.CANCELLED) {
+        return res.json({ cancelled: true, order });
+      }
+
+      if (order.status !== OrderStatus.PENDING_PAYMENT) {
+        return res.json({
+          cancelled: false,
+          reason: "order_not_pending",
+          order,
+        });
+      }
+
+      const updatedOrder = await this.updateOrderStatusUseCase.execute(
+        id,
+        OrderStatus.CANCELLED,
+      );
+
+      return res.json({ cancelled: true, order: updatedOrder });
+    } catch (error: any) {
+      console.error("[Cancel Payment Order] Error:", error);
+      return res.status(500).json({ error: error.message || "Error al cancelar la orden" });
     }
   }
 

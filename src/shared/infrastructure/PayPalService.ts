@@ -87,7 +87,7 @@ export class PayPalService {
       ],
       application_context: {
         return_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}&method=paypal`,
-        cancel_url: `${frontendUrl}/checkout?status=failure`,
+        cancel_url: `${frontendUrl}/checkout?status=failure&orderId=${order.id}&method=paypal`,
         user_action: "PAY_NOW",
         brand_name: "JabbuStore",
       },

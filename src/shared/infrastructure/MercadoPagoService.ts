@@ -39,9 +39,9 @@ export class MercadoPagoService {
       items,
       external_reference: order.id, // ID de nuestra orden para asociar en el webhook
       back_urls: {
-        success: `${frontendUrl}/checkout?status=success&orderId=${order.id}`,
-        failure: `${frontendUrl}/checkout?status=failure`,
-        pending: `${frontendUrl}/checkout?status=pending`,
+        success: `${frontendUrl}/checkout?status=success&orderId=${order.id}&method=mercado_pago`,
+        failure: `${frontendUrl}/checkout?status=failure&orderId=${order.id}&method=mercado_pago`,
+        pending: `${frontendUrl}/checkout?status=pending&orderId=${order.id}&method=mercado_pago`,
       },
       auto_return: "approved",
       metadata: {

@@ -45,6 +45,9 @@ router.post("/validate", authMiddleware, (req, res) =>
 router.get("/me", authMiddleware, (req, res) =>
   orderController.getMyOrders(req, res),
 );
+router.patch("/:id/cancel-payment", authMiddleware, (req, res) =>
+  orderController.cancelPaymentOrder(req, res),
+);
 
 // Public Webhook (Sin autenticación para recibir notificaciones asíncronas de Mercado Pago)
 router.post("/webhook/mercadopago", (req, res) =>

@@ -28,8 +28,8 @@ export class NOWPaymentsService {
       ipn_callback_url: `${backendUrl}/api/orders/webhook/nowpayments`,
       order_id: order.id,
       order_description: `Compra en JabbuStore - Orden #${order.id.slice(0, 8)}`,
-      success_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}`,
-      cancel_url: `${frontendUrl}/checkout?status=failure`,
+      success_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}&method=nowpayments`,
+      cancel_url: `${frontendUrl}/checkout?status=failure&orderId=${order.id}&method=nowpayments`,
     };
 
     console.log(
