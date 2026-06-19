@@ -80,8 +80,16 @@ export class GetUserInventoryUseCase {
 
     if (!forceSync && cachedInventory.length > 0 && !isExpired) {
       const tradableCache = cachedInventory.filter(item => item.tradable);
-      console.log(`[User Inventory Cache] Serving ${tradableCache.length} tradable items from database for user: ${userId}`);
-      return this.applySellModifier(tradableCache);
+      console.log(`[User Inventory Cache] Revalidating ${tradableCache.length} cached tradable items against local Items API catalog for user: ${userId}`);
+      const repricedCache = await this.repriceUserInventoryFromCatalog(
+        tradableCache,
+        'cache',
+      );
+      await this.userRepository.updateUserInventoryPricesIfChanged(
+        userId,
+        repricedCache,
+      );
+      return this.applySellModifier(repricedCache);
     }
 
     if (isExpired && !forceSync) {
@@ -128,7 +136,10 @@ export class GetUserInventoryUseCase {
 
       // 5. Enriquecer los ítems con precios acordes al mercado real
       console.log(`[User Inventory Sync] Enriching ${tradableItems.length} tradable items with market prices...`);
-      const pricedItems = await PriceEnrichmentService.enrichItemsWithMarketPrices(tradableItems);
+      const pricedItems = await this.repriceUserInventoryFromCatalog(
+        tradableItems,
+        'fresh-steam',
+      );
 
       // 6. Guardar en DB para no tener que volver a consultar a Steam
       console.log(`[User Inventory Cache] Saving ${pricedItems.length} tradable items to database cache for user: ${userId}`);
@@ -142,12 +153,36 @@ export class GetUserInventoryUseCase {
       const cachedInventory = await this.userRepository.getUserInventory(userId);
       if (cachedInventory.length > 0) {
         const tradableCache = cachedInventory.filter(item => item.tradable);
-        console.warn(`[User Inventory] Steam query failed. Serving stale cached tradable inventory as fallback.`);
-        return tradableCache;
+        console.warn(`[User Inventory] Steam query failed. Revalidating stale cache against local Items API catalog.`);
+        const repricedCache = await this.repriceUserInventoryFromCatalog(
+          tradableCache,
+          'stale-cache',
+        );
+        await this.userRepository.updateUserInventoryPricesIfChanged(
+          userId,
+          repricedCache,
+        );
+        return this.applySellModifier(repricedCache);
       }
       
       throw new Error(error.message || 'Could not load Steam inventory');
     }
+  }
+
+  private async repriceUserInventoryFromCatalog(
+    items: UserInventoryItem[],
+    source: 'cache' | 'fresh-steam' | 'stale-cache',
+  ): Promise<UserInventoryItem[]> {
+    if (items.length === 0) return items;
+
+    console.log(
+      `[User Inventory Pricing] Repricing ${items.length} ${source} item(s) from local Items API catalog...`,
+    );
+
+    return PriceEnrichmentService.enrichItemsWithMarketPrices(items, {
+      preserveExistingWhenMissing: true,
+      useFallbackWhenMissing: false,
+    });
   }
 
   private parseSteamInventory(data: any, userId: string): UserInventoryItem[] {

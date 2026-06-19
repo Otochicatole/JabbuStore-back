@@ -84,14 +84,17 @@ export class PriceEnrichmentService {
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(
     items: T[],
-    options?: { preserveExistingWhenMissing?: boolean },
+    options?: {
+      preserveExistingWhenMissing?: boolean;
+      useFallbackWhenMissing?: boolean;
+    },
   ): Promise<T[]> {
     const { items: enriched, catalogAvailable } =
       await botPriceSyncService.enrichItems(items, {
         forceRefreshCatalog: false,
         preserveExistingWhenMissing:
           options?.preserveExistingWhenMissing ?? false,
-        useFallbackWhenMissing: true,
+        useFallbackWhenMissing: options?.useFallbackWhenMissing ?? true,
         logWarnings: true,
       });
     if (!catalogAvailable) {

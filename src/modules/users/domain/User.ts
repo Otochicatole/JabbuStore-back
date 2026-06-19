@@ -44,4 +44,8 @@ export interface IUserRepository {
   // Gestión de Inventario del Usuario guardado en DB
   getUserInventory(userId: string): Promise<UserInventoryItem[]>;
   saveUserInventory(userId: string, items: UserInventoryItem[]): Promise<void>;
+  updateUserInventoryPricesIfChanged(
+    userId: string,
+    items: UserInventoryItem[],
+  ): Promise<number>;
 }
