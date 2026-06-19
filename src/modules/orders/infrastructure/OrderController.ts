@@ -759,41 +759,69 @@ export class OrderController {
       const xSignature = req.headers["x-signature"] as string;
       const xRequestId = req.headers["x-request-id"] as string;
 
-      if (webhookSecret && xSignature && xRequestId) {
+      if (webhookSecret) {
+        if (!xSignature || !xRequestId) {
+          console.warn(
+            "[Mercado Pago Webhook] Firma requerida ausente. Se rechaza la notificación.",
+          );
+          return res.status(401).json({ error: "Missing Mercado Pago webhook signature" });
+        }
+
         try {
           const crypto = require("crypto");
-          const parts = xSignature.split(",");
+          const parts = xSignature.split(",").map((part) => part.trim());
           const tsPart = parts.find((p) => p.startsWith("ts="));
           const v1Part = parts.find((p) => p.startsWith("v1="));
 
-          if (tsPart && v1Part) {
-            const ts = tsPart.split("=")[1];
-            const v1 = v1Part.split("=")[1];
-
-            // Reconstruir la firma según el estándar de Mercado Pago
-            const manifest = `id:${data?.id || req.query.id || req.body?.data?.id};request-timestamp:${ts};`;
-            const hmac = crypto.createHmac("sha256", webhookSecret);
-            const calculatedSignature = hmac.update(manifest).digest("hex");
-
-            if (calculatedSignature !== v1) {
-              console.warn(
-                "[Mercado Pago Webhook] Firma de firma inválida. Posible intento de fraude o desincronización de Webhook Secret.",
-              );
-              // Para evitar bloquear las peticiones en sandbox/dev si las firmas no coinciden debido a una key expirada,
-              // logueamos la advertencia, pero permitimos procesar la orden para fines de usabilidad.
-              console.log("[Mercado Pago Webhook] [Bypass temporal de Firma] Procesando pago para fines de desarrollo.");
-            } else {
-              console.log(
-                "[Mercado Pago Webhook] Firma verificada y autenticada cryptográficamente.",
-              );
-            }
+          if (!tsPart || !v1Part) {
+            console.warn(
+              "[Mercado Pago Webhook] Header de firma inválido. Se rechaza la notificación.",
+            );
+            return res.status(401).json({ error: "Invalid Mercado Pago webhook signature header" });
           }
+
+          const ts = tsPart.split("=")[1];
+          const v1 = v1Part.split("=")[1];
+          const paymentId =
+            req.query["data.id"] ||
+            req.query.id ||
+            data?.id ||
+            req.body?.data?.id ||
+            req.body?.id;
+
+          if (!paymentId || !ts || !v1) {
+            console.warn(
+              "[Mercado Pago Webhook] Datos insuficientes para verificar firma. Se rechaza la notificación.",
+            );
+            return res.status(401).json({ error: "Missing Mercado Pago webhook signature data" });
+          }
+
+          // Fórmula oficial: id:<data.id>;request-id:<x-request-id>;ts:<ts>;
+          const manifest = `id:${paymentId};request-id:${xRequestId};ts:${ts};`;
+          const hmac = crypto.createHmac("sha256", webhookSecret);
+          const calculatedSignature = hmac.update(manifest).digest("hex");
+
+          if (calculatedSignature !== v1) {
+            console.warn(
+              `[Mercado Pago Webhook] Firma inválida. Se rechaza la notificación. Payment ID: ${paymentId}`,
+            );
+            return res.status(401).json({ error: "Invalid Mercado Pago webhook signature" });
+          }
+
+          console.log(
+            "[Mercado Pago Webhook] Firma verificada y autenticada cryptográficamente.",
+          );
         } catch (sigErr: any) {
           console.error(
             "[Mercado Pago Webhook] Error al verificar firma:",
             sigErr.message,
           );
+          return res.status(401).json({ error: "Mercado Pago webhook signature verification failed" });
         }
+      } else {
+        console.warn(
+          "[Mercado Pago Webhook] MERCADOPAGO_WEBHOOK_SECRET no está configurado. No se puede verificar la firma.",
+        );
       }
 
       // Responder de inmediato con 200 OK para confirmar recepción a Mercado Pago
