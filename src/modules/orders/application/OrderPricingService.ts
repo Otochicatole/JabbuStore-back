@@ -17,6 +17,7 @@ export interface CheckoutPricingSettings {
   marketModifierValue: number;
   marketModifierEnabled: boolean;
   minimumUserSellPrice: number;
+  manualTransferEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: CheckoutPricingSettings = {
@@ -30,6 +31,7 @@ const DEFAULT_SETTINGS: CheckoutPricingSettings = {
   marketModifierValue: 0,
   marketModifierEnabled: false,
   minimumUserSellPrice: 1,
+  manualTransferEnabled: false,
 };
 
 const isModifierType = (type: string): type is ModifierType => {
@@ -102,6 +104,8 @@ export const getAdminSettingsOrDefaults = async (): Promise<CheckoutPricingSetti
       settings.marketModifierEnabled ?? DEFAULT_SETTINGS.marketModifierEnabled,
     minimumUserSellPrice:
       settings.minimumUserSellPrice ?? DEFAULT_SETTINGS.minimumUserSellPrice,
+    manualTransferEnabled:
+      settings.manualTransferEnabled ?? DEFAULT_SETTINGS.manualTransferEnabled,
   };
 };
 

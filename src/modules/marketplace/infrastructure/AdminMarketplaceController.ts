@@ -82,6 +82,41 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateManualTransferSettings(req: Request, res: Response) {
+    try {
+      const {
+        manualTransferEnabled,
+        manualBankAlias,
+        manualBankCbu,
+        manualBankHolder,
+        manualBankInstructions,
+        manualCryptoAddress,
+        manualCryptoNetwork,
+        manualCryptoInstructions,
+      } = req.body;
+
+      const settings = await AdminSettingsService.updateManualTransferSettings({
+        manualTransferEnabled,
+        manualBankAlias,
+        manualBankCbu,
+        manualBankHolder,
+        manualBankInstructions,
+        manualCryptoAddress,
+        manualCryptoNetwork,
+        manualCryptoInstructions,
+      });
+
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async updateResellSettings(req: Request, res: Response) {
     try {
       const { resellModifierType, resellModifierValue, resellModifierEnabled } = req.body;

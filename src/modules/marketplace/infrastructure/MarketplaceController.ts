@@ -12,6 +12,14 @@ export class MarketplaceController {
       res.json({
         minimumUserSellPrice: settings.minimumUserSellPrice,
         currency: settings.currency,
+        manualTransferEnabled: settings.manualTransferEnabled,
+        manualBankAlias: settings.manualBankAlias,
+        manualBankCbu: settings.manualBankCbu,
+        manualBankHolder: settings.manualBankHolder,
+        manualBankInstructions: settings.manualBankInstructions,
+        manualCryptoAddress: settings.manualCryptoAddress,
+        manualCryptoNetwork: settings.manualCryptoNetwork,
+        manualCryptoInstructions: settings.manualCryptoInstructions,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

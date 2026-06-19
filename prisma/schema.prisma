@@ -169,6 +169,14 @@ model AdminSettings {
   minimumUserSellPrice       Float    @default(1.0)
   webhookUrl                 String?
   currency                   String   @default("USD")
+  manualTransferEnabled      Boolean  @default(false)
+  manualBankAlias            String?
+  manualBankCbu              String?
+  manualBankHolder           String?
+  manualBankInstructions     String?
+  manualCryptoAddress        String?
+  manualCryptoNetwork        String?
+  manualCryptoInstructions   String?
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }

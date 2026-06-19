@@ -137,6 +137,13 @@ export class OrderController {
           .json({ error: "itemIds must be an array of string" });
       }
 
+      if (paymentMethod === "manual_transfer") {
+        const settings = await getAdminSettingsOrDefaults();
+        if (!settings.manualTransferEnabled) {
+          return res.status(400).json({ error: "La transferencia manual no está habilitada." });
+        }
+      }
+
       const order = await this.createPurchaseOrderUseCase.execute(
         userId,
         itemIds,

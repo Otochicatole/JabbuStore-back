@@ -52,6 +52,23 @@ export class AdminSettingsService {
     });
   }
 
+  static async updateManualTransferSettings(data: {
+    manualTransferEnabled?: boolean;
+    manualBankAlias?: string | null;
+    manualBankCbu?: string | null;
+    manualBankHolder?: string | null;
+    manualBankInstructions?: string | null;
+    manualCryptoAddress?: string | null;
+    manualCryptoNetwork?: string | null;
+    manualCryptoInstructions?: string | null;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
+
   static async updateResellSettings(data: {
     resellModifierType?: string;
     resellModifierValue?: number;
