@@ -53,6 +53,7 @@ model StoreItem {
   isSouvenir    Boolean  @default(false)
   float         Float?
   pattern       Int?
+  paintIndex    Int?
   inspectLink   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -100,6 +101,7 @@ model UserInventoryItem {
   isSouvenir Boolean  @default(false)
   float      Float?
   pattern    Int?
+  paintIndex Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }

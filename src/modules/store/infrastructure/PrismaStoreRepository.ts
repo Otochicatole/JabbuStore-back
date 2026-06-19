@@ -56,6 +56,7 @@ export class PrismaStoreRepository implements IStoreRepository {
       isSouvenir: item.isSouvenir ?? false,
       float: (item.float !== undefined && item.float !== null && !isNaN(item.float)) ? item.float : null,
       pattern: (item.pattern !== undefined && item.pattern !== null && !isNaN(item.pattern)) ? Math.round(item.pattern) : null,
+      paintIndex: (item.paintIndex !== undefined && item.paintIndex !== null && !isNaN(item.paintIndex)) ? Math.round(item.paintIndex) : null,
       inspectLink: item.inspectLink || null,
     }));
 
