@@ -8,6 +8,13 @@ import {
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
 import { BotService } from "../../marketplace/application/BotService";
+import {
+  getAdminSettingsOrDefaults,
+  getBotCheckoutPrice,
+  getMarketCheckoutPrice,
+  getUserSellCheckoutPrice,
+  roundMoney,
+} from "./OrderPricingService";
 
 const PRICE_MISMATCH_TOLERANCE = 0.01;
 const OPEN_SELL_ORDER_STATUSES = [
@@ -119,14 +126,17 @@ export class CreatePurchaseOrderUseCase {
     let totalPrice = 0;
     const orderItemsData: Omit<OrderItem, "id" | "orderId">[] = [];
 
-    // Bot items — precio real de DB, float/pattern reales
+    const settingsData = await getAdminSettingsOrDefaults();
+
+    // Bot items — precio real de DB + modificador global, float/pattern reales
     for (const item of storeItems) {
-      totalPrice += item.price;
+      const itemPrice = getBotCheckoutPrice(item.price, settingsData);
+      totalPrice += itemPrice;
       const override = overridesMap.get(item.assetId);
       orderItemsData.push({
         assetId: item.assetId,
         name: item.name,
-        price: item.price,
+        price: itemPrice,
         iconUrl: item.iconUrl,
         rarity: override?.rarity || item.rarity,
         exterior: override?.exterior || item.exterior,
@@ -142,17 +152,10 @@ export class CreatePurchaseOrderUseCase {
       });
     }
 
-    const settings = await prisma.adminSettings.findFirst();
-    const settingsData = settings ?? {
-      marketModifierEnabled: false,
-      marketModifierType: 'percentage_increase',
-      marketModifierValue: 0,
-    };
-
     // Market listings — precio del catálogo u override de float individual
     for (const item of marketListings as any[]) {
       const override = overridesMap.get(`market-${item.name}`);
-      let itemPrice = item.price;
+      let itemPrice = getMarketCheckoutPrice(item.price, settingsData);
       let itemFloat: number | null = null;
       let itemPattern: number | null = null;
       let itemProvider = item.provider;
@@ -170,17 +173,7 @@ export class CreatePurchaseOrderUseCase {
         });
 
         if (dbFloat) {
-          let floatPrice = dbFloat.price;
-          if (settingsData.marketModifierEnabled) {
-            let modifier = 0;
-            switch (settingsData.marketModifierType) {
-              case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
-              case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
-              case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
-              case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
-            }
-            floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
-          }
+          const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
 
           itemPrice = floatPrice;
           itemFloat = dbFloat.floatValue;
@@ -204,17 +197,7 @@ export class CreatePurchaseOrderUseCase {
     }
 
     for (const dbFloat of youpinFloatItems) {
-      let floatPrice = dbFloat.price;
-      if (settingsData.marketModifierEnabled) {
-        let modifier = 0;
-        switch (settingsData.marketModifierType) {
-          case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
-          case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
-          case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
-          case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
-        }
-        floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
-      }
+      const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
 
       const listing = dbFloat.resaleItem;
       totalPrice += floatPrice;
@@ -231,7 +214,7 @@ export class CreatePurchaseOrderUseCase {
       });
     }
 
-    totalPrice = Math.round(totalPrice * 100) / 100;
+    totalPrice = roundMoney(totalPrice);
 
     const orderData = {
       userId,
@@ -263,8 +246,8 @@ export class CreateSellOrderUseCase {
       throw new Error("No items provided for the sell order");
     }
 
-    const settings = await prisma.adminSettings.findFirst();
-    const minSellPrice = settings?.minimumUserSellPrice ?? 1.0;
+    const settings = await getAdminSettingsOrDefaults();
+    const minSellPrice = settings.minimumUserSellPrice;
 
     // Validate each item: must be in user's inventory and meet minimum price
     const resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
@@ -279,7 +262,7 @@ export class CreateSellOrderUseCase {
         throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
       }
 
-      const backendPrice = Math.round(inventoryItem.price * 100) / 100;
+      const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
       const requestedPrice = Number(item.requestedPrice);
 
       if (backendPrice < minSellPrice) {
@@ -353,7 +336,7 @@ export class CreateSellOrderUseCase {
       totalPrice += backendPrice;
     }
 
-    totalPrice = Math.round(totalPrice * 100) / 100;
+    totalPrice = roundMoney(totalPrice);
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(

@@ -13,6 +13,13 @@ import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
 import { BotService } from "../../marketplace/application/BotService";
+import {
+  getAdminSettingsOrDefaults,
+  getBotCheckoutPrice,
+  getMarketCheckoutPrice,
+  getUserSellCheckoutPrice,
+  roundMoney,
+} from "../application/OrderPricingService";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
@@ -710,19 +717,14 @@ export class OrderController {
           });
         }
 
-        const settings = await prisma.adminSettings.findFirst();
-        const settingsData = settings ?? {
-          marketModifierEnabled: false,
-          marketModifierType: 'percentage_increase',
-          marketModifierValue: 0,
-        };
+        const settingsData = await getAdminSettingsOrDefaults();
 
         const resolvedBotItems = storeItems.map((item: any) => {
           const override = overridesMap.get(item.assetId);
           return {
             assetId: item.assetId,
             name: item.name,
-            price: item.price,
+            price: getBotCheckoutPrice(item.price, settingsData),
             iconUrl: item.iconUrl || null,
             provider: "bot",
             float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
@@ -748,17 +750,7 @@ export class OrderController {
               });
 
               if (dbFloat) {
-                let floatPrice = dbFloat.price;
-                if (settingsData.marketModifierEnabled) {
-                  let modifier = 0;
-                  switch (settingsData.marketModifierType) {
-                    case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
-                    case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
-                    case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
-                    case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
-                  }
-                  floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
-                }
+                const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
 
                 return {
                   assetId: `market-${item.name}`,
@@ -777,7 +769,7 @@ export class OrderController {
             return {
               assetId: `market-${item.name}`,
               name: item.name,
-              price: item.price,
+              price: getMarketCheckoutPrice(item.price, settingsData),
               iconUrl: item.iconUrl || null,
               provider: 'youpin',
               float: null,
@@ -789,17 +781,7 @@ export class OrderController {
         );
 
         const resolvedYoupinItems = youpinFloatItems.map((dbFloat: any) => {
-          let floatPrice = dbFloat.price;
-          if (settingsData.marketModifierEnabled) {
-            let modifier = 0;
-            switch (settingsData.marketModifierType) {
-              case 'percentage_increase': modifier = (floatPrice * settingsData.marketModifierValue) / 100; break;
-              case 'percentage_decrease': modifier = -((floatPrice * settingsData.marketModifierValue) / 100); break;
-              case 'fixed_increase': modifier = settingsData.marketModifierValue; break;
-              case 'fixed_decrease': modifier = -settingsData.marketModifierValue; break;
-            }
-            floatPrice = Math.max(0, Math.round((floatPrice + modifier) * 100) / 100);
-          }
+          const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
 
           const listing = dbFloat.resaleItem;
           return {
@@ -819,7 +801,7 @@ export class OrderController {
         resolvedBotItems.forEach((item) => totalPrice += item.price);
         resolvedMarketItems.forEach((item) => totalPrice += item.price);
         resolvedYoupinItems.forEach((item) => totalPrice += item.price);
-        totalPrice = Math.round(totalPrice * 100) / 100;
+        totalPrice = roundMoney(totalPrice);
 
         return res.json({
           valid: true,
@@ -838,8 +820,8 @@ export class OrderController {
         const {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
-        const settings = await prisma.adminSettings.findFirst();
-        const minSellPrice = settings?.minimumUserSellPrice ?? 1.0;
+        const settings = await getAdminSettingsOrDefaults();
+        const minSellPrice = settings.minimumUserSellPrice;
 
         const resolvedItems: any[] = [];
         let totalPrice = 0;
@@ -855,7 +837,7 @@ export class OrderController {
             });
           }
 
-          const backendPrice = Math.round(inventoryItem.price * 100) / 100;
+          const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
           const requestedPrice = Number(item.requestedPrice);
 
           if (backendPrice < minSellPrice) {
@@ -932,7 +914,7 @@ export class OrderController {
           totalPrice += backendPrice;
         }
 
-        totalPrice = Math.round(totalPrice * 100) / 100;
+        totalPrice = roundMoney(totalPrice);
 
         return res.json({
           valid: true,
