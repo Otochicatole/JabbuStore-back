@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import fs from "fs";
 import {
   CreatePurchaseOrderUseCase,
   CreateSellOrderUseCase,
@@ -20,9 +21,19 @@ import {
   getUserSellCheckoutPrice,
   roundMoney,
 } from "../application/OrderPricingService";
+import {
+  PaymentProofMetadata,
+  resolvePaymentProofPath,
+  savePaymentProof,
+} from "./PaymentProofStorage";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
+
+type OrderMetadataWithProofs = Record<string, any> & {
+  buyerPaymentProof?: PaymentProofMetadata;
+  adminPaymentProof?: PaymentProofMetadata;
+};
 
 interface ConfirmPaymentOptions {
   orderId: string;
@@ -292,6 +303,171 @@ export class OrderController {
     } catch (error: any) {
       console.error("[Cancel Payment Order] Error:", error);
       return res.status(500).json({ error: error.message || "Error al cancelar la orden" });
+    }
+  }
+
+  async uploadBuyerPaymentProof(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado para subir comprobante a esta orden" });
+      }
+
+      if (order.type !== OrderType.BUY) {
+        return res.status(400).json({ error: "El comprobante del comprador solo aplica a órdenes de compra" });
+      }
+
+      if (
+        ![
+          OrderStatus.PENDING_PAYMENT,
+          OrderStatus.PAID,
+          OrderStatus.TRADE_PENDING,
+          OrderStatus.COMPLETED,
+        ].includes(order.status as OrderStatus)
+      ) {
+        return res.status(400).json({ error: "Esta orden ya no permite cargar comprobante de pago" });
+      }
+
+      const proof = await savePaymentProof(id, "buyer", req.file);
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          metadata: {
+            ...metadata,
+            buyerPaymentProof: proof,
+          } as any,
+        },
+        include: { items: true },
+      });
+
+      return res.status(201).json({
+        proof: {
+          ...proof,
+          storageKey: undefined,
+        },
+        order: updatedOrder,
+      });
+    } catch (error: any) {
+      console.error("[Buyer Payment Proof] Error:", error);
+      return res.status(400).json({ error: error.message || "No se pudo subir el comprobante" });
+    }
+  }
+
+  async uploadAdminPaymentProof(req: Request, res: Response) {
+    try {
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.type !== OrderType.SELL) {
+        return res.status(400).json({ error: "El comprobante del admin solo aplica a órdenes de venta" });
+      }
+
+      if (![OrderStatus.PAID, OrderStatus.COMPLETED].includes(order.status as OrderStatus)) {
+        return res.status(400).json({ error: "Subí el comprobante cuando el pago al usuario esté enviado o completado" });
+      }
+
+      const proof = await savePaymentProof(id, "admin", req.file);
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          metadata: {
+            ...metadata,
+            adminPaymentProof: proof,
+          } as any,
+        },
+        include: { items: true },
+      });
+
+      return res.status(201).json({
+        proof: {
+          ...proof,
+          storageKey: undefined,
+        },
+        order: updatedOrder,
+      });
+    } catch (error: any) {
+      console.error("[Admin Payment Proof] Error:", error);
+      return res.status(400).json({ error: error.message || "No se pudo subir el comprobante" });
+    }
+  }
+
+  async getPaymentProof(req: Request, res: Response) {
+    try {
+      const requester = (req as any).user;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+      const rawProofType = req.params.proofType;
+      const proofType = Array.isArray(rawProofType) ? rawProofType[0] : rawProofType;
+
+      if (!id || (proofType !== "buyer" && proofType !== "admin")) {
+        return res.status(400).json({ error: "Parámetros de comprobante inválidos" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      const isAdmin = requester?.role === "ADMIN" || requester?.role === "SUPER_ADMIN";
+      const isOwner = order.userId === requester?.id;
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "No autorizado para ver este comprobante" });
+      }
+
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+      const proof = proofType === "buyer"
+        ? metadata.buyerPaymentProof
+        : metadata.adminPaymentProof;
+
+      if (!proof) {
+        return res.status(404).json({ error: "Comprobante no encontrado" });
+      }
+
+      const proofPath = resolvePaymentProofPath(proof);
+      await fs.promises.access(proofPath, fs.constants.R_OK);
+
+      res.setHeader("Content-Type", proof.mimeType);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(proof.fileName)}"`,
+      );
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      return fs.createReadStream(proofPath).pipe(res);
+    } catch (error: any) {
+      console.error("[Get Payment Proof] Error:", error);
+      return res.status(404).json({ error: error.message || "No se pudo abrir el comprobante" });
     }
   }
 

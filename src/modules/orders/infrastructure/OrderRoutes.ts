@@ -12,6 +12,7 @@ import {
   authMiddleware,
   adminOnly,
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
+import { uploadPaymentProof } from "./PaymentProofStorage";
 
 const router = Router();
 
@@ -47,6 +48,22 @@ router.get("/me", authMiddleware, (req, res) =>
 );
 router.patch("/:id/cancel-payment", authMiddleware, (req, res) =>
   orderController.cancelPaymentOrder(req, res),
+);
+router.post(
+  "/:id/payment-proof/buyer",
+  authMiddleware,
+  uploadPaymentProof.single("proof"),
+  (req, res) => orderController.uploadBuyerPaymentProof(req, res),
+);
+router.post(
+  "/:id/payment-proof/admin",
+  authMiddleware,
+  adminOnly,
+  uploadPaymentProof.single("proof"),
+  (req, res) => orderController.uploadAdminPaymentProof(req, res),
+);
+router.get("/:id/payment-proof/:proofType", authMiddleware, (req, res) =>
+  orderController.getPaymentProof(req, res),
 );
 
 // Public Webhook (Sin autenticación para recibir notificaciones asíncronas de Mercado Pago)
