@@ -14,6 +14,17 @@ import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
 import { BotService } from "../../marketplace/application/BotService";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
+const PAYMENT_AMOUNT_TOLERANCE = 0.01;
+
+interface ConfirmPaymentOptions {
+  orderId: string;
+  provider: "paypal" | "mercadopago" | "nowpayments";
+  metadataKey: "paypalPaymentId" | "mpPaymentId" | "nowpaymentsPaymentId";
+  paymentId: string;
+  paidAmount?: number | null;
+  currency?: string | null;
+  expectedCurrency?: string;
+}
 
 export class OrderController {
   constructor(
@@ -23,6 +34,78 @@ export class OrderController {
     private getAllOrdersUseCase: GetAllOrdersUseCase,
     private updateOrderStatusUseCase: UpdateOrderStatusUseCase,
   ) {}
+
+  private async transitionOrderToTradePendingFromPayment({
+    orderId,
+    provider,
+    metadataKey,
+    paymentId,
+    paidAmount,
+    currency,
+    expectedCurrency = "USD",
+  }: ConfirmPaymentOptions): Promise<{ updated: boolean; reason?: string }> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      console.warn(`[Payment Confirm] Orden ${orderId} no encontrada para ${provider}.`);
+      return { updated: false, reason: "order_not_found" };
+    }
+
+    if (order.status !== "PENDING_PAYMENT") {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} está en ${order.status}; no se confirma de nuevo.`,
+      );
+      return { updated: false, reason: "invalid_status" };
+    }
+
+    if (currency && currency.toUpperCase() !== expectedCurrency.toUpperCase()) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} rechazada por moneda ${currency}; esperado ${expectedCurrency}.`,
+      );
+      return { updated: false, reason: "currency_mismatch" };
+    }
+
+    if (
+      typeof paidAmount === "number" &&
+      Number.isFinite(paidAmount) &&
+      Math.abs(paidAmount - order.totalPrice) > PAYMENT_AMOUNT_TOLERANCE
+    ) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} rechazada por monto ${paidAmount}; esperado ${order.totalPrice}.`,
+      );
+      return { updated: false, reason: "amount_mismatch" };
+    }
+
+    const currentMetadata =
+      order.metadata && typeof order.metadata === "object" && !Array.isArray(order.metadata)
+        ? (order.metadata as Record<string, any>)
+        : {};
+
+    const existingPaymentId = currentMetadata[metadataKey];
+    if (existingPaymentId && String(existingPaymentId) !== String(paymentId)) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} ya tiene ${metadataKey}=${existingPaymentId}; se rechazó ${paymentId}.`,
+      );
+      return { updated: false, reason: "payment_id_mismatch" };
+    }
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: "TRADE_PENDING",
+        metadata: {
+          ...currentMetadata,
+          [metadataKey]: String(paymentId),
+          paymentProvider: provider,
+          paidAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    return { updated: true };
+  }
 
   async createPurchaseOrder(req: Request, res: Response) {
     try {
@@ -232,29 +315,18 @@ export class OrderController {
           `[NOWPayments Webhook] ¡Pago aprobado! Transicionando Orden ID: ${order_id} a TRADE_PENDING y guardando ID de Operación.`,
         );
         try {
-          const order = await prisma.order.findUnique({
-            where: { id: order_id },
-          });
-          const currentMetadata =
-            order && order.metadata && typeof order.metadata === "object"
-              ? order.metadata
-              : {};
-
-          await prisma.order.update({
-            where: { id: order_id },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...currentMetadata,
-                nowpaymentsPaymentId: String(payment_id), // Guardar ID de pago oficial criptográfico de NOWPayments
-                paidAt: new Date().toISOString(),
-              },
-            },
+          const result = await this.transitionOrderToTradePendingFromPayment({
+            orderId: String(order_id),
+            provider: "nowpayments",
+            metadataKey: "nowpaymentsPaymentId",
+            paymentId: String(payment_id),
           });
 
-          console.log(
-            `[NOWPayments Webhook] Orden ID ${order_id} transicionada y acreditada con éxito en DB.`,
-          );
+          if (result.updated) {
+            console.log(
+              `[NOWPayments Webhook] Orden ID ${order_id} transicionada y acreditada con éxito en DB.`,
+            );
+          }
         } catch (orderError: any) {
           console.error(
             `[NOWPayments Webhook] Error al actualizar la orden en DB:`,
@@ -286,43 +358,14 @@ export class OrderController {
       if (req.body && req.body.event_type === "PAYMENT.CAPTURE.COMPLETED") {
         const captureId = req.body.resource?.id;
         const paypalOrderToken = req.body.resource?.supplementary_data?.related_ids?.order_id;
-        console.log(`[PayPal Webhook] Captura ya completada (PAYMENT.CAPTURE.COMPLETED). Capture ID: ${captureId}, Order Token: ${paypalOrderToken}`);
-        
-        // Buscar la orden correspondiente en los últimos registros
-        const recentOrders = await prisma.order.findMany({
-          where: { paymentMethod: "paypal" },
-          orderBy: { createdAt: "desc" },
-          take: 50,
+        console.warn(
+          `[PayPal Webhook] Evento PAYMENT.CAPTURE.COMPLETED recibido sin verificación oficial. No se cambia estado. Capture ID: ${captureId}, Order Token: ${paypalOrderToken}`,
+        );
+        return res.json({
+          success: true,
+          message:
+            "Evento recibido. La confirmación de órdenes PayPal se realiza por captura server-side verificada.",
         });
-
-        const matchingOrder = recentOrders.find(order => {
-          const meta = order.metadata && typeof order.metadata === "object" ? (order.metadata as any) : {};
-          return meta.paypalPaymentId === captureId || meta.paypalPaymentId === paypalOrderToken;
-        });
-
-        if (matchingOrder) {
-          if (matchingOrder.status === "PENDING_PAYMENT") {
-            const currentMetadata = matchingOrder.metadata && typeof matchingOrder.metadata === "object" ? matchingOrder.metadata : {};
-            await prisma.order.update({
-              where: { id: matchingOrder.id },
-              data: {
-                status: "TRADE_PENDING",
-                metadata: {
-                  ...currentMetadata,
-                  paypalPaymentId: String(captureId),
-                  paidAt: new Date().toISOString(),
-                }
-              }
-            });
-            console.log(`[PayPal Webhook] Orden ${matchingOrder.id} transicionada exitosamente a TRADE_PENDING desde webhook.`);
-          } else {
-            console.log(`[PayPal Webhook] La orden ${matchingOrder.id} ya estaba en estado ${matchingOrder.status}.`);
-          }
-          return res.json({ success: true, orderId: matchingOrder.id });
-        }
-
-        console.log(`[PayPal Webhook] No se encontró orden local para Capture ID: ${captureId}. Retornando 200 OK.`);
-        return res.json({ success: true, message: "Captura recibida pero no se asoció a ninguna orden local." });
       }
 
       // Si no hay token directo pero es un webhook de PayPal, extraer el ID del recurso
@@ -340,30 +383,6 @@ export class OrderController {
       console.log(
         `[PayPal Webhook/Callback] Procesando PayPal Order ID: ${paypalOrderId}`,
       );
-
-      // Si es un token simulado/de prueba en scripts, responder de manera mockeada
-      if (paypalOrderId === "MOCK_PAYPAL_ORDER_TOKEN_ABCDE") {
-        const testOrderId = await prisma.order.findFirst({
-          where: { paymentMethod: "paypal", status: "PENDING_PAYMENT" },
-          orderBy: { createdAt: "desc" },
-        });
-
-        if (testOrderId) {
-          await prisma.order.update({
-            where: { id: testOrderId.id },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...(testOrderId.metadata && typeof testOrderId.metadata === "object" ? testOrderId.metadata : {}),
-                paypalPaymentId: "MOCK_PAYPAL_CAPTURE_ID_12345",
-                paidAt: new Date().toISOString(),
-              },
-            },
-          });
-          console.log(`[PayPal Mock Webhook] Simulado éxito para Orden ID: ${testOrderId.id}`);
-          return res.json({ success: true, orderId: testOrderId.id });
-        }
-      }
 
       // Intentar deducir el ID de la orden de nuestra BD antes de capturar
       // Esto sirve si el webhook se dispara múltiples veces o después de la captura del frontend
@@ -435,27 +454,22 @@ export class OrderController {
           `[PayPal Webhook] ¡Pago completado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y registrando ID de captura.`,
         );
         try {
-          const order = await prisma.order.findUnique({
-            where: { id: orderId },
-          });
-          const currentMetadata =
-            order && order.metadata && typeof order.metadata === "object"
-              ? order.metadata
-              : {};
-
           const captureId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.id || paypalOrderId;
-
-          await prisma.order.update({
-            where: { id: orderId },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...currentMetadata,
-                paypalPaymentId: String(captureId), // Guardar ID de captura oficial de PayPal
-                paidAt: new Date().toISOString(),
-              },
-            },
+          const captureAmount = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
+          const result = await this.transitionOrderToTradePendingFromPayment({
+            orderId: String(orderId),
+            provider: "paypal",
+            metadataKey: "paypalPaymentId",
+            paymentId: String(captureId),
+            paidAmount: captureAmount?.value ? Number(captureAmount.value) : null,
+            currency: captureAmount?.currency_code ?? null,
           });
+
+          if (!result.updated) {
+            return res.status(400).json({
+              error: `El pago de PayPal fue capturado, pero la orden no se actualizó: ${result.reason}`,
+            });
+          }
 
           console.log(
             `[PayPal Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
@@ -558,30 +572,21 @@ export class OrderController {
             `[Mercado Pago Webhook] ¡Pago aprobado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y guardando ID de Operación.`,
           );
           try {
-            // Obtener metadata actual para no sobreescribir otros campos del cliente
-            const order = await prisma.order.findUnique({
-              where: { id: orderId },
-            });
-            const currentMetadata =
-              order && order.metadata && typeof order.metadata === "object"
-                ? order.metadata
-                : {};
-
-            await prisma.order.update({
-              where: { id: orderId },
-              data: {
-                status: "TRADE_PENDING",
-                metadata: {
-                  ...currentMetadata,
-                  mpPaymentId: String(paymentId), // Guardar ID de pago oficial de Mercado Pago
-                  paidAt: new Date().toISOString(),
-                },
-              },
+            const result = await this.transitionOrderToTradePendingFromPayment({
+              orderId: String(orderId),
+              provider: "mercadopago",
+              metadataKey: "mpPaymentId",
+              paymentId: String(paymentId),
+              paidAmount: typeof amount === "number" ? amount : Number(amount),
+              currency: paymentDetails.currency_id ?? null,
+              expectedCurrency: "ARS",
             });
 
-            console.log(
-              `[Mercado Pago Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
-            );
+            if (result.updated) {
+              console.log(
+                `[Mercado Pago Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
+              );
+            }
           } catch (orderError: any) {
             console.error(
               `[Mercado Pago Webhook] Error al actualizar la orden en DB:`,

@@ -72,8 +72,8 @@ export class MarketplaceController {
   static async confirmPayment(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      // Esto normalmente lo llama un webhook de la pasarela de pago
-      // Para efectos de demostración o integración, lo dejamos como endpoint
+      // Confirmación manual legacy. La ruta está protegida con adminOnly.
+      // El flujo de pagos real debe confirmarse por proveedor/webhook seguro.
       const purchase = await PurchaseService.confirmPayment(id as string);
       res.json(purchase);
     } catch (err: any) {
