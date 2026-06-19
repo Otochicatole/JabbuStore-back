@@ -273,13 +273,23 @@ export class OrderController {
         return res.status(400).json({ error: "Invalid order status" });
       }
 
+      const existingOrder = await prisma.order.findUnique({
+        where: { id: id as string },
+        select: { id: true },
+      });
+
+      if (!existingOrder) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
       const order = await this.updateOrderStatusUseCase.execute(
         id as string,
         status as OrderStatus,
       );
       res.json(order);
     } catch (error: any) {
-      res.status(400).json({ error: error.message });
+      console.error("[Orders] Error updating order status:", error);
+      res.status(500).json({ error: error.message || "Error updating order status" });
     }
   }
 

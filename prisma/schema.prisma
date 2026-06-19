@@ -59,7 +59,7 @@ model StoreItem {
   updatedAt     DateTime @updatedAt
 }
 
-/// Catálogo de ítems de reventa provenientes de YouPin via cs2.sh
+/// Catálogo de ítems de reventa provenientes de YouPin 
 model MarketListing {
   id            String   @id @default(cuid())
   name          String   @unique
