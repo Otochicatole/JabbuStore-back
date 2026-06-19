@@ -13,6 +13,8 @@ import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
 import { BotService } from "../../marketplace/application/BotService";
 
+const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
+
 export class OrderController {
   constructor(
     private createPurchaseOrderUseCase: CreatePurchaseOrderUseCase,
@@ -827,12 +829,6 @@ export class OrderController {
         let totalPrice = 0;
 
         for (const item of items) {
-          if (item.requestedPrice < minSellPrice) {
-            return res.status(400).json({
-              error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
-            });
-          }
-
           const inventoryItem = await prisma.userInventoryItem.findFirst({
             where: { userId, assetId: item.assetId },
           });
@@ -840,6 +836,24 @@ export class OrderController {
           if (!inventoryItem) {
             return res.status(400).json({
               error: `El item ${item.assetId} no se encuentra en tu inventario.`,
+            });
+          }
+
+          const backendPrice = Math.round(inventoryItem.price * 100) / 100;
+          const requestedPrice = Number(item.requestedPrice);
+
+          if (backendPrice < minSellPrice) {
+            return res.status(400).json({
+              error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
+            });
+          }
+
+          if (
+            Number.isFinite(requestedPrice) &&
+            Math.abs(requestedPrice - backendPrice) > SELL_PRICE_MISMATCH_TOLERANCE
+          ) {
+            return res.status(400).json({
+              error: `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
             });
           }
 
@@ -883,7 +897,7 @@ export class OrderController {
           resolvedItems.push({
             assetId: inventoryItem.assetId,
             name: inventoryItem.name,
-            price: item.requestedPrice,
+            price: backendPrice,
             iconUrl: inventoryItem.iconUrl ?? null,
             provider: "user",
             float: inventoryItem.float,
@@ -892,7 +906,7 @@ export class OrderController {
             rarity: inventoryItem.rarity,
           });
 
-          totalPrice += item.requestedPrice;
+          totalPrice += backendPrice;
         }
 
         totalPrice = Math.round(totalPrice * 100) / 100;
