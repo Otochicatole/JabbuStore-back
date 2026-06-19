@@ -10,6 +10,26 @@ import { WebhookService } from "./WebhookService";
 import { BotService } from "../../marketplace/application/BotService";
 
 const PRICE_MISMATCH_TOLERANCE = 0.01;
+const OPEN_SELL_ORDER_STATUSES = [
+  OrderStatus.PENDING_PAYMENT,
+  OrderStatus.TRADE_PENDING,
+  OrderStatus.PAID,
+];
+
+export async function findOpenSellOrderForAsset(userId: string, assetId: string) {
+  return prisma.order.findFirst({
+    where: {
+      userId,
+      type: "SELL",
+      status: { in: OPEN_SELL_ORDER_STATUSES },
+      items: {
+        some: { assetId },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, status: true },
+  });
+}
 
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
@@ -274,6 +294,13 @@ export class CreateSellOrderUseCase {
       ) {
         throw new Error(
           `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+        );
+      }
+
+      const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+      if (openSellOrder) {
+        throw new Error(
+          `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
         );
       }
 

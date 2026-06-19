@@ -5,6 +5,7 @@ import {
   GetUserOrdersUseCase,
   GetAllOrdersUseCase,
   UpdateOrderStatusUseCase,
+  findOpenSellOrderForAsset,
 } from "../application/OrderUseCases";
 import { OrderStatus } from "../domain/Order";
 import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
@@ -869,6 +870,13 @@ export class OrderController {
           ) {
             return res.status(400).json({
               error: `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+            });
+          }
+
+          const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+          if (openSellOrder) {
+            return res.status(400).json({
+              error: `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
             });
           }
 
