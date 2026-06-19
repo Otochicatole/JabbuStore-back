@@ -209,4 +209,9 @@ export interface BotPriceCatalogStatus {
   market: string;
   path: string;
   lastError?: string;
+  running?: boolean;
+  lastStartedAt?: string | null;
+  lastFinishedAt?: string | null;
+  lastItemCount?: number | null;
+  triggeredBy?: string | null;
 }

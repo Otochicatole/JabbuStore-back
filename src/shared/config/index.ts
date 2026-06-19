@@ -22,6 +22,8 @@ export const config = {
    * Habilitar o deshabilitar la sincronización automática periódica con Steam Web API.
    */
   enableSync: process.env.ENABLE_SYNC !== 'false',
+  /** Habilitar/deshabilitar solo el scheduler automático del catálogo local de precios. */
+  enableItemsCatalogSync: process.env.ENABLE_ITEMS_CATALOG_SYNC !== 'false',
 
   /**
    * Configuración del indexado de floats (endpoint /steam/api/float/assets).
@@ -100,6 +102,12 @@ export const config = {
     currency: process.env.ITEMS_CATALOG_CURRENCY || process.env.ITEMS_PRICES_CURRENCY || 'USD',
     pageSize: parseInt(process.env.ITEMS_CATALOG_PAGE_SIZE || '50000', 10),
     maxPages: parseInt(process.env.ITEMS_CATALOG_MAX_PAGES || '10', 10),
+    syncIntervalMinutes: parseInt(
+      process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES ||
+        process.env.STORE_SYNC_INTERVAL_MINUTES ||
+        '180',
+      10,
+    ),
     staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),
     select:
       process.env.ITEMS_CATALOG_SELECT ||

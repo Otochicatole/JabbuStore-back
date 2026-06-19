@@ -185,8 +185,12 @@ export class AdminMarketplaceController {
   static async deleteBot(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      await BotService.deleteBot(id as string);
-      res.status(204).send();
+      const bot = await BotService.deleteBot(id as string);
+      res.json({
+        success: true,
+        deleted: Boolean(bot),
+        message: bot ? 'Bot eliminado correctamente.' : 'El bot ya no existía.',
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

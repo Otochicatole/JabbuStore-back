@@ -106,6 +106,9 @@ export class BotService {
 
   static async deleteBot(id: string) {
     const bot = await prisma.bot.findUnique({ where: { id } });
+    if (!bot) {
+      return null;
+    }
     if (bot?.steamId) {
       await this.purgeStoreItemsForSteamId(bot.steamId);
     }

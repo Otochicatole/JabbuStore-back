@@ -3,14 +3,11 @@ import { GetStoreItemsUseCase } from '../application/GetStoreItemsUseCase';
 import { PrismaStoreRepository } from './PrismaStoreRepository';
 import {
   BotPriceSyncService,
-  SteamWebApiItemsCatalogClient,
-  SteamWebApiItemsCatalogStore,
+  itemsCatalogRefreshService,
 } from '../../../modules/pricing';
 import { BotService } from '../../marketplace/application/BotService';
 
 const botPriceSyncService = new BotPriceSyncService();
-const itemsCatalogClient = new SteamWebApiItemsCatalogClient();
-const itemsCatalogStore = new SteamWebApiItemsCatalogStore();
 
 export class StoreController {
   constructor(
@@ -100,7 +97,7 @@ export class StoreController {
 
   async getPriceCatalogStatus(req: Request, res: Response) {
     try {
-      const status = await itemsCatalogStore.getStatus();
+      const status = await itemsCatalogRefreshService.getStatus();
       res.json(status);
     } catch (error: any) {
       console.error('[StoreController Error] Failed to get price catalog status:', error);
@@ -110,32 +107,26 @@ export class StoreController {
 
   async refreshPriceCatalog(req: Request, res: Response) {
     try {
-      console.log('[StoreController] Actualizando catálogo local Items API...');
-      const result = await itemsCatalogClient.fetchCatalog({ forceRefresh: true });
+      console.log('[StoreController] Solicitud de refresh del catálogo local Items API recibida.');
+      const result = await itemsCatalogRefreshService.startRefreshInBackground({
+        triggeredBy: 'manual',
+      });
 
-      if (!result.snapshot) {
-        const status = await itemsCatalogStore.getStatus();
-        return res.status(502).json({
-          error: 'No se pudo actualizar el catálogo local Items API.',
-          status: result.status,
-          errors: result.errors,
-          previousCatalog: status,
+      if (!result.started) {
+        return res.status(409).json({
+          error: 'Ya hay una descarga del catálogo de precios en curso.',
+          message: 'Ya hay una descarga del catálogo de precios en curso.',
+          catalog: result.status,
         });
       }
 
-      await itemsCatalogStore.writeCatalog(result.snapshot);
-      const status = await itemsCatalogStore.getStatus();
-
-      res.json({
-        message: `Catálogo de precios actualizado: ${result.snapshot.itemCount} items en ${result.snapshot.pageCount} páginas.`,
-        ok: result.ok,
-        status: result.status,
-        errors: result.errors,
-        catalog: status,
+      res.status(202).json({
+        message: 'Descarga del catálogo de precios iniciada en segundo plano.',
+        catalog: result.status,
       });
     } catch (error: any) {
       console.error('[StoreController Error] Failed to refresh price catalog:', error);
-      const status = await itemsCatalogStore.getStatus().catch(() => null);
+      const status = await itemsCatalogRefreshService.getStatus().catch(() => null);
       res.status(500).json({
         error: error.message || 'Failed to refresh price catalog.',
         previousCatalog: status,

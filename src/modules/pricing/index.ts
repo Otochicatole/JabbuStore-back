@@ -5,6 +5,10 @@ export { ItemVariantClassifier } from "./application/ItemVariantClassifier";
 export { BotPriceLookupService } from "./application/BotPriceLookupService";
 export { BotPriceSyncService } from "./application/BotPriceSyncService";
 export {
+  ItemsCatalogRefreshService,
+  itemsCatalogRefreshService,
+} from "./application/ItemsCatalogRefreshService";
+export {
   SteamWebApiMarketPricesClient,
   YOUPIN_MARKET_PRICES_URL,
   BUFF_MARKET_PRICES_URL,

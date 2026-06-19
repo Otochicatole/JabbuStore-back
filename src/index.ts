@@ -81,11 +81,14 @@ app.get('/', (req, res) => {
 import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyncScheduler';
 import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
 import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
+import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
   // Inventario físico de bots Steam
   startStoreSyncScheduler();
+  // Catálogo local de precios de bots vía /steam/api/items
+  startItemsCatalogSyncScheduler();
   // Catálogo de reventa YouPin vía /steam/api/float/assets (precios incluidos por asset)
   startMarketSyncScheduler();
   // Sincronizador periódico de floats del plan Float Small
