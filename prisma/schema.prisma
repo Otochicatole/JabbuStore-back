@@ -169,6 +169,9 @@ model AdminSettings {
   minimumUserSellPrice       Float    @default(1.0)
   webhookUrl                 String?
   currency                   String   @default("USD")
+  mercadoPagoEnabled         Boolean  @default(true)
+  paypalEnabled              Boolean  @default(true)
+  nowpaymentsEnabled         Boolean  @default(true)
   manualTransferEnabled      Boolean  @default(false)
   manualBankAlias            String?
   manualBankCbu              String?

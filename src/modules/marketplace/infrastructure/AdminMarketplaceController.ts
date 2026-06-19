@@ -82,6 +82,31 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updatePaymentMethodSettings(req: Request, res: Response) {
+    try {
+      const {
+        mercadoPagoEnabled,
+        paypalEnabled,
+        nowpaymentsEnabled,
+      } = req.body;
+
+      const settings = await AdminSettingsService.updatePaymentMethodSettings({
+        mercadoPagoEnabled,
+        paypalEnabled,
+        nowpaymentsEnabled,
+      });
+
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async updateManualTransferSettings(req: Request, res: Response) {
     try {
       const {

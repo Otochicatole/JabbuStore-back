@@ -52,6 +52,18 @@ export class AdminSettingsService {
     });
   }
 
+  static async updatePaymentMethodSettings(data: {
+    mercadoPagoEnabled?: boolean;
+    paypalEnabled?: boolean;
+    nowpaymentsEnabled?: boolean;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
+
   static async updateManualTransferSettings(data: {
     manualTransferEnabled?: boolean;
     manualBankAlias?: string | null;

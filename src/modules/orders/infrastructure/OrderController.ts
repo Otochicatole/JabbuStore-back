@@ -137,11 +137,18 @@ export class OrderController {
           .json({ error: "itemIds must be an array of string" });
       }
 
-      if (paymentMethod === "manual_transfer") {
-        const settings = await getAdminSettingsOrDefaults();
-        if (!settings.manualTransferEnabled) {
-          return res.status(400).json({ error: "La transferencia manual no está habilitada." });
-        }
+      const settings = await getAdminSettingsOrDefaults();
+      if (paymentMethod === "mercado_pago" && !settings.mercadoPagoEnabled) {
+        return res.status(400).json({ error: "Mercado Pago no está habilitado." });
+      }
+      if (paymentMethod === "paypal" && !settings.paypalEnabled) {
+        return res.status(400).json({ error: "PayPal no está habilitado." });
+      }
+      if (paymentMethod === "nowpayments" && !settings.nowpaymentsEnabled) {
+        return res.status(400).json({ error: "NOWPayments no está habilitado." });
+      }
+      if (paymentMethod === "manual_transfer" && !settings.manualTransferEnabled) {
+        return res.status(400).json({ error: "La transferencia manual no está habilitada." });
       }
 
       const order = await this.createPurchaseOrderUseCase.execute(

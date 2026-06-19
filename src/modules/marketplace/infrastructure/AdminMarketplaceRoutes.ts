@@ -14,6 +14,7 @@ router.patch('/settings/user-sell', AdminMarketplaceController.updateUserSellSet
 router.patch('/settings/resell', AdminMarketplaceController.updateResellSettings);
 router.patch('/settings/minimum-sell-price', AdminMarketplaceController.updateMinimumSellPrice);
 router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUrl);
+router.patch('/settings/payment-methods', AdminMarketplaceController.updatePaymentMethodSettings);
 router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
 
 // Bots

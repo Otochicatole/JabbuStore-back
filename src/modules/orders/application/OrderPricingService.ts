@@ -17,6 +17,9 @@ export interface CheckoutPricingSettings {
   marketModifierValue: number;
   marketModifierEnabled: boolean;
   minimumUserSellPrice: number;
+  mercadoPagoEnabled: boolean;
+  paypalEnabled: boolean;
+  nowpaymentsEnabled: boolean;
   manualTransferEnabled: boolean;
 }
 
@@ -31,6 +34,9 @@ const DEFAULT_SETTINGS: CheckoutPricingSettings = {
   marketModifierValue: 0,
   marketModifierEnabled: false,
   minimumUserSellPrice: 1,
+  mercadoPagoEnabled: true,
+  paypalEnabled: true,
+  nowpaymentsEnabled: true,
   manualTransferEnabled: false,
 };
 
@@ -104,6 +110,12 @@ export const getAdminSettingsOrDefaults = async (): Promise<CheckoutPricingSetti
       settings.marketModifierEnabled ?? DEFAULT_SETTINGS.marketModifierEnabled,
     minimumUserSellPrice:
       settings.minimumUserSellPrice ?? DEFAULT_SETTINGS.minimumUserSellPrice,
+    mercadoPagoEnabled:
+      settings.mercadoPagoEnabled ?? DEFAULT_SETTINGS.mercadoPagoEnabled,
+    paypalEnabled:
+      settings.paypalEnabled ?? DEFAULT_SETTINGS.paypalEnabled,
+    nowpaymentsEnabled:
+      settings.nowpaymentsEnabled ?? DEFAULT_SETTINGS.nowpaymentsEnabled,
     manualTransferEnabled:
       settings.manualTransferEnabled ?? DEFAULT_SETTINGS.manualTransferEnabled,
   };
