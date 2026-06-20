@@ -3,6 +3,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
+import { createServer } from 'node:http';
 import session from 'express-session';
 import passport from 'passport';
 import { rateLimit } from 'express-rate-limit';
@@ -17,10 +18,13 @@ import catalogRoutes from './modules/catalog/infrastructure/CatalogRoutes';
 import orderRoutes from './modules/orders/infrastructure/OrderRoutes';
 import marketplaceRoutes from './modules/marketplace/infrastructure/MarketplaceRoutes';
 import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMarketplaceRoutes';
+import ticketRoutes from './modules/tickets/infrastructure/TicketRoutes';
+import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
 
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
 const PORT = process.env.PORT || 3001;
 
 const limiter = rateLimit({
@@ -68,6 +72,7 @@ app.use('/api/catalog', catalogRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/admin/marketplace', adminMarketplaceRoutes);
+app.use('/api/tickets', ticketRoutes);
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
 app.use(errorHandler);
@@ -89,7 +94,8 @@ async function bootstrap() {
   await applyRuntimeConfigOverrides();
   await configurePassport();
 
-  app.listen(PORT, () => {
+  initializeTicketSocket(httpServer);
+  httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     // Inventario físico de bots Steam
     startStoreSyncScheduler();

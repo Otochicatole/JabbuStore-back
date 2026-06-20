@@ -23,6 +23,8 @@ model User {
   listings   SkinListing[]
   purchases  Purchase[]
   trades     Trade[]
+  supportTickets OrderTicket[]
+  ticketMessages TicketMessage[] @relation("UserTicketMessages")
 }
 
 model Admin {
@@ -33,6 +35,8 @@ model Admin {
   role      String   @default("ADMIN")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  closedTickets OrderTicket[] @relation("ClosedTickets")
+  ticketMessages TicketMessage[] @relation("AdminTicketMessages")
 }
 
 model StoreItem {
@@ -119,6 +123,16 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum TicketStatus {
+  OPEN
+  CLOSED
+}
+
+enum TicketSenderType {
+  USER
+  ADMIN
+}
+
 model Order {
   id         String      @id @default(uuid())
   userId     String
@@ -131,6 +145,7 @@ model Order {
   items      OrderItem[]
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
+  tickets    OrderTicket[]
 }
 
 model OrderItem {
@@ -146,6 +161,45 @@ model OrderItem {
   float     Float?
   pattern   Int?
   provider  String?
+}
+
+model OrderTicket {
+  id              String       @id @default(uuid())
+  orderId         String
+  order           Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject         String
+  status          TicketStatus @default(OPEN)
+  userLastReadAt  DateTime?
+  adminLastReadAt DateTime?
+  closedAt        DateTime?
+  closedByAdminId String?
+  closedByAdmin   Admin?       @relation("ClosedTickets", fields: [closedByAdminId], references: [id], onDelete: SetNull)
+  messages        TicketMessage[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId, status, updatedAt])
+  @@index([orderId, status])
+  @@index([status, updatedAt])
+}
+
+model TicketMessage {
+  id              String           @id @default(uuid())
+  ticketId        String
+  ticket          OrderTicket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderType      TicketSenderType
+  senderUserId    String?
+  senderUser      User?            @relation("UserTicketMessages", fields: [senderUserId], references: [id], onDelete: SetNull)
+  senderAdminId   String?
+  senderAdmin     Admin?           @relation("AdminTicketMessages", fields: [senderAdminId], references: [id], onDelete: SetNull)
+  clientMessageId String
+  body            String
+  createdAt       DateTime         @default(now())
+
+  @@unique([ticketId, clientMessageId])
+  @@index([ticketId, createdAt])
 }
 
 model AdminSettings {
