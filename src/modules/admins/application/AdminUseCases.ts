@@ -32,7 +32,11 @@ export class LoginAdminUseCase {
       throw new Error('Invalid credentials');
     }
 
-    const token = AuthService.generateToken({ id: admin.id, email: admin.email, role: 'ADMIN' });
+    const token = AuthService.generateToken({
+      id: admin.id,
+      email: admin.email,
+      role: admin.role,
+    });
     
     // Remove password from response
     const { password: _, ...adminWithoutPassword } = admin;

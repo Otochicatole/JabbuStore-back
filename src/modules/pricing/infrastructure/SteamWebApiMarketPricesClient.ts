@@ -53,10 +53,14 @@ function isUsableCatalog(catalog: PriceCatalog): boolean {
 
 export class SteamWebApiMarketPricesClient {
   constructor(
-    private apiKey = config.steamwebapiApiKey,
+    private apiKey = "",
     private currency = config.youpinPrices.currency,
     private cacheTtlMs = config.youpinPrices.cacheTtlMs,
   ) {}
+
+  private getApiKey(): string {
+    return this.apiKey || config.steamwebapiApiKey;
+  }
 
   /**
    * Catálogos bulk YouPin + Buff en paralelo.
@@ -65,6 +69,7 @@ export class SteamWebApiMarketPricesClient {
   async fetchBotPriceCatalogs(
     forceRefresh = false,
   ): Promise<BotPriceCatalogFetchResult> {
+    const apiKey = this.getApiKey();
     const stale = bundleCache?.bundle;
 
     if (
@@ -80,7 +85,7 @@ export class SteamWebApiMarketPricesClient {
       };
     }
 
-    if (!this.apiKey) {
+    if (!apiKey) {
       const msg = "STEAMWEBAPI_API_KEY no configurado";
       console.warn(`[Market Prices] ${msg}`);
       return this.resultFromStaleOrEmpty(stale, [msg]);
@@ -91,9 +96,9 @@ export class SteamWebApiMarketPricesClient {
       config.botPrices.secondaryMarkets.some((m) => m === "buff");
 
     const [youpinRes, buffRes] = await Promise.all([
-      this.fetchMarketCatalogBulk(YOUPIN_MARKET_PRICES_URL, "YouPin"),
+      this.fetchMarketCatalogBulk(YOUPIN_MARKET_PRICES_URL, "YouPin", apiKey),
       fetchBuff
-        ? this.fetchMarketCatalogBulk(BUFF_MARKET_PRICES_URL, "Buff")
+        ? this.fetchMarketCatalogBulk(BUFF_MARKET_PRICES_URL, "Buff", apiKey)
         : Promise.resolve({
             catalog: new Map<string, SteamWebApiYoupinPriceRow>(),
             ok: true,
@@ -183,12 +188,13 @@ export class SteamWebApiMarketPricesClient {
   async fetchYoupinByMarketHashName(
     marketHashName: string,
   ): Promise<SteamWebApiYoupinPriceRow | null> {
-    if (!this.apiKey || !marketHashName) return null;
+    const apiKey = this.getApiKey();
+    if (!apiKey || !marketHashName) return null;
 
     await waitForPointLookupSlot();
 
     const params = new URLSearchParams({
-      key: this.apiKey,
+      key: apiKey,
       currency: this.currency,
       market_hash_name: marketHashName,
     });
@@ -205,12 +211,13 @@ export class SteamWebApiMarketPricesClient {
     markets: string[],
   ): Promise<Map<string, SteamWebApiYoupinPriceRow>> {
     const result = new Map<string, SteamWebApiYoupinPriceRow>();
-    if (!this.apiKey || !marketHashName || markets.length === 0) return result;
+    const apiKey = this.getApiKey();
+    if (!apiKey || !marketHashName || markets.length === 0) return result;
 
     await waitForPointLookupSlot();
 
     const params = new URLSearchParams({
-      key: this.apiKey,
+      key: apiKey,
       currency: this.currency,
       market_hash_name: marketHashName,
       markets: markets.join(","),
@@ -251,9 +258,10 @@ export class SteamWebApiMarketPricesClient {
   private async fetchMarketCatalogBulk(
     url: string,
     label: string,
+    apiKey: string,
   ): Promise<BulkFetchResult> {
     const params = new URLSearchParams({
-      key: this.apiKey,
+      key: apiKey,
       currency: this.currency,
     });
     const res = await fetch(`${url}?${params.toString()}`);

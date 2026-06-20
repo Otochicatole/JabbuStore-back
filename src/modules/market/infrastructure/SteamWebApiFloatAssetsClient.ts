@@ -65,10 +65,11 @@ export function parseFloatAssetsResponse(parsed: any): {
 }
 
 export class SteamWebApiFloatAssetsClient {
-  constructor(private apiKey = config.steamwebapiApiKey) {}
+  constructor(private apiKey = "") {}
 
   async fetchPage(query: FloatAssetsQuery): Promise<FloatAssetsPage> {
-    if (!this.apiKey) {
+    const apiKey = this.apiKey || config.steamwebapiApiKey;
+    if (!apiKey) {
       return {
         assets: [],
         total: 0,
@@ -83,7 +84,7 @@ export class SteamWebApiFloatAssetsClient {
     const limit = query.limit ?? 10;
     const offset = query.offset ?? 0;
     const params = new URLSearchParams({
-      key: this.apiKey,
+      key: apiKey,
       appid: "730",
       limit: String(limit),
       offset: String(offset),

@@ -7,6 +7,7 @@ import { ListingService } from '../application/ListingService';
 import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
 import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import { AdminSecureConfigService } from '../application/AdminSecureConfigService';
 
 const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
 let botInventorySyncRunning = false;
@@ -139,6 +140,87 @@ export class AdminMarketplaceController {
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async getSecretsStatus(req: Request, res: Response) {
+    try {
+      const status = await AdminSecureConfigService.listSecretStatus();
+      res.json(status);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async upsertSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede modificar credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { value, password } = req.body;
+      const result = await AdminSecureConfigService.upsertSecret(
+        key as string,
+        String(value || ''),
+        password,
+        user?.id,
+      );
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async revealSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede ver credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { password } = req.body;
+      const result = await AdminSecureConfigService.revealSecret(key as string, password, user?.id);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async deleteSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede eliminar credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { password } = req.body;
+      const result = await AdminSecureConfigService.deleteSecret(key as string, password, user?.id);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async getRuntimeSettings(req: Request, res: Response) {
+    try {
+      const settings = await AdminSecureConfigService.getRuntimeSettings();
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateRuntimeSettings(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      const settings = await AdminSecureConfigService.updateRuntimeSettings(req.body || {}, user?.id);
+      res.json(settings);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
   }
 

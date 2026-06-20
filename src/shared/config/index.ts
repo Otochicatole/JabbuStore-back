@@ -1,6 +1,23 @@
 import dotenv from 'dotenv';
+import { AdminSecureConfigService } from '../../modules/marketplace/application/AdminSecureConfigService';
 
 dotenv.config();
+
+const toBoolean = (value: string | undefined, fallback: boolean) => {
+  if (value === undefined || value === '') return fallback;
+  return value !== 'false';
+};
+
+const toNumber = (value: string | undefined, fallback: number) => {
+  if (value === undefined || value.trim() === '') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toPositiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Math.trunc(toNumber(value, fallback));
+  return parsed > 0 ? parsed : fallback;
+};
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -21,9 +38,9 @@ export const config = {
   /**
    * Habilitar o deshabilitar la sincronización automática periódica con Steam Web API.
    */
-  enableSync: process.env.ENABLE_SYNC !== 'false',
+  enableSync: process.env.ENABLE_SYNC === 'true',
   /** Habilitar/deshabilitar solo el scheduler automático del catálogo local de precios. */
-  enableItemsCatalogSync: process.env.ENABLE_ITEMS_CATALOG_SYNC !== 'false',
+  enableItemsCatalogSync: process.env.ENABLE_ITEMS_CATALOG_SYNC === 'true',
 
   /**
    * Configuración del indexado de floats (endpoint /steam/api/float/assets).
@@ -127,3 +144,52 @@ export const config = {
       .filter(Boolean),
   },
 };
+
+export async function applyRuntimeConfigOverrides() {
+  const runtime = await AdminSecureConfigService.getRuntimeSettings();
+
+  config.steamApiKey = await AdminSecureConfigService.getSecretValue('STEAM_API_KEY');
+  config.steamwebapiApiKey = await AdminSecureConfigService.getSecretValue('STEAMWEBAPI_API_KEY');
+
+  config.storeSyncIntervalMinutes = toPositiveInteger(
+    runtime.STORE_SYNC_INTERVAL_MINUTES,
+    config.storeSyncIntervalMinutes,
+  );
+  config.enableSync = toBoolean(runtime.ENABLE_SYNC, config.enableSync);
+  config.enableItemsCatalogSync = toBoolean(
+    runtime.ENABLE_ITEMS_CATALOG_SYNC,
+    config.enableItemsCatalogSync,
+  );
+  config.itemsCatalog.syncIntervalMinutes = toPositiveInteger(
+    runtime.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES,
+    config.itemsCatalog.syncIntervalMinutes,
+  );
+  config.marketSync.pageSize = toPositiveInteger(
+    runtime.MARKET_SYNC_PAGE_SIZE,
+    config.marketSync.pageSize,
+  );
+  config.marketSync.maxPages = toPositiveInteger(
+    runtime.MARKET_SYNC_MAX_PAGES,
+    config.marketSync.maxPages,
+  );
+  config.marketSync.minPrice = toNumber(
+    runtime.MARKET_SYNC_MIN_PRICE,
+    config.marketSync.minPrice,
+  );
+  if (
+    runtime.MARKET_SYNC_SORT === 'newest' ||
+    runtime.MARKET_SYNC_SORT === 'oldest' ||
+    runtime.MARKET_SYNC_SORT === 'lowest_float' ||
+    runtime.MARKET_SYNC_SORT === 'highest_float'
+  ) {
+    config.marketSync.sort = runtime.MARKET_SYNC_SORT;
+  }
+  if (
+    runtime.FLOAT_SYNC_SORT === 'newest' ||
+    runtime.FLOAT_SYNC_SORT === 'oldest' ||
+    runtime.FLOAT_SYNC_SORT === 'lowest_float' ||
+    runtime.FLOAT_SYNC_SORT === 'highest_float'
+  ) {
+    config.floatSync.sort = runtime.FLOAT_SYNC_SORT;
+  }
+}

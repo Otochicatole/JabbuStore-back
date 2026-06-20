@@ -21,7 +21,7 @@ function isPositiveNumber(value: unknown): value is number {
 
 export class SteamWebApiItemsPricesClient {
   constructor(
-    private apiKey = config.steamwebapiApiKey,
+    private apiKey = "",
     private market = config.itemsPrices.market,
     private currency = config.itemsPrices.currency,
     private cacheTtlMs = config.itemsPrices.cacheTtlMs,
@@ -46,7 +46,8 @@ export class SteamWebApiItemsPricesClient {
       return cached.result;
     }
 
-    if (!this.apiKey || !baseMarketHashName) {
+    const apiKey = this.apiKey || config.steamwebapiApiKey;
+    if (!apiKey || !baseMarketHashName) {
       return {
         item: cached?.result.item ?? null,
         ok: Boolean(cached?.result.item),
@@ -56,7 +57,7 @@ export class SteamWebApiItemsPricesClient {
     }
 
     const params = new URLSearchParams({
-      key: this.apiKey,
+      key: apiKey,
       market_hash_name: baseMarketHashName,
       currency: this.currency,
       with_groups: "true",

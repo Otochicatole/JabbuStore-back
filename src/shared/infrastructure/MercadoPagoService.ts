@@ -1,14 +1,21 @@
 import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
-
-// Inicializar el SDK oficial de Mercado Pago
-const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || "";
-
-export const mpConfig = new MercadoPagoConfig({
-  accessToken: accessToken,
-  options: { timeout: 5000 },
-});
+import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
 
 export class MercadoPagoService {
+  private static async getClientConfig() {
+    const accessToken = await AdminSecureConfigService.getSecretValue("MERCADOPAGO_ACCESS_TOKEN");
+    if (!accessToken) {
+      throw new Error(
+        "MERCADOPAGO_ACCESS_TOKEN no está configurado en secretos admin ni variables de entorno.",
+      );
+    }
+
+    return new MercadoPagoConfig({
+      accessToken,
+      options: { timeout: 5000 },
+    });
+  }
+
   /**
    * Crea una preferencia de Checkout Pro para una orden del sistema de forma segura.
    * Calcula el precio y los datos del lado del servidor usando la API de Mercado Pago.
@@ -18,13 +25,7 @@ export class MercadoPagoService {
     frontendUrl: string,
     backendUrl: string,
   ): Promise<string> {
-    if (!accessToken) {
-      throw new Error(
-        "MERCADOPAGO_ACCESS_TOKEN no está configurado en las variables de entorno.",
-      );
-    }
-
-    const preferenceClient = new Preference(mpConfig);
+    const preferenceClient = new Preference(await this.getClientConfig());
 
     // Mapear los ítems de la orden para Mercado Pago (con redondeo a 2 decimales para evitar fallos de API)
     const items = order.items.map((item: any) => ({
@@ -80,7 +81,7 @@ export class MercadoPagoService {
    * Obtiene los detalles de un pago directamente desde Mercado Pago de forma segura para validar el estado.
    */
   static async getPaymentDetails(paymentId: string) {
-    const paymentClient = new Payment(mpConfig);
+    const paymentClient = new Payment(await this.getClientConfig());
     console.log(
       `[Mercado Pago] Verificando detalles del Pago ID: ${paymentId}`,
     );

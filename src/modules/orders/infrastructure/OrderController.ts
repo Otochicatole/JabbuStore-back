@@ -26,6 +26,7 @@ import {
   resolvePaymentProofPath,
   savePaymentProof,
 } from "./PaymentProofStorage";
+import { AdminSecureConfigService } from "../../marketplace/application/AdminSecureConfigService";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
@@ -552,7 +553,7 @@ export class OrderController {
       );
 
       const { NOWPaymentsService } = require("../../../shared/infrastructure/NOWPaymentsService");
-      if (!NOWPaymentsService.verifySignature(rawBody, signature)) {
+      if (!(await NOWPaymentsService.verifySignature(rawBody, signature))) {
         console.warn(
           "[NOWPayments Webhook] Firma IPN inválida. Posible intento de fraude.",
         );
@@ -762,7 +763,7 @@ export class OrderController {
       );
 
       // FIRMA DE WEBHOOK DE MERCADO PAGO (Fórmula oficial HMAC-SHA256 con Webhook Secret)
-      const webhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+      const webhookSecret = await AdminSecureConfigService.getSecretValue("MERCADOPAGO_WEBHOOK_SECRET");
       const xSignature = req.headers["x-signature"] as string;
       const xRequestId = req.headers["x-request-id"] as string;
 

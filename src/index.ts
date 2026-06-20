@@ -7,6 +7,7 @@ import session from 'express-session';
 import passport from 'passport';
 import { rateLimit } from 'express-rate-limit';
 import { configurePassport } from './modules/auth/infrastructure/PassportConfig';
+import { applyRuntimeConfigOverrides } from './shared/config';
 import authRoutes from './modules/auth/infrastructure/AuthRoutes';
 import userRoutes from './modules/users/infrastructure/UserRoutes';
 import adminRoutes from './modules/admins/infrastructure/AdminRoutes';
@@ -56,7 +57,6 @@ app.use(
 );
 app.use(passport.initialize());
 app.use(passport.session());
-configurePassport();
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -85,14 +85,24 @@ import { startMarketSyncScheduler } from './modules/market/infrastructure/Market
 import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
 import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-  // Inventario físico de bots Steam
-  startStoreSyncScheduler();
-  // Catálogo local de precios de bots vía /steam/api/items
-  startItemsCatalogSyncScheduler();
-  // Catálogo de reventa YouPin vía /steam/api/float/assets (precios incluidos por asset)
-  startMarketSyncScheduler();
-  // Sincronizador periódico de floats del plan Float Small
-  startMarketFloatsSyncScheduler();
+async function bootstrap() {
+  await applyRuntimeConfigOverrides();
+  await configurePassport();
+
+  app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+    // Inventario físico de bots Steam
+    startStoreSyncScheduler();
+    // Catálogo local de precios de bots vía /steam/api/items
+    startItemsCatalogSyncScheduler();
+    // Catálogo de reventa YouPin vía /steam/api/float/assets (precios incluidos por asset)
+    startMarketSyncScheduler();
+    // Sincronizador periódico de floats del plan Float Small
+    startMarketFloatsSyncScheduler();
+  });
+}
+
+bootstrap().catch((error) => {
+  console.error("[Bootstrap] Error iniciando backend:", error);
+  process.exit(1);
 });

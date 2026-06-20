@@ -39,7 +39,7 @@ function rowsFromPayload(payload: unknown): SteamWebApiItemsCatalogRow[] {
 
 export class SteamWebApiItemsCatalogClient {
   constructor(
-    private apiKey = config.steamwebapiApiKey,
+    private apiKey = "",
     private market = config.itemsCatalog.market,
     private currency = config.itemsCatalog.currency,
     private pageSize = config.itemsCatalog.pageSize,
@@ -50,7 +50,8 @@ export class SteamWebApiItemsCatalogClient {
   async fetchCatalog(
     _options: FetchItemsCatalogOptions = {},
   ): Promise<FetchItemsCatalogResult> {
-    if (!this.apiKey) {
+    const apiKey = this.apiKey || config.steamwebapiApiKey;
+    if (!apiKey) {
       return {
         ok: false,
         snapshot: null,
@@ -66,7 +67,7 @@ export class SteamWebApiItemsCatalogClient {
 
     for (let page = 1; page <= this.maxPages; page++) {
       const params = new URLSearchParams({
-        key: this.apiKey,
+        key: apiKey,
         game: "cs2",
         page: String(page),
         max: String(this.pageSize),
