@@ -120,6 +120,21 @@ export class TicketService {
     return ticket;
   }
 
+  static async notificationContext(ticketId: string) {
+    const ticket = await prisma.orderTicket.findUnique({
+      where: { id: ticketId },
+      select: {
+        id: true,
+        orderId: true,
+        subject: true,
+        userId: true,
+        user: { select: { name: true, avatar: true } },
+      },
+    });
+    if (!ticket) throw new Error('TICKET_NOT_FOUND');
+    return ticket;
+  }
+
   static async messages(ticketId: string, actor: TicketActor, cursor?: string) {
     await this.assertAccess(ticketId, actor);
     const messages = await prisma.ticketMessage.findMany({

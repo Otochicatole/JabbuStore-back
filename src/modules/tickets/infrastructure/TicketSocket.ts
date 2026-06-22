@@ -92,9 +92,25 @@ export function initializeTicketSocket(server: HttpServer) {
         if (!parsed.success) throw new Error('INVALID_MESSAGE');
         sentAt.push(now);
         const message = await TicketService.sendMessage(actor, parsed.data);
+        const ticket = await TicketService.notificationContext(parsed.data.ticketId);
         io?.to(`ticket:${parsed.data.ticketId}`).emit('message:new', message);
-        io?.to('ticket-admins').to(`user:${(await TicketService.assertAccess(parsed.data.ticketId, actor)).userId}`)
+        io?.to('ticket-admins').to(`user:${ticket.userId}`)
           .emit('ticket:updated', { ticketId: parsed.data.ticketId });
+        const recipientRoom = actor.role === 'USER'
+          ? 'ticket-admins'
+          : `user:${ticket.userId}`;
+        socket.to(recipientRoom).emit('notification:new', {
+          messageId: message.id,
+          ticketId: ticket.id,
+          orderId: ticket.orderId,
+          subject: ticket.subject,
+          senderName: actor.role === 'USER'
+            ? ticket.user.name || 'Steam User'
+            : 'Soporte JabbuStore',
+          senderAvatar: actor.role === 'USER' ? ticket.user.avatar : null,
+          preview: message.body.slice(0, 160),
+          createdAt: message.createdAt,
+        });
         ack?.({ ok: true, data: message });
       } catch (error) {
         ack?.({ ok: false, error: error instanceof Error ? error.message : 'SEND_FAILED' });
@@ -118,5 +134,25 @@ export function emitTicketStatus(ticket: { id: string; userId: string; status: s
 export function emitTicketUpdated(ticket: { id: string; userId: string }) {
   io?.to('ticket-admins').to(`user:${ticket.userId}`).emit('ticket:updated', {
     ticketId: ticket.id,
+  });
+}
+
+export function emitTicketCreatedNotification(ticket: {
+  id: string;
+  orderId: string;
+  subject: string;
+  user?: { name?: string | null; avatar?: string | null } | null;
+  lastMessage?: { id: string; body: string; createdAt: Date | string } | null;
+}) {
+  if (!ticket.lastMessage) return;
+  io?.to('ticket-admins').emit('notification:new', {
+    messageId: ticket.lastMessage.id,
+    ticketId: ticket.id,
+    orderId: ticket.orderId,
+    subject: ticket.subject,
+    senderName: ticket.user?.name || 'Steam User',
+    senderAvatar: ticket.user?.avatar || null,
+    preview: ticket.lastMessage.body.slice(0, 160),
+    createdAt: ticket.lastMessage.createdAt,
   });
 }

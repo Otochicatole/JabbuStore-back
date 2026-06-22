@@ -8,7 +8,11 @@ import {
 } from '../../../shared/infrastructure/middlewares/authMiddleware';
 import { TicketService, type TicketActor } from '../application/TicketService';
 import { createTicketSchema, ticketIdSchema, ticketStatusSchema } from './ticketSchemas';
-import { emitTicketStatus, emitTicketUpdated } from './TicketSocket';
+import {
+  emitTicketCreatedNotification,
+  emitTicketStatus,
+  emitTicketUpdated,
+} from './TicketSocket';
 
 const router = Router();
 const createLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true });
@@ -30,6 +34,7 @@ router.post('/', ticketUserAuth, createLimiter, async (req, res) => {
   try {
     const ticket = await TicketService.create(actorFrom(req).id, parsed.data);
     emitTicketUpdated(ticket);
+    emitTicketCreatedNotification(ticket);
     return res.status(201).json(ticket);
   } catch (error) {
     return errorResponse(res, error);
