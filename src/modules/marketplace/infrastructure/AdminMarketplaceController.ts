@@ -293,6 +293,11 @@ export class AdminMarketplaceController {
     })();
   }
 
+  static async getSyncBotsInventoryStatus(req: Request, res: Response) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ running: botInventorySyncRunning });
+  }
+
   static async updateBot(req: Request, res: Response) {
     try {
       const { id } = req.params;

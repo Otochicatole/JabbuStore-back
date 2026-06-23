@@ -26,6 +26,7 @@ router.patch('/settings/runtime-config', AdminMarketplaceController.updateRuntim
 // Bots
 router.get('/bots', AdminMarketplaceController.getBots);
 router.post('/bots/sync', AdminMarketplaceController.syncBotsInventory);
+router.get('/bots/sync/status', AdminMarketplaceController.getSyncBotsInventoryStatus);
 router.post('/bots', AdminMarketplaceController.createBot);
 router.patch('/bots/:id', AdminMarketplaceController.updateBot);
 router.patch('/bots/:id/deactivate', AdminMarketplaceController.deactivateBot);
