@@ -209,4 +209,18 @@ export class TicketService {
         : { status, closedAt: null, closedByAdminId: null },
     });
   }
+
+  static async get(ticketId: string, actor: TicketActor) {
+    await this.assertAccess(ticketId, actor);
+    const ticket = await prisma.orderTicket.findUnique({
+      where: { id: ticketId },
+      include: {
+        order: { select: { id: true, type: true, status: true, totalPrice: true } },
+        user: { select: { id: true, name: true, steamId: true, avatar: true } },
+        messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+    if (!ticket) throw new Error('TICKET_NOT_FOUND');
+    return ticketDto(ticket, actor);
+  }
 }

@@ -81,6 +81,17 @@ router.post('/socket-token', ticketActorAuth, (req, res) => {
   });
 });
 
+router.get('/:id', ticketActorAuth, async (req, res) => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const parsed = ticketIdSchema.safeParse(id);
+  if (!parsed.success) return res.status(400).json({ error: 'INVALID_TICKET' });
+  try {
+    return res.json(await TicketService.get(parsed.data, actorFrom(req)));
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
+
 router.get('/:id/messages', ticketActorAuth, async (req, res) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const parsed = ticketIdSchema.safeParse(id);

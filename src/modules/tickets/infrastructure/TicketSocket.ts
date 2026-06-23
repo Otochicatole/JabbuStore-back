@@ -72,10 +72,13 @@ export function initializeTicketSocket(server: HttpServer) {
       try {
         const parsed = ticketIdSchema.safeParse((payload as any)?.ticketId);
         if (!parsed.success) throw new Error('INVALID_TICKET');
-        await TicketService.markRead(parsed.data, actor);
+        const ticket = await TicketService.markRead(parsed.data, actor);
         io?.to(`ticket:${parsed.data}`).emit('ticket:read', {
           ticketId: parsed.data,
           actor: actor.role === 'USER' ? 'USER' : 'ADMIN',
+        });
+        io?.to('ticket-admins').to(`user:${ticket.userId}`).emit('ticket:updated', {
+          ticketId: parsed.data,
         });
         ack?.({ ok: true });
       } catch (error) {
