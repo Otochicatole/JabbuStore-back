@@ -1201,4 +1201,84 @@ export class OrderController {
       res.status(500).json({ error: err.message });
     }
   }
+
+  async validateCart(req: Request, res: Response) {
+    try {
+      const { itemIds } = req.body;
+      if (!Array.isArray(itemIds)) {
+        return res.status(400).json({ error: "itemIds must be an array of strings" });
+      }
+
+      const { prisma } = require("../../../shared/infrastructure/PrismaClient");
+
+      const youpinFloatIds = itemIds
+        .filter((id: string) => id?.startsWith("youpin-"))
+        .map((id: string) => id.replace(/^youpin-/, ""));
+      const botIds = itemIds.filter(
+        (id: string) => id && !id.startsWith("market-") && !id.startsWith("youpin-"),
+      );
+      const marketNames = itemIds
+        .filter((id: string) => id?.startsWith("market-"))
+        .map((id: string) => id.replace(/^market-/, ""));
+
+      // 1. Validar items de bot
+      const storeItems =
+        botIds.length > 0
+          ? await prisma.storeItem.findMany({
+              where: { assetId: { in: botIds } },
+            })
+          : [];
+
+      // Filtrar items cuyos bots estén activos y habilitados
+      let activeBotIds: string[] = [];
+      if (storeItems.length > 0) {
+        const activeBots = await prisma.bot.findMany({
+          where: { isActive: true },
+          select: { steamId: true },
+        });
+        const activeSteamIds = activeBots.map((b: any) => b.steamId);
+        activeBotIds = storeItems
+          .filter((item: any) => activeSteamIds.includes(item.botSteamId))
+          .map((item: any) => item.assetId);
+      }
+
+      // 2. Validar listings de mercado (legacy)
+      const marketItems =
+        marketNames.length > 0
+          ? await prisma.marketListing.findMany({
+              where: { name: { in: marketNames } },
+              select: { name: true }
+            })
+          : [];
+      const validMarketNames = marketItems.map((i: any) => `market-${i.name}`);
+
+      // 3. Validar float items de YouPin (bajo pedido)
+      const youpinFloatItems =
+        youpinFloatIds.length > 0
+          ? await prisma.floatItem.findMany({
+              where: { id: { in: youpinFloatIds }, available: true },
+              select: { id: true }
+            })
+          : [];
+      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.id}`);
+
+      // Combinar todos los IDs válidos
+      const validSet = new Set<string>([
+        ...activeBotIds,
+        ...validMarketNames,
+        ...validYoupinIds,
+      ]);
+
+      // Encontrar IDs inválidos
+      const invalidIds = itemIds.filter((id: string) => !validSet.has(id));
+
+      return res.json({
+        valid: invalidIds.length === 0,
+        invalidIds,
+      });
+    } catch (err: any) {
+      console.error("[validateCart] Error:", err);
+      return res.status(500).json({ error: err.message || "Error validating cart" });
+    }
+  }
 }

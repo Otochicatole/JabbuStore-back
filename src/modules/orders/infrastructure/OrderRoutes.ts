@@ -43,6 +43,9 @@ router.post("/sell", authMiddleware, (req, res) =>
 router.post("/validate", authMiddleware, (req, res) =>
   orderController.validateOrder(req, res),
 );
+router.post("/validate-cart", (req, res) =>
+  orderController.validateCart(req, res),
+);
 router.get("/me", authMiddleware, (req, res) =>
   orderController.getMyOrders(req, res),
 );
