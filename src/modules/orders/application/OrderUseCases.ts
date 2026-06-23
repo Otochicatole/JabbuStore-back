@@ -52,6 +52,13 @@ export class CreatePurchaseOrderUseCase {
       throw new Error("No items provided for the order");
     }
 
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
+      throw new Error("Para realizar compras debes tener registrado tu Email y Trade URL en tu perfil.");
+    }
+
     // Separar bot items, assets YouPin individuales y listings legacy
     const youpinFloatIds = assetIds
       .filter((id) => id.startsWith("youpin-"))
@@ -244,6 +251,13 @@ export class CreateSellOrderUseCase {
   ): Promise<Order> {
     if (!items || items.length === 0) {
       throw new Error("No items provided for the sell order");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
+      throw new Error("Para realizar ventas debes tener registrado tu Email y Trade URL en tu perfil.");
     }
 
     const settings = await getAdminSettingsOrDefaults();
