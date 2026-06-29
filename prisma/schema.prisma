@@ -25,6 +25,7 @@ model User {
   trades     Trade[]
   supportTickets OrderTicket[]
   ticketMessages TicketMessage[] @relation("UserTicketMessages")
+  notifications  Notification[]
 }
 
 model Admin {
@@ -37,6 +38,7 @@ model Admin {
   updatedAt DateTime @updatedAt
   closedTickets OrderTicket[] @relation("ClosedTickets")
   ticketMessages TicketMessage[] @relation("AdminTicketMessages")
+  notifications  Notification[]
 }
 
 model StoreItem {
@@ -357,4 +359,22 @@ model FloatItem {
   resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
 
   @@map("floats")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adminId   String?
+  admin     Admin?   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  type      String   // e.g. "TICKET_MESSAGE", "ORDER_STATUS", "SYSTEM"
+  read      Boolean  @default(false)
+  link      String?  // Frontend redirection path
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, read])
+  @@index([adminId, read])
 }

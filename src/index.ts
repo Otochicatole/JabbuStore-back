@@ -19,7 +19,9 @@ import orderRoutes from './modules/orders/infrastructure/OrderRoutes';
 import marketplaceRoutes from './modules/marketplace/infrastructure/MarketplaceRoutes';
 import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMarketplaceRoutes';
 import ticketRoutes from './modules/tickets/infrastructure/TicketRoutes';
+import notificationRoutes from './modules/notifications/infrastructure/NotificationRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
+
 
 dotenv.config();
 
@@ -73,6 +75,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/admin/marketplace', adminMarketplaceRoutes);
 app.use('/api/tickets', ticketRoutes);
+app.use('/api/notifications', notificationRoutes);
+
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
 app.use(errorHandler);

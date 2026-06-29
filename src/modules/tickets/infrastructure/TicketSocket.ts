@@ -159,3 +159,13 @@ export function emitTicketCreatedNotification(ticket: {
     createdAt: ticket.lastMessage.createdAt,
   });
 }
+
+export function sendDbNotification(notification: any) {
+  if (!io) return;
+  if (notification.userId) {
+    io.to(`user:${notification.userId}`).emit('notification:new_db', notification);
+  } else {
+    io.to('ticket-admins').emit('notification:new_db', notification);
+  }
+}
+

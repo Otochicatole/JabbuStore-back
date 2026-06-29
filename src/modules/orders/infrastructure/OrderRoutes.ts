@@ -12,6 +12,7 @@ import {
   authMiddleware,
   adminOnly,
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
+import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { uploadPaymentProof } from "./PaymentProofStorage";
 
 const router = Router();
@@ -23,7 +24,11 @@ const createPurchaseOrderUseCase = new CreatePurchaseOrderUseCase(
 const createSellOrderUseCase = new CreateSellOrderUseCase(orderRepository);
 const getUserOrdersUseCase = new GetUserOrdersUseCase(orderRepository);
 const getAllOrdersUseCase = new GetAllOrdersUseCase(orderRepository);
-const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(orderRepository);
+const prismaNotificationRepo = new PrismaNotificationRepository();
+const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(
+  orderRepository,
+  prismaNotificationRepo,
+);
 
 const orderController = new OrderController(
   createPurchaseOrderUseCase,

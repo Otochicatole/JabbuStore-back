@@ -5,6 +5,8 @@ import {
   OrderStatus,
   OrderType,
 } from "../domain/Order";
+import { INotificationRepository } from "../../notifications/domain/Notification";
+import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
 import { BotService } from "../../marketplace/application/BotService";
@@ -404,13 +406,51 @@ export class GetAllOrdersUseCase {
 }
 
 export class UpdateOrderStatusUseCase {
-  constructor(private orderRepository: IOrderRepository) {}
+  constructor(
+    private orderRepository: IOrderRepository,
+    private notificationRepository?: INotificationRepository
+  ) {}
 
   async execute(orderId: string, status: OrderStatus): Promise<Order> {
     const order = await this.orderRepository.updateStatus(orderId, status);
 
     // Dispatch webhook status change notification
     WebhookService.sendOrderNotification(order, "order.status_updated");
+
+    // Crear notificación persistente para el cliente
+    if (this.notificationRepository) {
+      try {
+        const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
+        
+        let title = 'Estado de orden actualizado';
+        let content = `El estado de tu orden #${order.id.slice(0, 8)} cambió a ${status}.`;
+        
+        if (status === OrderStatus.PAID) {
+          title = 'Orden pagada con éxito';
+          content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
+        } else if (status === OrderStatus.COMPLETED) {
+          title = 'Orden completada';
+          content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
+        } else if (status === OrderStatus.CANCELLED) {
+          title = 'Orden cancelada';
+          content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
+        } else if (status === OrderStatus.TRADE_PENDING) {
+          title = 'Intercambio de Steam pendiente';
+          content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+        }
+
+        await createNotificationUseCase.execute({
+          userId: order.userId,
+          adminId: null,
+          title,
+          content,
+          type: 'ORDER_STATUS',
+          link: '/purchases',
+        });
+      } catch (err) {
+        console.error('[UpdateOrderStatusUseCase] Error creating database notification:', err);
+      }
+    }
 
     return order;
   }
