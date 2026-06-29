@@ -86,6 +86,23 @@ export class PrismaNotificationRepository implements INotificationRepository {
     });
   }
 
+  async clearAllForUser(userId: string): Promise<void> {
+    await prisma.notification.deleteMany({
+      where: { userId },
+    });
+  }
+
+  async clearAllForAdmin(adminId: string): Promise<void> {
+    await prisma.notification.deleteMany({
+      where: {
+        OR: [
+          { adminId },
+          { adminId: null, userId: null },
+        ],
+      },
+    });
+  }
+
   async delete(id: string): Promise<void> {
     await prisma.notification.delete({
       where: { id },

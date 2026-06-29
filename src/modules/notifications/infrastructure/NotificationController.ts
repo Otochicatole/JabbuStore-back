@@ -3,13 +3,15 @@ import {
   GetNotificationsUseCase,
   MarkNotificationAsReadUseCase,
   MarkAllNotificationsAsReadUseCase,
+  ClearAllNotificationsUseCase,
 } from '../application/NotificationUseCases';
 
 export class NotificationController {
   constructor(
     private getNotificationsUseCase: GetNotificationsUseCase,
     private markNotificationAsReadUseCase: MarkNotificationAsReadUseCase,
-    private markAllNotificationsAsReadUseCase: MarkAllNotificationsAsReadUseCase
+    private markAllNotificationsAsReadUseCase: MarkAllNotificationsAsReadUseCase,
+    private clearAllNotificationsUseCase: ClearAllNotificationsUseCase
   ) {}
 
   async getMyNotifications(req: Request, res: Response) {
@@ -65,6 +67,21 @@ export class NotificationController {
       return res.json({ ok: true });
     } catch (error) {
       console.error('[NotificationController] Error in markAllAsRead:', error);
+      return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
+    }
+  }
+
+  async clearAll(req: Request, res: Response) {
+    try {
+      const actor = (req as any).user;
+      if (!actor) {
+        return res.status(401).json({ error: 'UNAUTHORIZED' });
+      }
+
+      await this.clearAllNotificationsUseCase.execute(actor);
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error('[NotificationController] Error in clearAll:', error);
       return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
     }
   }

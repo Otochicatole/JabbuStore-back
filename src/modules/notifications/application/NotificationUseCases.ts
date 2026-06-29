@@ -100,3 +100,15 @@ export class MarkAllNotificationsAsReadUseCase {
     }
   }
 }
+
+export class ClearAllNotificationsUseCase {
+  constructor(private notificationRepository: INotificationRepository) {}
+
+  async execute(actor: { id: string; role: string }): Promise<void> {
+    if (actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN') {
+      await this.notificationRepository.clearAllForAdmin(actor.id);
+    } else {
+      await this.notificationRepository.clearAllForUser(actor.id);
+    }
+  }
+}

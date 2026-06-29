@@ -21,6 +21,8 @@ export interface INotificationRepository {
   markAsRead(id: string): Promise<Notification>;
   markAllAsReadForUser(userId: string): Promise<void>;
   markAllAsReadForAdmin(adminId: string): Promise<void>;
+  clearAllForUser(userId: string): Promise<void>;
+  clearAllForAdmin(adminId: string): Promise<void>;
   delete(id: string): Promise<void>;
   findExistingUnread(
     userId: string | null,
