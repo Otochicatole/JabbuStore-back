@@ -134,10 +134,20 @@ export class GetUserInventoryUseCase {
       // Filtrar únicamente los artículos que son intercambiables (Enfoque B)
       const tradableItems = parsedItems.filter(item => item.tradable === true);
 
+      // Mapear precios cacheados de la base de datos a los ítems frescos para habilitar las reglas de preservación y protección de precios
+      const cachedMap = new Map(cachedInventory.map((i) => [i.assetId, i]));
+      const itemsWithCachedPrices = tradableItems.map((item) => {
+        const cached = cachedMap.get(item.assetId);
+        return {
+          ...item,
+          price: cached && cached.price > 0 ? cached.price : 0,
+        };
+      });
+
       // 5. Enriquecer los ítems con precios acordes al mercado real
-      console.log(`[User Inventory Sync] Enriching ${tradableItems.length} tradable items with market prices...`);
+      console.log(`[User Inventory Sync] Enriching ${itemsWithCachedPrices.length} tradable items with market prices...`);
       const pricedItems = await this.repriceUserInventoryFromCatalog(
-        tradableItems,
+        itemsWithCachedPrices,
         'fresh-steam',
       );
 
@@ -181,7 +191,7 @@ export class GetUserInventoryUseCase {
 
     return PriceEnrichmentService.enrichItemsWithMarketPrices(items, {
       preserveExistingWhenMissing: true,
-      useFallbackWhenMissing: false,
+      useFallbackWhenMissing: true,
     });
   }
 
