@@ -1,15 +1,50 @@
 import { Request, Response } from "express";
+import fs from "fs";
 import {
   CreatePurchaseOrderUseCase,
   CreateSellOrderUseCase,
   GetUserOrdersUseCase,
   GetAllOrdersUseCase,
   UpdateOrderStatusUseCase,
+  findOpenSellOrderForAsset,
 } from "../application/OrderUseCases";
-import { OrderStatus } from "../domain/Order";
+import { OrderStatus, OrderType } from "../domain/Order";
 import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
 import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
+import { enrichOrderItemsWithYoupinLinks } from "./youpinLink";
+import { BotService } from "../../marketplace/application/BotService";
+import {
+  getAdminSettingsOrDefaults,
+  getBotCheckoutPrice,
+  getMarketCheckoutPrice,
+  getUserSellCheckoutPrice,
+  roundMoney,
+} from "../application/OrderPricingService";
+import {
+  PaymentProofMetadata,
+  resolvePaymentProofPath,
+  savePaymentProof,
+} from "./PaymentProofStorage";
+import { AdminSecureConfigService } from "../../marketplace/application/AdminSecureConfigService";
+
+const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
+const PAYMENT_AMOUNT_TOLERANCE = 0.01;
+
+type OrderMetadataWithProofs = Record<string, any> & {
+  buyerPaymentProof?: PaymentProofMetadata;
+  adminPaymentProof?: PaymentProofMetadata;
+};
+
+interface ConfirmPaymentOptions {
+  orderId: string;
+  provider: "paypal" | "mercadopago" | "nowpayments";
+  metadataKey: "paypalPaymentId" | "mpPaymentId" | "nowpaymentsPaymentId";
+  paymentId: string;
+  paidAmount?: number | null;
+  currency?: string | null;
+  expectedCurrency?: string;
+}
 
 export class OrderController {
   constructor(
@@ -20,6 +55,78 @@ export class OrderController {
     private updateOrderStatusUseCase: UpdateOrderStatusUseCase,
   ) {}
 
+  private async transitionOrderToTradePendingFromPayment({
+    orderId,
+    provider,
+    metadataKey,
+    paymentId,
+    paidAmount,
+    currency,
+    expectedCurrency = "USD",
+  }: ConfirmPaymentOptions): Promise<{ updated: boolean; reason?: string }> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      console.warn(`[Payment Confirm] Orden ${orderId} no encontrada para ${provider}.`);
+      return { updated: false, reason: "order_not_found" };
+    }
+
+    if (order.status !== "PENDING_PAYMENT") {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} está en ${order.status}; no se confirma de nuevo.`,
+      );
+      return { updated: false, reason: "invalid_status" };
+    }
+
+    if (currency && currency.toUpperCase() !== expectedCurrency.toUpperCase()) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} rechazada por moneda ${currency}; esperado ${expectedCurrency}.`,
+      );
+      return { updated: false, reason: "currency_mismatch" };
+    }
+
+    if (
+      typeof paidAmount === "number" &&
+      Number.isFinite(paidAmount) &&
+      Math.abs(paidAmount - order.totalPrice) > PAYMENT_AMOUNT_TOLERANCE
+    ) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} rechazada por monto ${paidAmount}; esperado ${order.totalPrice}.`,
+      );
+      return { updated: false, reason: "amount_mismatch" };
+    }
+
+    const currentMetadata =
+      order.metadata && typeof order.metadata === "object" && !Array.isArray(order.metadata)
+        ? (order.metadata as Record<string, any>)
+        : {};
+
+    const existingPaymentId = currentMetadata[metadataKey];
+    if (existingPaymentId && String(existingPaymentId) !== String(paymentId)) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} ya tiene ${metadataKey}=${existingPaymentId}; se rechazó ${paymentId}.`,
+      );
+      return { updated: false, reason: "payment_id_mismatch" };
+    }
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: "TRADE_PENDING",
+        metadata: {
+          ...currentMetadata,
+          [metadataKey]: String(paymentId),
+          paymentProvider: provider,
+          paidAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    return { updated: true };
+  }
+
   async createPurchaseOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
@@ -29,6 +136,20 @@ export class OrderController {
         return res
           .status(400)
           .json({ error: "itemIds must be an array of string" });
+      }
+
+      const settings = await getAdminSettingsOrDefaults();
+      if (paymentMethod === "mercado_pago" && !settings.mercadoPagoEnabled) {
+        return res.status(400).json({ error: "Mercado Pago no está habilitado." });
+      }
+      if (paymentMethod === "paypal" && !settings.paypalEnabled) {
+        return res.status(400).json({ error: "PayPal no está habilitado." });
+      }
+      if (paymentMethod === "nowpayments" && !settings.nowpaymentsEnabled) {
+        return res.status(400).json({ error: "NOWPayments no está habilitado." });
+      }
+      if (paymentMethod === "manual_transfer" && !settings.manualTransferEnabled) {
+        return res.status(400).json({ error: "La transferencia manual no está habilitada." });
       }
 
       const order = await this.createPurchaseOrderUseCase.execute(
@@ -149,6 +270,222 @@ export class OrderController {
     }
   }
 
+  async cancelPaymentOrder(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado para cancelar esta orden" });
+      }
+
+      if (order.type !== OrderType.BUY) {
+        return res.status(400).json({ error: "Solo se pueden cancelar órdenes de compra desde el retorno de pago" });
+      }
+
+      if (order.status === OrderStatus.CANCELLED) {
+        return res.json({ cancelled: true, order });
+      }
+
+      if (order.status !== OrderStatus.PENDING_PAYMENT) {
+        return res.json({
+          cancelled: false,
+          reason: "order_not_pending",
+          order,
+        });
+      }
+
+      const updatedOrder = await this.updateOrderStatusUseCase.execute(
+        id,
+        OrderStatus.CANCELLED,
+      );
+
+      return res.json({ cancelled: true, order: updatedOrder });
+    } catch (error: any) {
+      console.error("[Cancel Payment Order] Error:", error);
+      return res.status(500).json({ error: error.message || "Error al cancelar la orden" });
+    }
+  }
+
+  async uploadBuyerPaymentProof(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user.id;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado para subir comprobante a esta orden" });
+      }
+
+      if (order.type !== OrderType.BUY) {
+        return res.status(400).json({ error: "El comprobante del comprador solo aplica a órdenes de compra" });
+      }
+
+      if (
+        ![
+          OrderStatus.PENDING_PAYMENT,
+          OrderStatus.PAID,
+          OrderStatus.TRADE_PENDING,
+          OrderStatus.COMPLETED,
+        ].includes(order.status as OrderStatus)
+      ) {
+        return res.status(400).json({ error: "Esta orden ya no permite cargar comprobante de pago" });
+      }
+
+      const proof = await savePaymentProof(id, "buyer", req.file);
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          metadata: {
+            ...metadata,
+            buyerPaymentProof: proof,
+          } as any,
+        },
+        include: { items: true },
+      });
+
+      return res.status(201).json({
+        proof: {
+          ...proof,
+          storageKey: undefined,
+        },
+        order: updatedOrder,
+      });
+    } catch (error: any) {
+      console.error("[Buyer Payment Proof] Error:", error);
+      return res.status(400).json({ error: error.message || "No se pudo subir el comprobante" });
+    }
+  }
+
+  async uploadAdminPaymentProof(req: Request, res: Response) {
+    try {
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+      if (!id) {
+        return res.status(400).json({ error: "Order id is required" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.type !== OrderType.SELL) {
+        return res.status(400).json({ error: "El comprobante del admin solo aplica a órdenes de venta" });
+      }
+
+      if (![OrderStatus.PAID, OrderStatus.COMPLETED].includes(order.status as OrderStatus)) {
+        return res.status(400).json({ error: "Subí el comprobante cuando el pago al usuario esté enviado o completado" });
+      }
+
+      const proof = await savePaymentProof(id, "admin", req.file);
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          metadata: {
+            ...metadata,
+            adminPaymentProof: proof,
+          } as any,
+        },
+        include: { items: true },
+      });
+
+      return res.status(201).json({
+        proof: {
+          ...proof,
+          storageKey: undefined,
+        },
+        order: updatedOrder,
+      });
+    } catch (error: any) {
+      console.error("[Admin Payment Proof] Error:", error);
+      return res.status(400).json({ error: error.message || "No se pudo subir el comprobante" });
+    }
+  }
+
+  async getPaymentProof(req: Request, res: Response) {
+    try {
+      const requester = (req as any).user;
+      const rawId = req.params.id;
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+      const rawProofType = req.params.proofType;
+      const proofType = Array.isArray(rawProofType) ? rawProofType[0] : rawProofType;
+
+      if (!id || (proofType !== "buyer" && proofType !== "admin")) {
+        return res.status(400).json({ error: "Parámetros de comprobante inválidos" });
+      }
+
+      const order = await prisma.order.findUnique({ where: { id } });
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      const isAdmin = requester?.role === "ADMIN" || requester?.role === "SUPER_ADMIN";
+      const isOwner = order.userId === requester?.id;
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: "No autorizado para ver este comprobante" });
+      }
+
+      const metadata = (order.metadata && typeof order.metadata === "object"
+        ? order.metadata
+        : {}) as OrderMetadataWithProofs;
+      const proof = proofType === "buyer"
+        ? metadata.buyerPaymentProof
+        : metadata.adminPaymentProof;
+
+      if (!proof) {
+        return res.status(404).json({ error: "Comprobante no encontrado" });
+      }
+
+      const proofPath = resolvePaymentProofPath(proof);
+      await fs.promises.access(proofPath, fs.constants.R_OK);
+
+      res.setHeader("Content-Type", proof.mimeType);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(proof.fileName)}"`,
+      );
+      res.setHeader("X-Content-Type-Options", "nosniff");
+
+      return fs.createReadStream(proofPath).pipe(res);
+    } catch (error: any) {
+      console.error("[Get Payment Proof] Error:", error);
+      return res.status(404).json({ error: error.message || "No se pudo abrir el comprobante" });
+    }
+  }
+
   async getMyOrders(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
@@ -163,7 +500,14 @@ export class OrderController {
   async getAllOrders(req: Request, res: Response) {
     try {
       const orders = await this.getAllOrdersUseCase.execute();
-      res.json(orders);
+      const enrichedOrders = await Promise.all(
+        orders.map(async (order: any) => ({
+          ...order,
+          items: await enrichOrderItemsWithYoupinLinks(order.items),
+        })),
+      );
+
+      res.json(enrichedOrders);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -179,13 +523,23 @@ export class OrderController {
         return res.status(400).json({ error: "Invalid order status" });
       }
 
+      const existingOrder = await prisma.order.findUnique({
+        where: { id: id as string },
+        select: { id: true },
+      });
+
+      if (!existingOrder) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
       const order = await this.updateOrderStatusUseCase.execute(
         id as string,
         status as OrderStatus,
       );
       res.json(order);
     } catch (error: any) {
-      res.status(400).json({ error: error.message });
+      console.error("[Orders] Error updating order status:", error);
+      res.status(500).json({ error: error.message || "Error updating order status" });
     }
   }
 
@@ -199,7 +553,7 @@ export class OrderController {
       );
 
       const { NOWPaymentsService } = require("../../../shared/infrastructure/NOWPaymentsService");
-      if (!NOWPaymentsService.verifySignature(rawBody, signature)) {
+      if (!(await NOWPaymentsService.verifySignature(rawBody, signature))) {
         console.warn(
           "[NOWPayments Webhook] Firma IPN inválida. Posible intento de fraude.",
         );
@@ -221,29 +575,18 @@ export class OrderController {
           `[NOWPayments Webhook] ¡Pago aprobado! Transicionando Orden ID: ${order_id} a TRADE_PENDING y guardando ID de Operación.`,
         );
         try {
-          const order = await prisma.order.findUnique({
-            where: { id: order_id },
-          });
-          const currentMetadata =
-            order && order.metadata && typeof order.metadata === "object"
-              ? order.metadata
-              : {};
-
-          await prisma.order.update({
-            where: { id: order_id },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...currentMetadata,
-                nowpaymentsPaymentId: String(payment_id), // Guardar ID de pago oficial criptográfico de NOWPayments
-                paidAt: new Date().toISOString(),
-              },
-            },
+          const result = await this.transitionOrderToTradePendingFromPayment({
+            orderId: String(order_id),
+            provider: "nowpayments",
+            metadataKey: "nowpaymentsPaymentId",
+            paymentId: String(payment_id),
           });
 
-          console.log(
-            `[NOWPayments Webhook] Orden ID ${order_id} transicionada y acreditada con éxito en DB.`,
-          );
+          if (result.updated) {
+            console.log(
+              `[NOWPayments Webhook] Orden ID ${order_id} transicionada y acreditada con éxito en DB.`,
+            );
+          }
         } catch (orderError: any) {
           console.error(
             `[NOWPayments Webhook] Error al actualizar la orden en DB:`,
@@ -275,43 +618,14 @@ export class OrderController {
       if (req.body && req.body.event_type === "PAYMENT.CAPTURE.COMPLETED") {
         const captureId = req.body.resource?.id;
         const paypalOrderToken = req.body.resource?.supplementary_data?.related_ids?.order_id;
-        console.log(`[PayPal Webhook] Captura ya completada (PAYMENT.CAPTURE.COMPLETED). Capture ID: ${captureId}, Order Token: ${paypalOrderToken}`);
-        
-        // Buscar la orden correspondiente en los últimos registros
-        const recentOrders = await prisma.order.findMany({
-          where: { paymentMethod: "paypal" },
-          orderBy: { createdAt: "desc" },
-          take: 50,
+        console.warn(
+          `[PayPal Webhook] Evento PAYMENT.CAPTURE.COMPLETED recibido sin verificación oficial. No se cambia estado. Capture ID: ${captureId}, Order Token: ${paypalOrderToken}`,
+        );
+        return res.json({
+          success: true,
+          message:
+            "Evento recibido. La confirmación de órdenes PayPal se realiza por captura server-side verificada.",
         });
-
-        const matchingOrder = recentOrders.find(order => {
-          const meta = order.metadata && typeof order.metadata === "object" ? (order.metadata as any) : {};
-          return meta.paypalPaymentId === captureId || meta.paypalPaymentId === paypalOrderToken;
-        });
-
-        if (matchingOrder) {
-          if (matchingOrder.status === "PENDING_PAYMENT") {
-            const currentMetadata = matchingOrder.metadata && typeof matchingOrder.metadata === "object" ? matchingOrder.metadata : {};
-            await prisma.order.update({
-              where: { id: matchingOrder.id },
-              data: {
-                status: "TRADE_PENDING",
-                metadata: {
-                  ...currentMetadata,
-                  paypalPaymentId: String(captureId),
-                  paidAt: new Date().toISOString(),
-                }
-              }
-            });
-            console.log(`[PayPal Webhook] Orden ${matchingOrder.id} transicionada exitosamente a TRADE_PENDING desde webhook.`);
-          } else {
-            console.log(`[PayPal Webhook] La orden ${matchingOrder.id} ya estaba en estado ${matchingOrder.status}.`);
-          }
-          return res.json({ success: true, orderId: matchingOrder.id });
-        }
-
-        console.log(`[PayPal Webhook] No se encontró orden local para Capture ID: ${captureId}. Retornando 200 OK.`);
-        return res.json({ success: true, message: "Captura recibida pero no se asoció a ninguna orden local." });
       }
 
       // Si no hay token directo pero es un webhook de PayPal, extraer el ID del recurso
@@ -329,30 +643,6 @@ export class OrderController {
       console.log(
         `[PayPal Webhook/Callback] Procesando PayPal Order ID: ${paypalOrderId}`,
       );
-
-      // Si es un token simulado/de prueba en scripts, responder de manera mockeada
-      if (paypalOrderId === "MOCK_PAYPAL_ORDER_TOKEN_ABCDE") {
-        const testOrderId = await prisma.order.findFirst({
-          where: { paymentMethod: "paypal", status: "PENDING_PAYMENT" },
-          orderBy: { createdAt: "desc" },
-        });
-
-        if (testOrderId) {
-          await prisma.order.update({
-            where: { id: testOrderId.id },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...(testOrderId.metadata && typeof testOrderId.metadata === "object" ? testOrderId.metadata : {}),
-                paypalPaymentId: "MOCK_PAYPAL_CAPTURE_ID_12345",
-                paidAt: new Date().toISOString(),
-              },
-            },
-          });
-          console.log(`[PayPal Mock Webhook] Simulado éxito para Orden ID: ${testOrderId.id}`);
-          return res.json({ success: true, orderId: testOrderId.id });
-        }
-      }
 
       // Intentar deducir el ID de la orden de nuestra BD antes de capturar
       // Esto sirve si el webhook se dispara múltiples veces o después de la captura del frontend
@@ -424,27 +714,22 @@ export class OrderController {
           `[PayPal Webhook] ¡Pago completado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y registrando ID de captura.`,
         );
         try {
-          const order = await prisma.order.findUnique({
-            where: { id: orderId },
-          });
-          const currentMetadata =
-            order && order.metadata && typeof order.metadata === "object"
-              ? order.metadata
-              : {};
-
           const captureId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.id || paypalOrderId;
-
-          await prisma.order.update({
-            where: { id: orderId },
-            data: {
-              status: "TRADE_PENDING",
-              metadata: {
-                ...currentMetadata,
-                paypalPaymentId: String(captureId), // Guardar ID de captura oficial de PayPal
-                paidAt: new Date().toISOString(),
-              },
-            },
+          const captureAmount = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
+          const result = await this.transitionOrderToTradePendingFromPayment({
+            orderId: String(orderId),
+            provider: "paypal",
+            metadataKey: "paypalPaymentId",
+            paymentId: String(captureId),
+            paidAmount: captureAmount?.value ? Number(captureAmount.value) : null,
+            currency: captureAmount?.currency_code ?? null,
           });
+
+          if (!result.updated) {
+            return res.status(400).json({
+              error: `El pago de PayPal fue capturado, pero la orden no se actualizó: ${result.reason}`,
+            });
+          }
 
           console.log(
             `[PayPal Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
@@ -478,45 +763,73 @@ export class OrderController {
       );
 
       // FIRMA DE WEBHOOK DE MERCADO PAGO (Fórmula oficial HMAC-SHA256 con Webhook Secret)
-      const webhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+      const webhookSecret = await AdminSecureConfigService.getSecretValue("MERCADOPAGO_WEBHOOK_SECRET");
       const xSignature = req.headers["x-signature"] as string;
       const xRequestId = req.headers["x-request-id"] as string;
 
-      if (webhookSecret && xSignature && xRequestId) {
+      if (webhookSecret) {
+        if (!xSignature || !xRequestId) {
+          console.warn(
+            "[Mercado Pago Webhook] Firma requerida ausente. Se rechaza la notificación.",
+          );
+          return res.status(401).json({ error: "Missing Mercado Pago webhook signature" });
+        }
+
         try {
           const crypto = require("crypto");
-          const parts = xSignature.split(",");
+          const parts = xSignature.split(",").map((part) => part.trim());
           const tsPart = parts.find((p) => p.startsWith("ts="));
           const v1Part = parts.find((p) => p.startsWith("v1="));
 
-          if (tsPart && v1Part) {
-            const ts = tsPart.split("=")[1];
-            const v1 = v1Part.split("=")[1];
-
-            // Reconstruir la firma según el estándar de Mercado Pago
-            const manifest = `id:${data?.id || req.query.id || req.body?.data?.id};request-timestamp:${ts};`;
-            const hmac = crypto.createHmac("sha256", webhookSecret);
-            const calculatedSignature = hmac.update(manifest).digest("hex");
-
-            if (calculatedSignature !== v1) {
-              console.warn(
-                "[Mercado Pago Webhook] Firma de firma inválida. Posible intento de fraude o desincronización de Webhook Secret.",
-              );
-              // Para evitar bloquear las peticiones en sandbox/dev si las firmas no coinciden debido a una key expirada,
-              // logueamos la advertencia, pero permitimos procesar la orden para fines de usabilidad.
-              console.log("[Mercado Pago Webhook] [Bypass temporal de Firma] Procesando pago para fines de desarrollo.");
-            } else {
-              console.log(
-                "[Mercado Pago Webhook] Firma verificada y autenticada cryptográficamente.",
-              );
-            }
+          if (!tsPart || !v1Part) {
+            console.warn(
+              "[Mercado Pago Webhook] Header de firma inválido. Se rechaza la notificación.",
+            );
+            return res.status(401).json({ error: "Invalid Mercado Pago webhook signature header" });
           }
+
+          const ts = tsPart.split("=")[1];
+          const v1 = v1Part.split("=")[1];
+          const paymentId =
+            req.query["data.id"] ||
+            req.query.id ||
+            data?.id ||
+            req.body?.data?.id ||
+            req.body?.id;
+
+          if (!paymentId || !ts || !v1) {
+            console.warn(
+              "[Mercado Pago Webhook] Datos insuficientes para verificar firma. Se rechaza la notificación.",
+            );
+            return res.status(401).json({ error: "Missing Mercado Pago webhook signature data" });
+          }
+
+          // Fórmula oficial: id:<data.id>;request-id:<x-request-id>;ts:<ts>;
+          const manifest = `id:${paymentId};request-id:${xRequestId};ts:${ts};`;
+          const hmac = crypto.createHmac("sha256", webhookSecret);
+          const calculatedSignature = hmac.update(manifest).digest("hex");
+
+          if (calculatedSignature !== v1) {
+            console.warn(
+              `[Mercado Pago Webhook] Firma inválida. Se rechaza la notificación. Payment ID: ${paymentId}`,
+            );
+            return res.status(401).json({ error: "Invalid Mercado Pago webhook signature" });
+          }
+
+          console.log(
+            "[Mercado Pago Webhook] Firma verificada y autenticada cryptográficamente.",
+          );
         } catch (sigErr: any) {
           console.error(
             "[Mercado Pago Webhook] Error al verificar firma:",
             sigErr.message,
           );
+          return res.status(401).json({ error: "Mercado Pago webhook signature verification failed" });
         }
+      } else {
+        console.warn(
+          "[Mercado Pago Webhook] MERCADOPAGO_WEBHOOK_SECRET no está configurado. No se puede verificar la firma.",
+        );
       }
 
       // Responder de inmediato con 200 OK para confirmar recepción a Mercado Pago
@@ -547,30 +860,21 @@ export class OrderController {
             `[Mercado Pago Webhook] ¡Pago aprobado! Transicionando Orden ID: ${orderId} a TRADE_PENDING y guardando ID de Operación.`,
           );
           try {
-            // Obtener metadata actual para no sobreescribir otros campos del cliente
-            const order = await prisma.order.findUnique({
-              where: { id: orderId },
-            });
-            const currentMetadata =
-              order && order.metadata && typeof order.metadata === "object"
-                ? order.metadata
-                : {};
-
-            await prisma.order.update({
-              where: { id: orderId },
-              data: {
-                status: "TRADE_PENDING",
-                metadata: {
-                  ...currentMetadata,
-                  mpPaymentId: String(paymentId), // Guardar ID de pago oficial de Mercado Pago
-                  paidAt: new Date().toISOString(),
-                },
-              },
+            const result = await this.transitionOrderToTradePendingFromPayment({
+              orderId: String(orderId),
+              provider: "mercadopago",
+              metadataKey: "mpPaymentId",
+              paymentId: String(paymentId),
+              paidAmount: typeof amount === "number" ? amount : Number(amount),
+              currency: paymentDetails.currency_id ?? null,
+              expectedCurrency: "ARS",
             });
 
-            console.log(
-              `[Mercado Pago Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
-            );
+            if (result.updated) {
+              console.log(
+                `[Mercado Pago Webhook] Orden ID ${orderId} transicionada y acreditada con éxito en DB.`,
+              );
+            }
           } catch (orderError: any) {
             console.error(
               `[Mercado Pago Webhook] Error al actualizar la orden en DB:`,
@@ -604,9 +908,20 @@ export class OrderController {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
 
-        // Separar ids: bots (assetId normal) vs market listings (prefijo "market-")
+        const overridesMap = new Map<string, any>();
+        if (Array.isArray(items)) {
+          items.forEach((ov) => {
+            if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+          });
+        }
+
+        // Separar ids: bots | assets YouPin (youpin-) | listings legacy (market-)
+        const youpinFloatIds = itemIds
+          .filter((id: string) => id.startsWith("youpin-"))
+          .map((id: string) => id.replace(/^youpin-/, ""));
         const botIds = itemIds.filter(
-          (id: string) => !id.startsWith("market-"),
+          (id: string) =>
+            !id.startsWith("market-") && !id.startsWith("youpin-"),
         );
         const marketNames = itemIds
           .filter((id: string) => id.startsWith("market-"))
@@ -620,14 +935,21 @@ export class OrderController {
               })
             : [];
 
-        if (storeItems.length !== botIds.length) {
-          const foundIds = storeItems.map((i: any) => i.assetId);
-          const missingIds = botIds.filter(
-            (id: string) => !foundIds.includes(id),
-          );
+        const specificBotIds = botIds.filter(id => overridesMap.get(id)?.isSpecific !== false);
+        const missingSpecificBotIds = specificBotIds.filter(id => !storeItems.some(i => i.assetId === id));
+        if (missingSpecificBotIds.length > 0) {
           return res.status(400).json({
-            error: `Algunos items de bot ya no están disponibles: ${missingIds.join(", ")}`,
+            error: `Algunos items de bot ya no están disponibles: ${missingSpecificBotIds.join(", ")}`,
           });
+        }
+
+        try {
+          const storeItemsToAssert = storeItems.filter(item => specificBotIds.includes(item.assetId));
+          if (storeItemsToAssert.length > 0) {
+            await BotService.assertStoreItemsFromActiveBots(storeItemsToAssert);
+          }
+        } catch (err: any) {
+          return res.status(400).json({ error: err.message });
         }
 
         // Validar market listings usando su campo unique 'name'
@@ -638,46 +960,165 @@ export class OrderController {
               })
             : [];
 
-        if (marketItems.length !== marketNames.length) {
-          const foundNames = marketItems.map((i: any) => i.name);
-          const missingNames = marketNames.filter(
-            (name: string) => !foundNames.includes(name),
-          );
+        const specificMarketNames = marketNames.filter(name => overridesMap.get(`market-${name}`)?.isSpecific !== false);
+        const missingSpecificMarketNames = specificMarketNames.filter(name => !marketItems.some(i => i.name === name));
+        if (missingSpecificMarketNames.length > 0) {
           return res.status(400).json({
-            error: `Algunos listings de mercado ya no están disponibles: ${missingNames.join(", ")}`,
+            error: `Algunos listings de mercado ya no están disponibles: ${missingSpecificMarketNames.join(", ")}`,
           });
         }
 
+        const youpinFloatItems =
+          youpinFloatIds.length > 0
+            ? await prisma.floatItem.findMany({
+                where: { id: { in: youpinFloatIds }, available: true },
+                include: { resaleItem: true },
+              })
+            : [];
+
+        const specificYoupinFloatIds = youpinFloatIds.filter(id => overridesMap.get(`youpin-${id}`)?.isSpecific !== false);
+        const missingSpecificYoupinFloatIds = specificYoupinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+        if (missingSpecificYoupinFloatIds.length > 0) {
+          return res.status(400).json({
+            error: `Algunos assets YouPin ya no están disponibles: ${missingSpecificYoupinFloatIds.join(", ")}`,
+          });
+        }
+
+        const settingsData = await getAdminSettingsOrDefaults();
+
+        const resolvedBotItems = botIds.map((id: string) => {
+          const item = storeItems.find((i: any) => i.assetId === id);
+          const override = overridesMap.get(id);
+          if (item) {
+            return {
+              assetId: item.assetId,
+              name: item.name,
+              price: getBotCheckoutPrice(item.price, settingsData),
+              iconUrl: item.iconUrl || null,
+              provider: "bot",
+              float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
+              exterior: item.exterior ?? null,
+              rarity: item.rarity ?? null,
+            };
+          } else {
+            return {
+              assetId: id,
+              name: override?.name || "CS2 Skin",
+              price: override?.price ? roundMoney(override.price) : 0,
+              iconUrl: override?.iconUrl || null,
+              provider: "bot",
+              float: override?.float !== undefined && override?.float !== null ? override.float : null,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+              exterior: override?.exterior ?? null,
+              rarity: override?.rarity ?? null,
+            };
+          }
+        });
+
+        const resolvedMarketItems = await Promise.all(
+          marketNames.map(async (name: string) => {
+            const item = marketItems.find((i: any) => i.name === name);
+            const override = overridesMap.get(`market-${name}`);
+            if (item) {
+              if (override && override.float !== undefined && override.float !== null) {
+                const floatQueryWhere: any = {
+                  resaleItemId: item.id,
+                  floatValue: Number(override.float),
+                };
+                if (override.pattern !== undefined && override.pattern !== null) {
+                  floatQueryWhere.paintSeed = Number(override.pattern);
+                }
+                const dbFloat = await prisma.floatItem.findFirst({
+                  where: floatQueryWhere,
+                });
+
+                if (dbFloat) {
+                  const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+
+                  return {
+                    assetId: `market-${name}`,
+                    name: item.name,
+                    price: floatPrice,
+                    iconUrl: item.iconUrl || null,
+                    provider: 'youpin',
+                    float: dbFloat.floatValue,
+                    pattern: dbFloat.paintSeed,
+                    exterior: item.exterior ?? null,
+                    rarity: item.rarity ?? null,
+                  };
+                }
+              }
+
+              return {
+                assetId: `market-${name}`,
+                name: item.name,
+                price: getMarketCheckoutPrice(item.price, settingsData),
+                iconUrl: item.iconUrl || null,
+                provider: 'youpin',
+                float: null,
+                pattern: null,
+                exterior: item.exterior ?? null,
+                rarity: item.rarity ?? null,
+              };
+            } else {
+              return {
+                assetId: `market-${name}`,
+                name: name,
+                price: override?.price ? roundMoney(override.price) : 0,
+                iconUrl: override?.iconUrl || null,
+                provider: 'youpin',
+                float: override?.float !== undefined && override?.float !== null ? override.float : null,
+                pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+                exterior: override?.exterior ?? null,
+                rarity: override?.rarity ?? null,
+              };
+            }
+          })
+        );
+
+        const resolvedYoupinItems = youpinFloatIds.map((floatId: string) => {
+          const dbFloat = youpinFloatItems.find((f: any) => f.id === floatId);
+          const override = overridesMap.get(`youpin-${floatId}`);
+          if (dbFloat) {
+            const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+            const listing = dbFloat.resaleItem;
+            return {
+              assetId: `youpin-${dbFloat.id}`,
+              name: listing.name,
+              price: floatPrice,
+              iconUrl: listing.iconUrl || null,
+              provider: 'youpin',
+              float: dbFloat.floatValue,
+              pattern: dbFloat.paintSeed,
+              exterior: listing.exterior ?? null,
+              rarity: listing.rarity ?? null,
+            };
+          } else {
+            return {
+              assetId: `youpin-${floatId}`,
+              name: override?.name || "CS2 Skin",
+              price: override?.price ? roundMoney(override.price) : 0,
+              iconUrl: override?.iconUrl || null,
+              provider: 'youpin',
+              float: override?.float !== undefined && override?.float !== null ? override.float : null,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+              exterior: override?.exterior ?? null,
+              rarity: override?.rarity ?? null,
+            };
+          }
+        });
+
         let totalPrice = 0;
-
-        const resolvedBotItems = storeItems.map((item: any) => {
-          totalPrice += item.price;
-          return {
-            assetId: item.assetId,
-            name: item.name,
-            price: item.price,
-            iconUrl: item.iconUrl || null,
-            provider: "bot",
-          };
-        });
-
-        const resolvedMarketItems = marketItems.map((item: any) => {
-          totalPrice += item.price;
-          return {
-            assetId: `market-${item.name}`,
-            name: item.name,
-            price: item.price,
-            iconUrl: item.iconUrl || null,
-            provider: item.provider, // 'buff' | 'youpin'
-          };
-        });
-
-        totalPrice = Math.round(totalPrice * 100) / 100;
+        resolvedBotItems.forEach((item) => totalPrice += item.price);
+        resolvedMarketItems.forEach((item) => totalPrice += item.price);
+        resolvedYoupinItems.forEach((item) => totalPrice += item.price);
+        totalPrice = roundMoney(totalPrice);
 
         return res.json({
           valid: true,
           type: "BUY",
-          items: [...resolvedBotItems, ...resolvedMarketItems],
+          items: [...resolvedBotItems, ...resolvedMarketItems, ...resolvedYoupinItems],
           totalPrice,
         });
       } else if (type === "SELL") {
@@ -691,19 +1132,13 @@ export class OrderController {
         const {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
-        const settings = await prisma.adminSettings.findFirst();
-        const minSellPrice = settings?.minimumUserSellPrice ?? 1.0;
+        const settings = await getAdminSettingsOrDefaults();
+        const minSellPrice = settings.minimumUserSellPrice;
 
         const resolvedItems: any[] = [];
         let totalPrice = 0;
 
         for (const item of items) {
-          if (item.requestedPrice < minSellPrice) {
-            return res.status(400).json({
-              error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
-            });
-          }
-
           const inventoryItem = await prisma.userInventoryItem.findFirst({
             where: { userId, assetId: item.assetId },
           });
@@ -711,6 +1146,31 @@ export class OrderController {
           if (!inventoryItem) {
             return res.status(400).json({
               error: `El item ${item.assetId} no se encuentra en tu inventario.`,
+            });
+          }
+
+          const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
+          const requestedPrice = Number(item.requestedPrice);
+
+          if (backendPrice < minSellPrice) {
+            return res.status(400).json({
+              error: `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
+            });
+          }
+
+          if (
+            Number.isFinite(requestedPrice) &&
+            Math.abs(requestedPrice - backendPrice) > SELL_PRICE_MISMATCH_TOLERANCE
+          ) {
+            return res.status(400).json({
+              error: `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+            });
+          }
+
+          const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+          if (openSellOrder) {
+            return res.status(400).json({
+              error: `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
             });
           }
 
@@ -754,14 +1214,19 @@ export class OrderController {
           resolvedItems.push({
             assetId: inventoryItem.assetId,
             name: inventoryItem.name,
-            price: item.requestedPrice,
+            price: backendPrice,
             iconUrl: inventoryItem.iconUrl ?? null,
+            provider: "user",
+            float: inventoryItem.float,
+            pattern: inventoryItem.pattern,
+            exterior: inventoryItem.exterior,
+            rarity: inventoryItem.rarity,
           });
 
-          totalPrice += item.requestedPrice;
+          totalPrice += backendPrice;
         }
 
-        totalPrice = Math.round(totalPrice * 100) / 100;
+        totalPrice = roundMoney(totalPrice);
 
         return res.json({
           valid: true,
@@ -776,6 +1241,98 @@ export class OrderController {
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  async validateCart(req: Request, res: Response) {
+    try {
+      const { itemIds, items } = req.body;
+      if (!Array.isArray(itemIds)) {
+        return res.status(400).json({ error: "itemIds must be an array of strings" });
+      }
+
+      const overridesMap = new Map<string, any>();
+      if (Array.isArray(items)) {
+        items.forEach((ov) => {
+          if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+        });
+      }
+
+      const { prisma } = require("../../../shared/infrastructure/PrismaClient");
+
+      const youpinFloatIds = itemIds
+        .filter((id: string) => id?.startsWith("youpin-"))
+        .map((id: string) => id.replace(/^youpin-/, ""));
+      const botIds = itemIds.filter(
+        (id: string) => id && !id.startsWith("market-") && !id.startsWith("youpin-"),
+      );
+      const marketNames = itemIds
+        .filter((id: string) => id?.startsWith("market-"))
+        .map((id: string) => id.replace(/^market-/, ""));
+
+      // 1. Validar items de bot
+      const storeItems =
+        botIds.length > 0
+          ? await prisma.storeItem.findMany({
+              where: { assetId: { in: botIds } },
+            })
+          : [];
+
+      // Filtrar items cuyos bots estén activos y habilitados
+      let activeBotIds: string[] = [];
+      if (storeItems.length > 0) {
+        const activeBots = await prisma.bot.findMany({
+          where: { isActive: true },
+          select: { steamId: true },
+        });
+        const activeSteamIds = activeBots.map((b: any) => b.steamId);
+        activeBotIds = storeItems
+          .filter((item: any) => activeSteamIds.includes(item.botSteamId))
+          .map((item: any) => item.assetId);
+      }
+
+      // 2. Validar listings de mercado (legacy)
+      const marketItems =
+        marketNames.length > 0
+          ? await prisma.marketListing.findMany({
+              where: { name: { in: marketNames } },
+              select: { name: true }
+            })
+          : [];
+      const validMarketNames = marketItems.map((i: any) => `market-${i.name}`);
+
+      // 3. Validar float items de YouPin (bajo pedido)
+      const youpinFloatItems =
+        youpinFloatIds.length > 0
+          ? await prisma.floatItem.findMany({
+              where: { id: { in: youpinFloatIds }, available: true },
+              select: { id: true }
+            })
+          : [];
+      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.id}`);
+
+      // Combinar todos los IDs válidos
+      const validSet = new Set<string>([
+        ...activeBotIds,
+        ...validMarketNames,
+        ...validYoupinIds,
+      ]);
+
+      // Encontrar IDs inválidos (solo si son específicos, es decir isSpecific !== false)
+      const invalidIds = itemIds.filter((id: string) => {
+        const override = overridesMap.get(id);
+        const isSpecific = override?.isSpecific !== false;
+        if (!isSpecific) return false; // los ítems generales no son inválidos aunque no existan
+        return !validSet.has(id);
+      });
+
+      return res.json({
+        valid: invalidIds.length === 0,
+        invalidIds,
+      });
+    } catch (err: any) {
+      console.error("[validateCart] Error:", err);
+      return res.status(500).json({ error: err.message || "Error validating cart" });
     }
   }
 }

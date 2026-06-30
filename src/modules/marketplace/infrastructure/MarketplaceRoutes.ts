@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { MarketplaceController } from './MarketplaceController';
-import { authMiddleware } from '../../../shared/infrastructure/middlewares/authMiddleware';
+import { adminOnly, authMiddleware } from '../../../shared/infrastructure/middlewares/authMiddleware';
 
 const router = Router();
 
@@ -16,8 +16,7 @@ router.patch('/listings/:id/cancel', authMiddleware, MarketplaceController.cance
 router.post('/purchases', authMiddleware, MarketplaceController.purchaseItem);
 router.get('/user/purchases', authMiddleware, MarketplaceController.getUserPurchases);
 
-// Confirmación de pago (solo para demo o si el cliente lo confirma por ahora, 
-// en prod debería ser un webhook seguro)
-router.post('/purchases/:id/confirm-payment', MarketplaceController.confirmPayment);
+// Confirmación manual legacy: solo admin. Los usuarios no pueden confirmar pagos desde el cliente.
+router.post('/purchases/:id/confirm-payment', authMiddleware, adminOnly, MarketplaceController.confirmPayment);
 
 export default router;

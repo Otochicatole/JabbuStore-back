@@ -52,6 +52,35 @@ export class AdminSettingsService {
     });
   }
 
+  static async updatePaymentMethodSettings(data: {
+    mercadoPagoEnabled?: boolean;
+    paypalEnabled?: boolean;
+    nowpaymentsEnabled?: boolean;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
+
+  static async updateManualTransferSettings(data: {
+    manualTransferEnabled?: boolean;
+    manualBankAlias?: string | null;
+    manualBankCbu?: string | null;
+    manualBankHolder?: string | null;
+    manualBankInstructions?: string | null;
+    manualCryptoAddress?: string | null;
+    manualCryptoNetwork?: string | null;
+    manualCryptoInstructions?: string | null;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
+
   static async updateResellSettings(data: {
     resellModifierType?: string;
     resellModifierValue?: number;
@@ -60,7 +89,17 @@ export class AdminSettingsService {
     const settings = await this.getSettings();
     return prisma.adminSettings.update({
       where: { id: settings.id },
-      data
+      data: {
+        ...(data.resellModifierType !== undefined
+          ? { marketModifierType: data.resellModifierType }
+          : {}),
+        ...(data.resellModifierValue !== undefined
+          ? { marketModifierValue: data.resellModifierValue }
+          : {}),
+        ...(data.resellModifierEnabled !== undefined
+          ? { marketModifierEnabled: data.resellModifierEnabled }
+          : {}),
+      },
     });
   }
 }

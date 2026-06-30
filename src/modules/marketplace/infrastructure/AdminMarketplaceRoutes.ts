@@ -14,9 +14,19 @@ router.patch('/settings/user-sell', AdminMarketplaceController.updateUserSellSet
 router.patch('/settings/resell', AdminMarketplaceController.updateResellSettings);
 router.patch('/settings/minimum-sell-price', AdminMarketplaceController.updateMinimumSellPrice);
 router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUrl);
+router.patch('/settings/payment-methods', AdminMarketplaceController.updatePaymentMethodSettings);
+router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
+router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);
+router.post('/settings/secrets/:key', AdminMarketplaceController.upsertSecret);
+router.post('/settings/secrets/:key/reveal', AdminMarketplaceController.revealSecret);
+router.delete('/settings/secrets/:key', AdminMarketplaceController.deleteSecret);
+router.get('/settings/runtime-config', AdminMarketplaceController.getRuntimeSettings);
+router.patch('/settings/runtime-config', AdminMarketplaceController.updateRuntimeSettings);
 
 // Bots
 router.get('/bots', AdminMarketplaceController.getBots);
+router.post('/bots/sync', AdminMarketplaceController.syncBotsInventory);
+router.get('/bots/sync/status', AdminMarketplaceController.getSyncBotsInventoryStatus);
 router.post('/bots', AdminMarketplaceController.createBot);
 router.patch('/bots/:id', AdminMarketplaceController.updateBot);
 router.patch('/bots/:id/deactivate', AdminMarketplaceController.deactivateBot);

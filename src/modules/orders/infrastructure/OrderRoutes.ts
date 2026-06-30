@@ -12,6 +12,8 @@ import {
   authMiddleware,
   adminOnly,
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
+import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
+import { uploadPaymentProof } from "./PaymentProofStorage";
 
 const router = Router();
 
@@ -22,7 +24,11 @@ const createPurchaseOrderUseCase = new CreatePurchaseOrderUseCase(
 const createSellOrderUseCase = new CreateSellOrderUseCase(orderRepository);
 const getUserOrdersUseCase = new GetUserOrdersUseCase(orderRepository);
 const getAllOrdersUseCase = new GetAllOrdersUseCase(orderRepository);
-const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(orderRepository);
+const prismaNotificationRepo = new PrismaNotificationRepository();
+const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(
+  orderRepository,
+  prismaNotificationRepo,
+);
 
 const orderController = new OrderController(
   createPurchaseOrderUseCase,
@@ -42,8 +48,30 @@ router.post("/sell", authMiddleware, (req, res) =>
 router.post("/validate", authMiddleware, (req, res) =>
   orderController.validateOrder(req, res),
 );
+router.post("/validate-cart", (req, res) =>
+  orderController.validateCart(req, res),
+);
 router.get("/me", authMiddleware, (req, res) =>
   orderController.getMyOrders(req, res),
+);
+router.patch("/:id/cancel-payment", authMiddleware, (req, res) =>
+  orderController.cancelPaymentOrder(req, res),
+);
+router.post(
+  "/:id/payment-proof/buyer",
+  authMiddleware,
+  uploadPaymentProof.single("proof"),
+  (req, res) => orderController.uploadBuyerPaymentProof(req, res),
+);
+router.post(
+  "/:id/payment-proof/admin",
+  authMiddleware,
+  adminOnly,
+  uploadPaymentProof.single("proof"),
+  (req, res) => orderController.uploadAdminPaymentProof(req, res),
+);
+router.get("/:id/payment-proof/:proofType", authMiddleware, (req, res) =>
+  orderController.getPaymentProof(req, res),
 );
 
 // Public Webhook (Sin autenticación para recibir notificaciones asíncronas de Mercado Pago)

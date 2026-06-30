@@ -1,244 +1,113 @@
 import { IMarketRepository } from "../domain/IMarketRepository";
-import { MarketListingUpsert } from "../domain/MarketListing";
-import { PriceEnrichmentService } from "../../../shared/infrastructure/PriceEnrichmentService";
 import { config } from "../../../shared/config";
+import { SteamWebApiFloatAssetsClient } from "../infrastructure/SteamWebApiFloatAssetsClient";
+import { groupYoupinAssetsIntoCatalog } from "./floatCatalogMapper";
 
 /**
- * Sincroniza el catálogo de market listings (Buff163 + YouPin) desde la API de cs2.sh.
- * Guarda el proveedor real, ambos precios (ask de youpin y buff) y detecta cuál tiene
- * mejor liquidez para usarlo como precio base.
+ * Sincroniza el catálogo YouPin desde GET /steam/api/float/assets.
+ * Cada asset trae su precio concreto (USD); se persiste en FloatItem.price
+ * y el listing padre deriva price/youpinAsk del mínimo de sus floats.
+ * No se consulta /items ni otros endpoints de precios para reventa.
  */
 export class SyncMarketListingsUseCase {
+  private floatClient = new SteamWebApiFloatAssetsClient();
+
   constructor(private marketRepository: IMarketRepository) {}
 
-  async execute(): Promise<{ synced: number; skipped: number }> {
-    const apiKey = config.steamwebapiApiKey;
-    if (!apiKey) {
+  async execute(): Promise<{
+    synced: number;
+    skipped: number;
+    assetsFetched: number;
+    rowsUsed: number;
+    rateLimited: boolean;
+    floatsIndexed: number;
+  }> {
+    if (!config.steamwebapiApiKey) {
       console.warn(
         "[Market Sync] STEAMWEBAPI_API_KEY no configurado. Sincronización omitida.",
       );
-      return { synced: 0, skipped: 0 };
+      return {
+        synced: 0,
+        skipped: 0,
+        assetsFetched: 0,
+        rowsUsed: 0,
+        rateLimited: false,
+        floatsIndexed: 0,
+      };
     }
 
     console.log(
-      "[Market Sync] Obteniendo catálogo completo de ítems desde SteamWebAPI...",
+      `[Market Sync] Escaneando catálogo YouPin vía float/assets (limit=${config.marketSync.pageSize}, maxPages=${config.marketSync.maxPages}, sort=${config.marketSync.sort})...`,
     );
 
     try {
-      const res = await fetch(
-        `https://www.steamwebapi.com/steam/api/items?key=${apiKey}&appid=730`,
-      );
+      const { assets, rowsUsed, rateLimited } =
+        await this.floatClient.fetchYoupinCatalogPages({
+          pageSize: config.marketSync.pageSize,
+          maxPages: config.marketSync.maxPages,
+          sort: config.marketSync.sort,
+          withItems: true,
+        });
 
-      if (!res.ok) {
-        throw new Error(`SteamWebAPI respondió con error ${res.status}`);
-      }
-
-      const items = (await res.json()) as any[];
       console.log(
-        `[Market Sync] Descargados ${items.length} ítems. Procesando listings...`,
+        `[Market Sync] ${assets.length} assets YouPin recibidos (${rowsUsed} filas API${rateLimited ? ", RATE LIMITED" : ""}).`,
       );
 
-      // Obtener imágenes de ByMykel para enriquecer los listings que falten
-      const imagesMap = await PriceEnrichmentService.fetchByMykelSkinsImages();
-
-      const listings: MarketListingUpsert[] = [];
-      let skipped = 0;
-
-      for (const item of items) {
-        if (!item || !item.markethashname) continue;
-
-        const name = item.markethashname;
-
-        // Extraer precios de SteamWebAPI (ya vienen convertidos a USD por el proveedor)
-        const prices = item.prices || [];
-        const youpinObj = prices.find((p: any) => p.source === "youpin");
-        const buffObj = prices.find((p: any) => p.source === "buff");
-
-        const youpinAsk = youpinObj ? Number(youpinObj.price) : null;
-        const youpinVolumeRaw = youpinObj ? Number(youpinObj.quantity) : null;
-
-        const buffAsk = buffObj ? Number(buffObj.price) : null;
-        const buffVolumeRaw = buffObj ? Number(buffObj.quantity) : null;
-
-        // Si Youpin/Buff no traen stock individual de forma directa, usamos realmarketsquantity u offervolume de SteamWebAPI
-        const apiTotalQuantity =
-          Number(item.realmarketsquantity) || Number(item.offervolume) || 0;
-
-        const youpinVolume =
-          youpinVolumeRaw ??
-          (apiTotalQuantity > 0
-            ? Math.max(1, Math.round(apiTotalQuantity * 0.45))
-            : null);
-        const buffVolume =
-          buffVolumeRaw ??
-          (apiTotalQuantity > 0
-            ? Math.max(1, Math.round(apiTotalQuantity * 0.55))
-            : null);
-
-        // Sumar liquidez de TODOS los mercados disponibles (Youpin, Buff, CSFloat, Skinport, etc.) para tener datos estables
-        const totalVolume =
-          prices.reduce(
-            (sum: number, p: any) => sum + (Number(p.quantity) || 0),
-            0,
-          ) || apiTotalQuantity;
-
-        // Filtrar base por liquidez mínima (al menos 2 ofertas activas en total)
-        let hasBaseListing = totalVolume >= 2;
-        let price = 0;
-        let provider: "buff" | "youpin" = "youpin";
-
-        if (hasBaseListing) {
-          if (
-            youpinAsk &&
-            youpinVolume &&
-            (!buffAsk || youpinVolume >= (buffVolume ?? 0))
-          ) {
-            provider = "youpin";
-            price = youpinAsk;
-          } else if (buffAsk) {
-            provider = "buff";
-            price = buffAsk;
-          } else {
-            // FALLBACK DE SEGURIDAD: Si Youpin y Buff no están disponibles de forma directa en el catálogo del proveedor,
-            // usar el precio más bajo disponible entre los otros mercados (CSFloat, Skinport, DMarket, etc.)
-            const availablePrices = prices
-              .map((p: any) => Number(p.price))
-              .filter((p: number) => p > 0);
-            if (availablePrices.length > 0) {
-              price = Math.min(...availablePrices);
-
-              // Dividir equitativamente los proveedores de reventa en base al hash del nombre
-              let hash = 0;
-              for (let i = 0; i < name.length; i++) {
-                hash = (hash << 5) - hash + name.charCodeAt(i);
-                hash |= 0;
-              }
-              provider = Math.abs(hash) % 2 === 0 ? "buff" : "youpin";
-            } else {
-              hasBaseListing = false;
-            }
-          }
-        }
-
-        // Registrar base listing si califica
-        if (hasBaseListing && price > 0.5) {
-          // CAP DE SEGURIDAD CONTRA PRECIOS MANIPULADOS O ERRÓNEOS:
-          // El precio de reventa de Buff/Youpin nunca debe ser superior al precio oficial del Mercado de Steam,
-          // pero únicamente aplicamos este límite a ítems de bajo/medio rango (Steam Price < $150)
-          // para no recortar ítems de alto rango (como Dragon Lore, Gungnir, Howl, etc.) que superan el límite de cartera de Steam ($2000).
-          const steamPrice =
-            Number(item.pricemedian) ||
-            Number(item.priceavg) ||
-            Number(item.pricelatestsell) ||
-            null;
-          if (steamPrice && steamPrice < 150 && price > steamPrice) {
-            price = Math.round(steamPrice * 0.8 * 100) / 100; // Cap a un 80% del valor de Steam
-          }
-
-          const details =
-            PriceEnrichmentService.inferDetailsFromMarketHashName(name);
-          const cleanBaseName =
-            PriceEnrichmentService.cleanNameForImageLookup(name);
-          const iconUrl =
-            item.itemimage ||
-            imagesMap.get(name) ||
-            imagesMap.get(cleanBaseName) ||
-            imagesMap.get("★ " + cleanBaseName) ||
-            imagesMap.get(cleanBaseName.replace("★ ", "")) ||
-            null;
-
-          listings.push({
-            name,
-            provider,
-            youpinAsk,
-            youpinVolume,
-            buffAsk,
-            buffVolume,
-            price,
-            iconUrl,
-            rarity: details.rarity,
-            exterior: details.exterior,
-            category: details.category,
-            isStatTrak: details.isStatTrak,
-            isSouvenir: details.isSouvenir,
-          });
-        } else {
-          skipped++;
-        }
-
-        // Expandir variantes Doppler si existen
-        if (item.variants && Array.isArray(item.variants)) {
-          for (const variant of item.variants) {
-            if (!variant.phase || !variant.pricereal) continue;
-
-            const variantName = `${name} | ${variant.phase}`;
-            const variantPrice = Number(variant.pricereal);
-
-            if (variantPrice > 0.5) {
-              const finalVariantPrice = variantPrice;
-
-              const details =
-                PriceEnrichmentService.inferDetailsFromMarketHashName(
-                  variantName,
-                );
-              const cleanBaseVariantName =
-                PriceEnrichmentService.cleanNameForImageLookup(variantName);
-              const iconUrl =
-                variant.image ||
-                item.itemimage ||
-                imagesMap.get(variantName) ||
-                imagesMap.get(cleanBaseVariantName) ||
-                imagesMap.get("★ " + cleanBaseVariantName) ||
-                imagesMap.get(cleanBaseVariantName.replace("★ ", "")) ||
-                null;
-
-              // Dividir equitativamente los proveedores de variantes en base al hash del nombre
-              let varHash = 0;
-              for (let i = 0; i < variantName.length; i++) {
-                varHash = (varHash << 5) - varHash + variantName.charCodeAt(i);
-                varHash |= 0;
-              }
-              const variantProvider =
-                Math.abs(varHash) % 2 === 0 ? "buff" : "youpin";
-
-              listings.push({
-                name: variantName,
-                provider: variantProvider,
-                youpinAsk: finalVariantPrice,
-                youpinVolume: 10,
-                buffAsk: finalVariantPrice,
-                buffVolume: 10,
-                price: finalVariantPrice,
-                iconUrl,
-                rarity: details.rarity,
-                exterior: details.exterior,
-                category: details.category,
-                isStatTrak: details.isStatTrak,
-                isSouvenir: details.isSouvenir,
-              });
-            }
-          }
-        }
+      if (assets.length === 0) {
+        return {
+          synced: 0,
+          skipped: 0,
+          assetsFetched: 0,
+          rowsUsed,
+          rateLimited,
+          floatsIndexed: 0,
+        };
       }
+
+      const { groups, skipped } = groupYoupinAssetsIntoCatalog(
+        assets,
+        config.marketSync.minPrice,
+      );
+
+      const listings = [...groups.values()].map((g) => g.listing);
+      const floatsByName = new Map(
+        [...groups.entries()].map(([name, g]) => [name, g.floats]),
+      );
+      const totalFloats = [...groups.values()].reduce(
+        (n, g) => n + g.floats.length,
+        0,
+      );
 
       if (listings.length === 0) {
         console.warn(
-          "[Market Sync] No se obtuvieron listings con liquidez suficiente.",
+          "[Market Sync] Ningún asset YouPin pasó los filtros de precio/float.",
         );
-        return { synced: 0, skipped };
+        return {
+          synced: 0,
+          skipped,
+          assetsFetched: assets.length,
+          rowsUsed,
+          rateLimited,
+          floatsIndexed: 0,
+        };
       }
 
-      await this.marketRepository.replaceAll(listings);
+      await this.marketRepository.syncCatalogWithFloats(listings, floatsByName);
+
       console.log(
-        `[Market Sync] Sincronizados ${listings.length} listings (${skipped} omitidos por baja liquidez).`,
+        `[Market Sync] ${listings.length} listings, ${totalFloats} floats indexados (${skipped} assets omitidos en sync).`,
       );
 
-      return { synced: listings.length, skipped };
+      return {
+        synced: listings.length,
+        skipped,
+        assetsFetched: assets.length,
+        rowsUsed,
+        rateLimited,
+        floatsIndexed: totalFloats,
+      };
     } catch (error) {
-      console.error(
-        "[Market Sync Error] Error al obtener datos de SteamWebAPI:",
-        error,
-      );
+      console.error("[Market Sync Error] Error al obtener float/assets:", error);
       throw error;
     }
   }

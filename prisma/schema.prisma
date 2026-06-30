@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model User {
@@ -23,6 +23,9 @@ model User {
   listings   SkinListing[]
   purchases  Purchase[]
   trades     Trade[]
+  supportTickets OrderTicket[]
+  ticketMessages TicketMessage[] @relation("UserTicketMessages")
+  notifications  Notification[]
 }
 
 model Admin {
@@ -33,6 +36,9 @@ model Admin {
   role      String   @default("ADMIN")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  closedTickets OrderTicket[] @relation("ClosedTickets")
+  ticketMessages TicketMessage[] @relation("AdminTicketMessages")
+  notifications  Notification[]
 }
 
 model StoreItem {
@@ -53,20 +59,20 @@ model StoreItem {
   isSouvenir    Boolean  @default(false)
   float         Float?
   pattern       Int?
+  paintIndex    Int?
+  inspectLink   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
 
-/// Catálogo de ítems de reventa provenientes de Buff163 y YouPin via cs2.sh
+/// Catálogo de ítems de reventa provenientes de YouPin 
 model MarketListing {
   id            String   @id @default(cuid())
   name          String   @unique
-  provider      String   // 'buff' | 'youpin' — plataforma con mejor precio/volumen
+  provider      String   // 'youpin' — plataforma de reventa
   youpinAsk     Float?
   youpinVolume  Int?
-  buffAsk       Float?
-  buffVolume    Int?
-  price         Float    @default(0.0) // precio base seleccionado (mejor entre ambos)
+  price         Float    @default(0.0) // precio base seleccionado (YouPin)
   iconUrl       String?
   rarity        String   @default("common")
   exterior      String?
@@ -74,8 +80,13 @@ model MarketListing {
   isStatTrak    Boolean  @default(false)
   isSouvenir    Boolean  @default(false)
   isPriceManual Boolean  @default(false)
+  /// Último intento de indexar floats (se setea aunque no se encuentren), para priorizar el reindexado.
+  floatsSyncedAt DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  floats        FloatItem[]
+
+  @@index([exterior, floatsSyncedAt])
 }
 
 model UserInventoryItem {
@@ -96,6 +107,7 @@ model UserInventoryItem {
   isSouvenir Boolean  @default(false)
   float      Float?
   pattern    Int?
+  paintIndex Int?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
@@ -113,6 +125,16 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum TicketStatus {
+  OPEN
+  CLOSED
+}
+
+enum TicketSenderType {
+  USER
+  ADMIN
+}
+
 model Order {
   id         String      @id @default(uuid())
   userId     String
@@ -125,6 +147,7 @@ model Order {
   items      OrderItem[]
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
+  tickets    OrderTicket[]
 }
 
 model OrderItem {
@@ -142,6 +165,45 @@ model OrderItem {
   provider  String?
 }
 
+model OrderTicket {
+  id              String       @id @default(uuid())
+  orderId         String
+  order           Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject         String
+  status          TicketStatus @default(OPEN)
+  userLastReadAt  DateTime?
+  adminLastReadAt DateTime?
+  closedAt        DateTime?
+  closedByAdminId String?
+  closedByAdmin   Admin?       @relation("ClosedTickets", fields: [closedByAdminId], references: [id], onDelete: SetNull)
+  messages        TicketMessage[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId, status, updatedAt])
+  @@index([orderId, status])
+  @@index([status, updatedAt])
+}
+
+model TicketMessage {
+  id              String           @id @default(uuid())
+  ticketId        String
+  ticket          OrderTicket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderType      TicketSenderType
+  senderUserId    String?
+  senderUser      User?            @relation("UserTicketMessages", fields: [senderUserId], references: [id], onDelete: SetNull)
+  senderAdminId   String?
+  senderAdmin     Admin?           @relation("AdminTicketMessages", fields: [senderAdminId], references: [id], onDelete: SetNull)
+  clientMessageId String
+  body            String
+  createdAt       DateTime         @default(now())
+
+  @@unique([ticketId, clientMessageId])
+  @@index([ticketId, createdAt])
+}
+
 model AdminSettings {
   id                         String   @id @default(uuid())
 
@@ -155,7 +217,7 @@ model AdminSettings {
   userSellModifierValue      Float    @default(0.0)
   userSellModifierEnabled    Boolean  @default(false)
 
-  // Modificador para market listings (Buff/YouPin) — independiente de bots
+  // Modificador para market listings (YouPin) — independiente de bots
   marketModifierType         String   @default("percentage_increase")
   marketModifierValue        Float    @default(0.0)
   marketModifierEnabled      Boolean  @default(false)
@@ -163,8 +225,46 @@ model AdminSettings {
   minimumUserSellPrice       Float    @default(1.0)
   webhookUrl                 String?
   currency                   String   @default("USD")
+  mercadoPagoEnabled         Boolean  @default(true)
+  paypalEnabled              Boolean  @default(true)
+  nowpaymentsEnabled         Boolean  @default(true)
+  manualTransferEnabled      Boolean  @default(false)
+  manualBankAlias            String?
+  manualBankCbu              String?
+  manualBankHolder           String?
+  manualBankInstructions     String?
+  manualCryptoAddress        String?
+  manualCryptoNetwork        String?
+  manualCryptoInstructions   String?
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
+}
+
+model EncryptedSetting {
+  key              String   @id
+  encryptedValue   String
+  iv               String
+  authTag          String
+  last4            String?
+  updatedByAdminId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model RuntimeSetting {
+  key              String   @id
+  value            String
+  updatedByAdminId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model AdminAuditLog {
+  id        String   @id @default(uuid())
+  adminId   String?
+  action    String
+  target    String
+  createdAt DateTime @default(now())
 }
 
 model Bot {
@@ -241,4 +341,40 @@ model Trade {
   cancelledAt       DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+model FloatItem {
+  id           String        @id @default(uuid())
+  assetId      String
+  floatValue   Float
+  paintSeed    Int
+  market       String        // 'YOUPIN'
+  price        Float         // Precio original de mercado en USD
+  inspectLink  String?
+  available    Boolean       @default(true)
+  externalId   String?
+  lastSyncAt   DateTime      @default(now())
+  
+  resaleItemId String
+  resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
+
+  @@map("floats")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adminId   String?
+  admin     Admin?   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  type      String   // e.g. "TICKET_MESSAGE", "ORDER_STATUS", "SYSTEM"
+  read      Boolean  @default(false)
+  link      String?  // Frontend redirection path
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, read])
+  @@index([adminId, read])
 }

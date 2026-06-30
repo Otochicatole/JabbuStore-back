@@ -5,8 +5,40 @@ import {
   OrderStatus,
   OrderType,
 } from "../domain/Order";
+import { INotificationRepository } from "../../notifications/domain/Notification";
+import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
+import { BotService } from "../../marketplace/application/BotService";
+import {
+  getAdminSettingsOrDefaults,
+  getBotCheckoutPrice,
+  getMarketCheckoutPrice,
+  getUserSellCheckoutPrice,
+  roundMoney,
+} from "./OrderPricingService";
+
+const PRICE_MISMATCH_TOLERANCE = 0.01;
+const OPEN_SELL_ORDER_STATUSES = [
+  OrderStatus.PENDING_PAYMENT,
+  OrderStatus.TRADE_PENDING,
+  OrderStatus.PAID,
+];
+
+export async function findOpenSellOrderForAsset(userId: string, assetId: string) {
+  return prisma.order.findFirst({
+    where: {
+      userId,
+      type: "SELL",
+      status: { in: OPEN_SELL_ORDER_STATUSES },
+      items: {
+        some: { assetId },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, status: true },
+  });
+}
 
 export class CreatePurchaseOrderUseCase {
   constructor(private orderRepository: IOrderRepository) {}
@@ -22,8 +54,28 @@ export class CreatePurchaseOrderUseCase {
       throw new Error("No items provided for the order");
     }
 
-    // Separar bot items de market listings
-    const botIds = assetIds.filter((id) => !id.startsWith("market-"));
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
+      throw new Error("Para realizar compras debes tener registrado tu Email y Trade URL en tu perfil.");
+    }
+
+    // Map overrides for fast lookup
+    const overridesMap = new Map<string, any>();
+    if (Array.isArray(itemsOverrides)) {
+      itemsOverrides.forEach((ov) => {
+        if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+      });
+    }
+
+    // Separar bot items, assets YouPin individuales y listings legacy
+    const youpinFloatIds = assetIds
+      .filter((id) => id.startsWith("youpin-"))
+      .map((id) => id.replace(/^youpin-/, ""));
+    const botIds = assetIds.filter(
+      (id) => !id.startsWith("market-") && !id.startsWith("youpin-"),
+    );
     const marketNames = assetIds
       .filter((id) => id.startsWith("market-"))
       .map((id) => id.replace(/^market-/, ""));
@@ -36,12 +88,17 @@ export class CreatePurchaseOrderUseCase {
           })
         : [];
 
-    if (storeItems.length !== botIds.length) {
-      const foundIds = storeItems.map((i) => i.assetId);
-      const missingIds = botIds.filter((id) => !foundIds.includes(id));
+    const specificBotIds = botIds.filter(id => overridesMap.get(id)?.isSpecific !== false);
+    const missingSpecificBotIds = specificBotIds.filter(id => !storeItems.some(i => i.assetId === id));
+    if (missingSpecificBotIds.length > 0) {
       throw new Error(
-        `Some bot items are no longer available: ${missingIds.join(", ")}`,
+        `Some bot items are no longer available: ${missingSpecificBotIds.join(", ")}`,
       );
+    }
+
+    const storeItemsToAssert = storeItems.filter(item => specificBotIds.includes(item.assetId));
+    if (storeItemsToAssert.length > 0) {
+      await BotService.assertStoreItemsFromActiveBots(storeItemsToAssert);
     }
 
     // Resolver market listings usando su campo unique 'name'
@@ -52,67 +109,163 @@ export class CreatePurchaseOrderUseCase {
           })
         : [];
 
-    if (marketListings.length !== marketNames.length) {
-      const foundNames = marketListings.map((i: any) => i.name);
-      const missingNames = marketNames.filter(
-        (name) => !foundNames.includes(name),
-      );
+    const specificMarketNames = marketNames.filter(name => overridesMap.get(`market-${name}`)?.isSpecific !== false);
+    const missingSpecificMarketNames = specificMarketNames.filter(name => !marketListings.some(i => i.name === name));
+    if (missingSpecificMarketNames.length > 0) {
       throw new Error(
-        `Some market listings are no longer available: ${missingNames.join(", ")}`,
+        `Some market listings are no longer available: ${missingSpecificMarketNames.join(", ")}`,
       );
     }
 
-    // Map overrides for fast lookup
-    const overridesMap = new Map<string, any>();
-    if (Array.isArray(itemsOverrides)) {
-      itemsOverrides.forEach((ov) => {
-        if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
-      });
+    const youpinFloatItems =
+      youpinFloatIds.length > 0
+        ? await prisma.floatItem.findMany({
+            where: { id: { in: youpinFloatIds }, available: true },
+            include: { resaleItem: true },
+          })
+        : [];
+
+    const specificYoupinFloatIds = youpinFloatIds.filter(id => overridesMap.get(`youpin-${id}`)?.isSpecific !== false);
+    const missingSpecificYoupinFloatIds = specificYoupinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+    if (missingSpecificYoupinFloatIds.length > 0) {
+      throw new Error(
+        `Some YouPin assets are no longer available: ${missingSpecificYoupinFloatIds.join(", ")}`,
+      );
     }
 
     let totalPrice = 0;
     const orderItemsData: Omit<OrderItem, "id" | "orderId">[] = [];
 
-    // Bot items — precio real de DB, float/pattern reales
-    for (const item of storeItems) {
-      totalPrice += item.price;
-      const override = overridesMap.get(item.assetId);
+    const settingsData = await getAdminSettingsOrDefaults();
+
+    // Bot items — precio real de DB + modificador global, float/pattern reales
+    for (const botId of botIds) {
+      const item = storeItems.find((i) => i.assetId === botId);
+      const override = overridesMap.get(botId);
+      
+      let itemPrice: number;
+      if (item) {
+        itemPrice = getBotCheckoutPrice(item.price, settingsData);
+      } else {
+        itemPrice = override?.price ? roundMoney(override.price) : 0;
+      }
+      
+      totalPrice += itemPrice;
       orderItemsData.push({
-        assetId: item.assetId,
-        name: item.name,
-        price: item.price,
-        iconUrl: item.iconUrl,
-        rarity: override?.rarity || item.rarity,
-        exterior: override?.exterior || item.exterior,
+        assetId: botId,
+        name: item?.name || override?.name || "CS2 Skin",
+        price: itemPrice,
+        iconUrl: item?.iconUrl || override?.iconUrl || null,
+        rarity: override?.rarity || item?.rarity || "common",
+        exterior: override?.exterior || item?.exterior || null,
         float:
           override?.float !== undefined && override?.float !== null
             ? override.float
-            : item.float,
+            : (item?.float || null),
         pattern:
           override?.pattern !== undefined && override?.pattern !== null
             ? override.pattern
-            : item.pattern,
+            : (item?.pattern || null),
         provider: "bot",
       });
     }
 
-    // Market listings — precio del catálogo, sin float/pattern individuales
-    for (const item of marketListings as any[]) {
-      totalPrice += item.price;
+    // Market listings — precio del catálogo u override de float individual
+    for (const name of marketNames) {
+      const item = marketListings.find((i: any) => i.name === name);
+      const override = overridesMap.get(`market-${name}`);
+      let itemPrice: number;
+      let itemFloat: number | null = null;
+      let itemPattern: number | null = null;
+      let itemProvider = item?.provider || "youpin";
+
+      if (item) {
+        itemPrice = getMarketCheckoutPrice(item.price, settingsData);
+        if (override && override.float !== undefined && override.float !== null) {
+          const floatQueryWhere: any = {
+            resaleItemId: item.id,
+            floatValue: Number(override.float),
+          };
+          if (override.pattern !== undefined && override.pattern !== null) {
+            floatQueryWhere.paintSeed = Number(override.pattern);
+          }
+          const dbFloat = await prisma.floatItem.findFirst({
+            where: floatQueryWhere,
+          });
+
+          if (dbFloat) {
+            itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+            itemFloat = dbFloat.floatValue;
+            itemPattern = dbFloat.paintSeed;
+            itemProvider = dbFloat.market.toLowerCase();
+          }
+        }
+      } else {
+        itemPrice = override?.price ? roundMoney(override.price) : 0;
+        itemFloat = override?.float !== undefined && override?.float !== null ? override.float : null;
+        itemPattern = override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null;
+      }
+
+      totalPrice += itemPrice;
       orderItemsData.push({
-        assetId: `market-${item.name}`,
-        name: item.name,
-        price: item.price,
-        iconUrl: item.iconUrl,
-        rarity: item.rarity,
-        exterior: item.exterior,
-        float: null,
-        pattern: null,
-        provider: item.provider, // 'buff' | 'youpin'
+        assetId: `market-${name}`,
+        name: name,
+        price: itemPrice,
+        iconUrl: item?.iconUrl || override?.iconUrl || null,
+        rarity: item?.rarity || override?.rarity || "common",
+        exterior: item?.exterior || override?.exterior || null,
+        float: itemFloat,
+        pattern: itemPattern,
+        provider: itemProvider,
       });
     }
 
-    totalPrice = Math.round(totalPrice * 100) / 100;
+    for (const floatId of youpinFloatIds) {
+      const dbFloat = youpinFloatItems.find((f) => f.id === floatId);
+      const override = overridesMap.get(`youpin-${floatId}`);
+      
+      let itemPrice: number;
+      let name: string;
+      let iconUrl: string | null = null;
+      let rarity: string = "common";
+      let exterior: string | null = null;
+      let floatVal: number | null = null;
+      let patternVal: number | null = null;
+      
+      if (dbFloat) {
+        itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+        const listing = dbFloat.resaleItem;
+        name = listing.name;
+        iconUrl = listing.iconUrl;
+        rarity = listing.rarity;
+        exterior = listing.exterior;
+        floatVal = dbFloat.floatValue;
+        patternVal = dbFloat.paintSeed;
+      } else {
+        itemPrice = override?.price ? roundMoney(override.price) : 0;
+        name = override?.name || "CS2 Skin";
+        iconUrl = override?.iconUrl || null;
+        rarity = override?.rarity || "common";
+        exterior = override?.exterior || null;
+        floatVal = override?.float !== undefined && override?.float !== null ? override.float : null;
+        patternVal = override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null;
+      }
+      
+      totalPrice += itemPrice;
+      orderItemsData.push({
+        assetId: `youpin-${floatId}`,
+        name,
+        price: itemPrice,
+        iconUrl,
+        rarity,
+        exterior,
+        float: floatVal,
+        pattern: patternVal,
+        provider: 'youpin',
+      });
+    }
+
+    totalPrice = roundMoney(totalPrice);
 
     const orderData = {
       userId,
@@ -144,26 +297,52 @@ export class CreateSellOrderUseCase {
       throw new Error("No items provided for the sell order");
     }
 
-    const settings = await prisma.adminSettings.findFirst();
-    const minSellPrice = settings?.minimumUserSellPrice ?? 1.0;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
+      throw new Error("Para realizar ventas debes tener registrado tu Email y Trade URL en tu perfil.");
+    }
+
+    const settings = await getAdminSettingsOrDefaults();
+    const minSellPrice = settings.minimumUserSellPrice;
 
     // Validate each item: must be in user's inventory and meet minimum price
     const resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
     let totalPrice = 0;
 
     for (const item of items) {
-      if (item.requestedPrice < minSellPrice) {
-        throw new Error(
-          `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${item.requestedPrice}.`,
-        );
-      }
-
       const inventoryItem = await prisma.userInventoryItem.findFirst({
         where: { userId, assetId: item.assetId },
       });
 
       if (!inventoryItem) {
         throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
+      }
+
+      const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
+      const requestedPrice = Number(item.requestedPrice);
+
+      if (backendPrice < minSellPrice) {
+        throw new Error(
+          `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
+        );
+      }
+
+      if (
+        Number.isFinite(requestedPrice) &&
+        Math.abs(requestedPrice - backendPrice) > PRICE_MISMATCH_TOLERANCE
+      ) {
+        throw new Error(
+          `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+        );
+      }
+
+      const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+      if (openSellOrder) {
+        throw new Error(
+          `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
+        );
       }
 
       const alreadyListed = await prisma.skinListing.findFirst({
@@ -203,7 +382,7 @@ export class CreateSellOrderUseCase {
       resolvedItems.push({
         assetId: inventoryItem.assetId,
         name: inventoryItem.name,
-        price: item.requestedPrice,
+        price: backendPrice,
         iconUrl: inventoryItem.iconUrl ?? null,
         rarity: inventoryItem.rarity,
         exterior: inventoryItem.exterior,
@@ -212,10 +391,10 @@ export class CreateSellOrderUseCase {
         provider: "user",
       });
 
-      totalPrice += item.requestedPrice;
+      totalPrice += backendPrice;
     }
 
-    totalPrice = Math.round(totalPrice * 100) / 100;
+    totalPrice = roundMoney(totalPrice);
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(
@@ -269,13 +448,51 @@ export class GetAllOrdersUseCase {
 }
 
 export class UpdateOrderStatusUseCase {
-  constructor(private orderRepository: IOrderRepository) {}
+  constructor(
+    private orderRepository: IOrderRepository,
+    private notificationRepository?: INotificationRepository
+  ) {}
 
   async execute(orderId: string, status: OrderStatus): Promise<Order> {
     const order = await this.orderRepository.updateStatus(orderId, status);
 
     // Dispatch webhook status change notification
     WebhookService.sendOrderNotification(order, "order.status_updated");
+
+    // Crear notificación persistente para el cliente
+    if (this.notificationRepository) {
+      try {
+        const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
+        
+        let title = 'Estado de orden actualizado';
+        let content = `El estado de tu orden #${order.id.slice(0, 8)} cambió a ${status}.`;
+        
+        if (status === OrderStatus.PAID) {
+          title = 'Orden pagada con éxito';
+          content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
+        } else if (status === OrderStatus.COMPLETED) {
+          title = 'Orden completada';
+          content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
+        } else if (status === OrderStatus.CANCELLED) {
+          title = 'Orden cancelada';
+          content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
+        } else if (status === OrderStatus.TRADE_PENDING) {
+          title = 'Intercambio de Steam pendiente';
+          content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+        }
+
+        await createNotificationUseCase.execute({
+          userId: order.userId,
+          adminId: null,
+          title,
+          content,
+          type: 'ORDER_STATUS',
+          link: '/purchases',
+        });
+      } catch (err) {
+        console.error('[UpdateOrderStatusUseCase] Error creating database notification:', err);
+      }
+    }
 
     return order;
   }

@@ -1,7 +1,5 @@
 import crypto from "crypto";
-
-const apiKey = process.env.NOWPAYMENTS_API_KEY || "";
-const ipnSecret = process.env.NOWPAYMENTS_IPN_SECRET || "";
+import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
 
 export class NOWPaymentsService {
   /**
@@ -13,9 +11,10 @@ export class NOWPaymentsService {
     frontendUrl: string,
     backendUrl: string,
   ): Promise<string> {
+    const apiKey = await AdminSecureConfigService.getSecretValue("NOWPAYMENTS_API_KEY");
     if (!apiKey) {
       throw new Error(
-        "NOWPAYMENTS_API_KEY no está configurado en las variables de entorno.",
+        "NOWPAYMENTS_API_KEY no está configurado en secretos admin ni variables de entorno.",
       );
     }
 
@@ -28,8 +27,8 @@ export class NOWPaymentsService {
       ipn_callback_url: `${backendUrl}/api/orders/webhook/nowpayments`,
       order_id: order.id,
       order_description: `Compra en JabbuStore - Orden #${order.id.slice(0, 8)}`,
-      success_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}`,
-      cancel_url: `${frontendUrl}/checkout?status=failure`,
+      success_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}&method=nowpayments`,
+      cancel_url: `${frontendUrl}/checkout?status=failure&orderId=${order.id}&method=nowpayments`,
     };
 
     console.log(
@@ -65,7 +64,8 @@ export class NOWPaymentsService {
    * Verifica criptográficamente que la notificación del webhook provenga de NOWPayments
    * mediante la validación de la firma en la cabecera x-nowpayments-sig.
    */
-  static verifySignature(rawBody: string, signature: string): boolean {
+  static async verifySignature(rawBody: string, signature: string): Promise<boolean> {
+    const ipnSecret = await AdminSecureConfigService.getSecretValue("NOWPAYMENTS_IPN_SECRET");
     if (!ipnSecret) {
       console.warn(
         "[NOWPayments] NOWPAYMENTS_IPN_SECRET no configurado. Saltando validación de firma.",
