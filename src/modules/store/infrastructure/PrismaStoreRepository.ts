@@ -1,5 +1,5 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
-import { IStoreRepository } from '../domain/IStoreRepository';
+import { IStoreRepository, StorePriceUpdate } from '../domain/IStoreRepository';
 import { StoreItem } from '../domain/Item';
 
 export class PrismaStoreRepository implements IStoreRepository {
@@ -56,6 +56,8 @@ export class PrismaStoreRepository implements IStoreRepository {
       isSouvenir: item.isSouvenir ?? false,
       float: (item.float !== undefined && item.float !== null && !isNaN(item.float)) ? item.float : null,
       pattern: (item.pattern !== undefined && item.pattern !== null && !isNaN(item.pattern)) ? Math.round(item.pattern) : null,
+      paintIndex: (item.paintIndex !== undefined && item.paintIndex !== null && !isNaN(item.paintIndex)) ? Math.round(item.paintIndex) : null,
+      inspectLink: item.inspectLink || null,
     }));
 
     // Chunk array into batches of 1000 items to bypass PostgreSQL parameter limit (max 65,535 parameters)
@@ -74,5 +76,29 @@ export class PrismaStoreRepository implements IStoreRepository {
         data: batch,
       });
     }
+  }
+
+  async updatePricesMany(updates: StorePriceUpdate[]): Promise<number> {
+    let updated = 0;
+    for (const entry of updates) {
+      const existing = await prisma.storeItem.findUnique({
+        where: { assetId: entry.assetId },
+        select: { isPriceManual: true, price: true },
+      });
+      if (!existing || existing.isPriceManual) continue;
+
+      await prisma.storeItem.update({
+        where: { assetId: entry.assetId },
+        data: {
+          price: entry.price,
+          name: entry.name,
+        },
+      });
+      updated++;
+    }
+    console.log(
+      `[Prisma Store Repository] Precios actualizados in-place: ${updated}/${updates.length}`,
+    );
+    return updated;
   }
 }

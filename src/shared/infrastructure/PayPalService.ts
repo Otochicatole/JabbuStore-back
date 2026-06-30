@@ -1,9 +1,11 @@
+import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
+
 export class PayPalService {
-  private static getCredentials() {
+  private static async getCredentials() {
     return {
-      clientId: process.env.PAYPAY_CLIENT_ID || "",
-      clientSecret: process.env.PAYPAY_CLIENT_SECRET || "",
-      isSandbox: process.env.PAYPAL_SANDBOX !== "false",
+      clientId: await AdminSecureConfigService.getSecretValue("PAYPAL_CLIENT_ID"),
+      clientSecret: await AdminSecureConfigService.getSecretValue("PAYPAL_CLIENT_SECRET"),
+      isSandbox: (await AdminSecureConfigService.getSecretValue("PAYPAL_SANDBOX")) !== "false",
     };
   }
 
@@ -11,7 +13,7 @@ export class PayPalService {
    * Obtiene un token de acceso OAuth 2.0 de PayPal.
    */
   public static async getAccessToken(): Promise<string> {
-    const { clientId, clientSecret, isSandbox } = this.getCredentials();
+    const { clientId, clientSecret, isSandbox } = await this.getCredentials();
     const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
     const baseUrl = isSandbox
       ? "https://api-m.sandbox.paypal.com"
@@ -43,10 +45,10 @@ export class PayPalService {
     frontendUrl: string,
     backendUrl: string,
   ): Promise<string> {
-    const { clientId, clientSecret, isSandbox } = this.getCredentials();
+    const { clientId, clientSecret, isSandbox } = await this.getCredentials();
     if (!clientId || !clientSecret) {
       throw new Error(
-        "Las credenciales de PayPal (PAYPAY_CLIENT_ID / PAYPAY_CLIENT_SECRET) no están configuradas.",
+        "Las credenciales de PayPal no están configuradas en secretos admin ni variables de entorno.",
       );
     }
 
@@ -87,7 +89,7 @@ export class PayPalService {
       ],
       application_context: {
         return_url: `${frontendUrl}/checkout?status=success&orderId=${order.id}&method=paypal`,
-        cancel_url: `${frontendUrl}/checkout?status=failure`,
+        cancel_url: `${frontendUrl}/checkout?status=failure&orderId=${order.id}&method=paypal`,
         user_action: "PAY_NOW",
         brand_name: "JabbuStore",
       },
@@ -127,7 +129,7 @@ export class PayPalService {
    * Se utiliza tanto para verificar el pago de forma manual como asíncrona.
    */
   static async capturePayment(paypalOrderId: string): Promise<any> {
-    const { isSandbox } = this.getCredentials();
+    const { isSandbox } = await this.getCredentials();
     const accessToken = await this.getAccessToken();
     const baseUrl = isSandbox
       ? "https://api-m.sandbox.paypal.com"

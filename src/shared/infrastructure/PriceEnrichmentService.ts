@@ -1,5 +1,10 @@
-import { config } from "../config";
-import { prisma } from "./PrismaClient";
+import {
+  BotPriceSyncService,
+  MarketHashNameNormalizer,
+} from "../../modules/pricing";
+
+const botPriceSyncService = new BotPriceSyncService();
+const marketHashNameNormalizer = new MarketHashNameNormalizer();
 
 export interface PriceableItem {
   assetId: string;
@@ -7,6 +12,9 @@ export interface PriceableItem {
   name: string;
   type: string;
   price: number;
+  iconUrl?: string | null;
+  pattern?: number | null;
+  paintIndex?: number | null;
 }
 
 export class PriceEnrichmentService {
@@ -20,248 +28,100 @@ export class PriceEnrichmentService {
     iconUrl: string | null,
     paintIndex?: number | null,
   ): string | null {
-    if (!marketHashName) return null;
-    if (!marketHashName.includes("Doppler")) return null;
-
-    // 1. Detección exacta mediante Paint Index (Finish Catalog) si está disponible
-    if (paintIndex !== undefined && paintIndex !== null) {
-      const paintIndexMap: Record<number, string> = {
-        // Doppler Gen 1
-        418: "phase1",
-        419: "phase2",
-        420: "phase3",
-        421: "phase4",
-        415: "ruby",
-        416: "sapphire",
-        417: "blackpearl",
-        // Doppler Gen 2 (Spectrum: Butterfly, Huntsman, Falchion, Shadow Daggers, Bowie)
-        618: "phase2",
-        619: "sapphire",
-        617: "blackpearl",
-        // Doppler Gen 3 (Prisma: Talon, Ursus, Navaja, Stiletto)
-        852: "phase1",
-        853: "phase2",
-        854: "phase3",
-        855: "phase4",
-        849: "ruby",
-        850: "sapphire",
-        851: "blackpearl",
-
-        // Gamma Doppler Gen 1
-        569: "phase1",
-        570: "phase2",
-        571: "phase3",
-        572: "phase4",
-        568: "emerald",
-        // Gamma Doppler Gen 2 (Dreams & Nightmares, etc)
-        1119: "phase1",
-        1120: "phase2",
-        1121: "phase3",
-        1122: "phase4",
-        1118: "emerald",
-      };
-      if (paintIndexMap[paintIndex]) {
-        return paintIndexMap[paintIndex];
-      }
-    }
-
-    // 2. Intentar usar la librería offline si el hash tiene el formato clásico de CS:GO (-9a8)
-    if (iconUrl && iconUrl.startsWith("-9a8")) {
-      try {
-        const dopplerPhaseDetector = require("csgo-doppler-phase");
-        let cleanIconUrl = iconUrl;
-        if (iconUrl.includes("economy/image/")) {
-          cleanIconUrl = iconUrl.split("economy/image/")[1] || iconUrl;
-        }
-
-        const detected = dopplerPhaseDetector.detect(
-          marketHashName,
-          cleanIconUrl,
-        );
-        if (
-          detected &&
-          typeof detected === "string" &&
-          !detected.startsWith("Something wrong")
-        ) {
-          return detected;
-        }
-      } catch (error) {
-        console.error(
-          "[PriceEnrichmentService] Error detecting Doppler phase via library:",
-          error,
-        );
-      }
-    }
-
-    return null;
+    return marketHashNameNormalizer.detectDopplerPhase({
+      marketHashName,
+      iconUrl,
+      paintIndex,
+    });
   }
 
   /**
-   * Descompone un nombre completo de ítem (con fase opcional añadida) en el nombre base de mercado y la fase.
+   * Corrige el precio de las variantes Doppler legendarias (Ruby, Sapphire, Black Pearl, Emerald)
+   * si el valor reportado por la API es erróneo o demasiado bajo en comparación con el precio base.
    */
+  static adjustHighTierDopplerPrice(name: string, price: number, basePrice: number): number {
+    const isRuby = name.includes(" | Ruby");
+    const isSapphire = name.includes(" | Sapphire");
+    const isBlackPearl = name.includes(" | Black Pearl");
+    const isEmerald = name.includes(" | Emerald");
+
+    if (!isRuby && !isSapphire && !isBlackPearl && !isEmerald) {
+      return price;
+    }
+
+    let multiplier = 1.0;
+    if (isBlackPearl) multiplier = 8.0;
+    else if (isRuby) multiplier = 9.0;
+    else if (isSapphire) multiplier = 10.0;
+    else if (isEmerald) multiplier = 12.0;
+
+    const minPrice = basePrice * multiplier;
+    if (price < minPrice) {
+      console.log(`[Doppler Price Correction] Correcting price for "${name}" from $${price} to $${minPrice} (Base: $${basePrice}, Multiplier: ${multiplier}x)`);
+      return minPrice;
+    }
+
+    return price;
+  }
+
   static getBaseNameAndPhase(fullName: string): {
     baseName: string;
     phase: string | null;
   } {
-    if (!fullName) return { baseName: "", phase: null };
+    return marketHashNameNormalizer.splitDopplerPhase(fullName);
+  }
 
-    const parts = fullName.split(" | ");
-    if (parts.length >= 2) {
-      const lastPart = parts[parts.length - 1]!;
-      const phaseNames = [
-        "Phase 1",
-        "Phase 2",
-        "Phase 3",
-        "Phase 4",
-        "Ruby",
-        "Sapphire",
-        "Black Pearl",
-        "Emerald",
-      ];
-      if (phaseNames.includes(lastPart)) {
-        const baseName = parts.slice(0, -1).join(" | ");
-        return { baseName, phase: lastPart };
-      }
-    }
-    return { baseName: fullName, phase: null };
+  static buildPricingMarketHashName(item: PriceableItem): string {
+    return marketHashNameNormalizer.buildPricingMarketHashName({
+      marketHashName: item.name,
+      iconUrl: item.iconUrl,
+    });
   }
 
   /**
-   * Enriquecer una lista de artículos con precios del mercado real (vía DB local de MarketListing) o fallbacks deterministas.
+   * Enriquece ítems de bots con precios vía módulo `pricing`
+   * (catálogo local SteamWebAPI Items API).
    */
   static async enrichItemsWithMarketPrices<T extends PriceableItem>(
     items: T[],
+    options?: {
+      preserveExistingWhenMissing?: boolean;
+      useFallbackWhenMissing?: boolean;
+    },
   ): Promise<T[]> {
-    // Generar nombres de búsqueda primarios y alternativos (ej: Sticker | vs Sticker Slab |)
-    const lookupNames = new Set<string>();
-    for (const item of items) {
-      if (!item.name) continue;
-      lookupNames.add(item.name);
-      if (item.name.startsWith("Sticker | ")) {
-        lookupNames.add(item.name.replace("Sticker | ", "Sticker Slab | "));
-      } else if (item.name.startsWith("Sticker Slab | ")) {
-        lookupNames.add(item.name.replace("Sticker Slab | ", "Sticker | "));
-      }
+    const { items: enriched, catalogAvailable } =
+      await botPriceSyncService.enrichItems(items, {
+        forceRefreshCatalog: false,
+        preserveExistingWhenMissing:
+          options?.preserveExistingWhenMissing ?? false,
+        useFallbackWhenMissing: options?.useFallbackWhenMissing ?? true,
+        logWarnings: true,
+      });
+    if (!catalogAvailable) {
+      console.warn(
+        "[PriceEnrichment] Catálogo no disponible; ítems sin re-pricing.",
+      );
     }
+    return enriched;
+  }
 
-    const lookupList = Array.from(lookupNames);
-    const pricesMap = new Map<string, number>();
-
-    if (lookupList.length > 0) {
-      try {
-        console.log(
-          `[Price Enrichment Service] Buscando precios en la DB local para ${lookupList.length} nombres de ítem...`,
-        );
-        // Consultar precios de una pasada
-        const dbListings = await prisma.marketListing.findMany({
-          where: { name: { in: lookupList } },
-          select: { name: true, price: true },
-        });
-
-        const dbPricesMap = new Map<string, number>();
-        for (const listing of dbListings) {
-          dbPricesMap.set(listing.name, listing.price);
-        }
-
-        // Mapear los precios de vuelta a los ítems, considerando alternativas
-        for (const item of items) {
-          let price = dbPricesMap.get(item.name);
-          if (price === undefined) {
-            if (item.name.startsWith("Sticker | ")) {
-              price = dbPricesMap.get(
-                item.name.replace("Sticker | ", "Sticker Slab | "),
-              );
-            } else if (item.name.startsWith("Sticker Slab | ")) {
-              price = dbPricesMap.get(
-                item.name.replace("Sticker Slab | ", "Sticker | "),
-              );
-            }
-          }
-
-          if (price !== undefined) {
-            pricesMap.set(item.name, price);
-          }
-        }
-
-        // Para cualquier item faltante, intentar buscar por baseName (sin fase Doppler)
-        const missingItems = items.filter((item) => !pricesMap.has(item.name));
-        if (missingItems.length > 0) {
-          const baseNamesToLookup = missingItems
-            .map((item) => this.getBaseNameAndPhase(item.name).baseName)
-            .filter(Boolean);
-
-          if (baseNamesToLookup.length > 0) {
-            // Generar alternativos también para los nombres base
-            const baseLookupNames = new Set<string>();
-            for (const bName of baseNamesToLookup) {
-              baseLookupNames.add(bName);
-              if (bName.startsWith("Sticker | ")) {
-                baseLookupNames.add(
-                  bName.replace("Sticker | ", "Sticker Slab | "),
-                );
-              } else if (bName.startsWith("Sticker Slab | ")) {
-                baseLookupNames.add(
-                  bName.replace("Sticker Slab | ", "Sticker | "),
-                );
-              }
-            }
-
-            const dbBaseListings = await prisma.marketListing.findMany({
-              where: { name: { in: Array.from(baseLookupNames) } },
-              select: { name: true, price: true },
-            });
-
-            const basePricesMap = new Map<string, number>();
-            for (const listing of dbBaseListings) {
-              basePricesMap.set(listing.name, listing.price);
-            }
-
-            for (const item of missingItems) {
-              const { baseName } = this.getBaseNameAndPhase(item.name);
-              let fallbackPrice = basePricesMap.get(baseName);
-              if (fallbackPrice === undefined) {
-                if (baseName.startsWith("Sticker | ")) {
-                  fallbackPrice = basePricesMap.get(
-                    baseName.replace("Sticker | ", "Sticker Slab | "),
-                  );
-                } else if (baseName.startsWith("Sticker Slab | ")) {
-                  fallbackPrice = basePricesMap.get(
-                    baseName.replace("Sticker Slab | ", "Sticker | "),
-                  );
-                }
-              }
-
-              if (fallbackPrice) {
-                pricesMap.set(item.name, fallbackPrice);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error(
-          "[Price Enrichment Service Error] Error al consultar precios en base de datos local:",
-          error,
-        );
-      }
+  /** Solo recalcular precios desde el catálogo local sin re-importar inventario Steam. */
+  static async refreshMarketPricesOnly<T extends PriceableItem>(
+    items: T[],
+  ): Promise<T[]> {
+    const { items: enriched, catalogAvailable } =
+      await botPriceSyncService.enrichItems(items, {
+        forceRefreshCatalog: true,
+        preserveExistingWhenMissing: true,
+        useFallbackWhenMissing: false,
+        logWarnings: true,
+      });
+    if (!catalogAvailable) {
+      console.warn(
+        "[PriceEnrichment] Sync de precios omitido: catálogo local Items API no disponible.",
+      );
     }
-
-    // Enriquecer cada ítem con el precio obtenido o con el fallback determinista
-    return items.map((item) => {
-      let finalPrice = pricesMap.get(item.name) || 0;
-
-      if (finalPrice === 0) {
-        finalPrice = this.calculateFallbackPrice(
-          item.type,
-          item.classId,
-          item.assetId,
-        );
-      }
-
-      return {
-        ...item,
-        price: finalPrice,
-      };
-    });
+    return enriched;
   }
 
   static parseItemDetails(

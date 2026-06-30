@@ -2,16 +2,24 @@ import passport from 'passport';
 import { Strategy as SteamStrategy } from 'passport-steam';
 import { PrismaUserRepository } from '../../users/infrastructure/PrismaUserRepository';
 import { AuthService } from '../../../shared/infrastructure/AuthService';
+import { AdminSecureConfigService } from '../../marketplace/application/AdminSecureConfigService';
 
 const userRepository = new PrismaUserRepository();
 
-export const configurePassport = () => {
+export const configurePassport = async () => {
+  const steamApiKey = await AdminSecureConfigService.getSecretValue("STEAM_API_KEY");
+
+  if (!steamApiKey) {
+    console.warn('[Auth] STEAM_API_KEY no configurado. Login con Steam deshabilitado hasta configurar la credencial.');
+    return;
+  }
+
   passport.use(
     new SteamStrategy(
       {
         returnURL: `${process.env.BACKEND_URL}/api/auth/steam/return`,
         realm: `${process.env.BACKEND_URL}/`,
-        apiKey: process.env.STEAM_API_KEY!,
+        apiKey: steamApiKey,
       },
       async (identifier: string, profile: any, done: any) => {
         try {

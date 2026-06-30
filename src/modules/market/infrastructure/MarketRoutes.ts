@@ -1,20 +1,35 @@
 import { Router } from 'express';
 import { MarketController } from './MarketController';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
-import { GetMarketListingsUseCase } from '../application/GetMarketListingsUseCase';
+import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
+import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
+import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
+import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
 
 const router = Router();
 
 // Inyección de dependencias del módulo market
 const marketRepository = new PrismaMarketRepository();
-const getMarketListingsUseCase = new GetMarketListingsUseCase(marketRepository);
+const storeRepository = new PrismaStoreRepository();
+const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase(marketRepository);
 const syncMarketListingsUseCase = new SyncMarketListingsUseCase(marketRepository);
-const marketController = new MarketController(getMarketListingsUseCase, syncMarketListingsUseCase);
+const getResaleItemFloatsUseCase = new GetResaleItemFloatsUseCase(marketRepository);
+const syncStoreItemsUseCase = new SyncStoreItemsUseCase(storeRepository);
 
-// Ruta pública — catálogo de market listings con displayPrice
+const marketController = new MarketController(
+  getMarketStoreAssetsUseCase,
+  syncMarketListingsUseCase,
+  getResaleItemFloatsUseCase,
+  syncStoreItemsUseCase
+);
+
+// Ruta pública — catálogo YouPin (un asset/float por fila; admin y /buy reventa)
 router.get('/listings', (req, res) => marketController.getListings(req, res));
+
+// Ruta pública — obtener floats de un resale item
+router.get('/listings/:id/floats', (req, res) => marketController.getFloats(req, res));
 
 // Ruta protegida — solo admin puede forzar una resincronización manual
 router.post('/sync', authMiddleware, adminOnly, (req, res) => marketController.triggerSync(req, res));

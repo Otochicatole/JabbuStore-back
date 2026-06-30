@@ -4,14 +4,25 @@ import { BotService } from '../application/BotService';
 import { PurchaseService } from '../application/PurchaseService';
 import { TradeService } from '../application/TradeService';
 import { ListingService } from '../application/ListingService';
+import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
+import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import { AdminSecureConfigService } from '../application/AdminSecureConfigService';
+
+const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
+let botInventorySyncRunning = false;
 
 export class AdminMarketplaceController {
   // Settings
   static async getSettings(req: Request, res: Response) {
     try {
       const settings = await AdminSettingsService.getSettings();
-      res.json(settings);
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -72,6 +83,147 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updatePaymentMethodSettings(req: Request, res: Response) {
+    try {
+      const {
+        mercadoPagoEnabled,
+        paypalEnabled,
+        nowpaymentsEnabled,
+      } = req.body;
+
+      const settings = await AdminSettingsService.updatePaymentMethodSettings({
+        mercadoPagoEnabled,
+        paypalEnabled,
+        nowpaymentsEnabled,
+      });
+
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateManualTransferSettings(req: Request, res: Response) {
+    try {
+      const {
+        manualTransferEnabled,
+        manualBankAlias,
+        manualBankCbu,
+        manualBankHolder,
+        manualBankInstructions,
+        manualCryptoAddress,
+        manualCryptoNetwork,
+        manualCryptoInstructions,
+      } = req.body;
+
+      const settings = await AdminSettingsService.updateManualTransferSettings({
+        manualTransferEnabled,
+        manualBankAlias,
+        manualBankCbu,
+        manualBankHolder,
+        manualBankInstructions,
+        manualCryptoAddress,
+        manualCryptoNetwork,
+        manualCryptoInstructions,
+      });
+
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async getSecretsStatus(req: Request, res: Response) {
+    try {
+      const status = await AdminSecureConfigService.listSecretStatus();
+      res.json(status);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async upsertSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede modificar credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { value, password } = req.body;
+      const result = await AdminSecureConfigService.upsertSecret(
+        key as string,
+        String(value || ''),
+        password,
+        user?.id,
+      );
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async revealSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede ver credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { password } = req.body;
+      const result = await AdminSecureConfigService.revealSecret(key as string, password, user?.id);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async deleteSecret(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede eliminar credenciales.' });
+      }
+
+      const { key } = req.params;
+      const { password } = req.body;
+      const result = await AdminSecureConfigService.deleteSecret(key as string, password, user?.id);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async getRuntimeSettings(req: Request, res: Response) {
+    try {
+      const settings = await AdminSecureConfigService.getRuntimeSettings();
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateRuntimeSettings(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      const settings = await AdminSecureConfigService.updateRuntimeSettings(req.body || {}, user?.id);
+      res.json(settings);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
   static async updateResellSettings(req: Request, res: Response) {
     try {
       const { resellModifierType, resellModifierValue, resellModifierEnabled } = req.body;
@@ -80,7 +232,12 @@ export class AdminMarketplaceController {
         resellModifierValue,
         resellModifierEnabled
       });
-      res.json(settings);
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -89,6 +246,7 @@ export class AdminMarketplaceController {
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
+      res.setHeader('Cache-Control', 'no-store');
       const bots = await BotService.getAllBots();
       res.json(bots);
     } catch (err: any) {
@@ -104,6 +262,40 @@ export class AdminMarketplaceController {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  }
+
+  /** POST /admin/marketplace/bots/sync — inventario Steam + precios (background) */
+  static async syncBotsInventory(_req: Request, res: Response) {
+    if (botInventorySyncRunning) {
+      res.status(409).json({ error: 'Ya hay una sincronización de bots en curso.' });
+      return;
+    }
+
+    res.json({
+      message:
+        'Sincronización de inventario y precios de bots iniciada en segundo plano. Puede demorar 1–3 minutos según el inventario y consultas Doppler a YouPin.',
+      started: true,
+    });
+
+    botInventorySyncRunning = true;
+    (async () => {
+      try {
+        console.log('[Admin] Sincronizando inventario y precios de bots (background)...');
+        const result = await syncStoreItemsUseCase.execute();
+        console.log(
+          `[Admin] Sync bots completado: ${result.itemsSynced} ítems, ${result.activeBots} bot(s) activos.`,
+        );
+      } catch (err: any) {
+        console.error('[Admin] Error sincronizando bots (background):', err);
+      } finally {
+        botInventorySyncRunning = false;
+      }
+    })();
+  }
+
+  static async getSyncBotsInventoryStatus(req: Request, res: Response) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ running: botInventorySyncRunning });
   }
 
   static async updateBot(req: Request, res: Response) {
@@ -140,8 +332,12 @@ export class AdminMarketplaceController {
   static async deleteBot(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      await BotService.deleteBot(id as string);
-      res.status(204).send();
+      const bot = await BotService.deleteBot(id as string);
+      res.json({
+        success: true,
+        deleted: Boolean(bot),
+        message: bot ? 'Bot eliminado correctamente.' : 'El bot ya no existía.',
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -12,6 +12,17 @@ export class MarketplaceController {
       res.json({
         minimumUserSellPrice: settings.minimumUserSellPrice,
         currency: settings.currency,
+        mercadoPagoEnabled: settings.mercadoPagoEnabled,
+        paypalEnabled: settings.paypalEnabled,
+        nowpaymentsEnabled: settings.nowpaymentsEnabled,
+        manualTransferEnabled: settings.manualTransferEnabled,
+        manualBankAlias: settings.manualBankAlias,
+        manualBankCbu: settings.manualBankCbu,
+        manualBankHolder: settings.manualBankHolder,
+        manualBankInstructions: settings.manualBankInstructions,
+        manualCryptoAddress: settings.manualCryptoAddress,
+        manualCryptoNetwork: settings.manualCryptoNetwork,
+        manualCryptoInstructions: settings.manualCryptoInstructions,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -72,8 +83,8 @@ export class MarketplaceController {
   static async confirmPayment(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      // Esto normalmente lo llama un webhook de la pasarela de pago
-      // Para efectos de demostración o integración, lo dejamos como endpoint
+      // Confirmación manual legacy. La ruta está protegida con adminOnly.
+      // El flujo de pagos real debe confirmarse por proveedor/webhook seguro.
       const purchase = await PurchaseService.confirmPayment(id as string);
       res.json(purchase);
     } catch (err: any) {

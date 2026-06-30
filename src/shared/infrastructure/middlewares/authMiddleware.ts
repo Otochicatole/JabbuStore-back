@@ -1,6 +1,27 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../AuthService';
 
+type AuthCookieName = 'auth_token' | 'admin_token';
+
+function readCookieToken(req: Request, cookieName: AuthCookieName) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const escapedName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = cookieHeader.match(new RegExp(`(?:^|;)\\s*${escapedName}\\s*=\\s*([^;]+)`));
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function cookieAuth(cookieName: AuthCookieName, roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const token = readCookieToken(req, cookieName);
+    const payload = token ? AuthService.verifyToken(token) : null;
+    if (!payload) return res.status(401).json({ error: 'Invalid or expired session' });
+    if (!roles.includes(payload.role)) return res.status(403).json({ error: 'Access denied' });
+    (req as any).user = payload;
+    next();
+  };
+}
+
 export const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
   let token: string | null = null;
 
@@ -55,3 +76,11 @@ export const requireRole = (roles: string[]) => {
 // Shorthands
 export const adminOnly = requireRole(['ADMIN', 'SUPER_ADMIN']);
 export const superAdminOnly = requireRole(['SUPER_ADMIN']);
+export const ticketUserAuth = cookieAuth('auth_token', ['USER']);
+export const ticketAdminAuth = cookieAuth('admin_token', ['ADMIN', 'SUPER_ADMIN']);
+export const ticketActorAuth = (req: Request, res: Response, next: NextFunction) => {
+  const actor = String(req.headers['x-ticket-actor'] || 'USER').toUpperCase();
+  return actor === 'ADMIN'
+    ? ticketAdminAuth(req, res, next)
+    : ticketUserAuth(req, res, next);
+};

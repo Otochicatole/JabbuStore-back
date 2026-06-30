@@ -1,8 +1,7 @@
 import { prisma } from "../src/shared/infrastructure/PrismaClient";
-import { PayPalService } from "../src/shared/infrastructure/PayPalService";
 
 async function testPayPalCapture() {
-  console.log("=== INICIANDO SIMULACIÓN DE CAPTURA/WEBHOOK DE PAYPAL ===");
+  console.log("=== INICIANDO PRUEBA DE HARDENING PAYPAL MOCK ===");
 
   // 1. Obtener o crear un usuario de prueba
   let user = await prisma.user.findFirst();
@@ -37,45 +36,7 @@ async function testPayPalCapture() {
   });
   console.log(`Orden creada con ID: ${order.id}, Total: $${order.totalPrice} USD`);
 
-  // Guardar originales
-  const originalCapture = PayPalService.capturePayment;
-  const originalGetAccessToken = PayPalService.getAccessToken;
-  const originalGetCredentials = (PayPalService as any).getCredentials;
-  
-  // Sobrescribir directamente en la clase importada (es single-instance en caché de require)
-  (PayPalService as any).getCredentials = function() {
-    return {
-      clientId: "mock",
-      clientSecret: "mock",
-      isSandbox: true,
-    };
-  };
-
-  PayPalService.getAccessToken = async function() {
-    return "MOCK_ACCESS_TOKEN_12345";
-  };
-  
-  PayPalService.capturePayment = async function(paypalOrderId: string) {
-    console.log(`[Mock PayPalService] Capturando de manera simulada la orden de PayPal: ${paypalOrderId}`);
-    return {
-      status: "COMPLETED",
-      purchase_units: [
-        {
-          reference_id: order.id,
-          payments: {
-            captures: [
-              {
-                id: "MOCK_PAYPAL_CAPTURE_ID_12345",
-                status: "COMPLETED",
-              }
-            ]
-          }
-        }
-      ]
-    };
-  };
-
-  console.log("Enviando petición POST al webhook local de PayPal para simular retorno exitoso...");
+  console.log("Enviando token mock al webhook local de PayPal. La orden NO debe cambiar de estado...");
   
   // 3. Ejecutar la llamada HTTP simulada al servidor
   const port = process.env.PORT || "3001";
@@ -93,8 +54,8 @@ async function testPayPalCapture() {
     const dataResult = await response.json();
     console.log(`Respuesta del Webhook (Status: ${response.status}):`, JSON.stringify(dataResult, null, 2));
 
-    if (response.status === 200 && dataResult.success) {
-      console.log("¡Webhook procesado con éxito por el servidor! Esperando 1 segundo para que la DB se actualice...");
+    if (response.status >= 200 && response.status < 500) {
+      console.log("Webhook procesado/rechazado de forma controlada. Esperando 1 segundo para verificar DB...");
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       // 4. Verificar que el estado de la orden haya transicionado en la base de datos
@@ -106,10 +67,10 @@ async function testPayPalCapture() {
       console.log(`Estado final de la orden: ${updatedOrder?.status}`);
       console.log("Metadata actualizada:", JSON.stringify(updatedOrder?.metadata, null, 2));
 
-      if (updatedOrder?.status === "TRADE_PENDING") {
-        console.log("\n🎉 ¡PRUEBA EXITOSA! El estado transicionó de forma segura a TRADE_PENDING y se guardó la metadata del pago de PayPal.");
+      if (updatedOrder?.status === "PENDING_PAYMENT") {
+        console.log("\nPRUEBA EXITOSA: el token mock no cambió el estado de la orden.");
       } else {
-        console.error("\n❌ ERROR: El estado de la orden no cambió.");
+        console.error("\nERROR: el estado cambió con un token mock.");
       }
     } else {
       console.error("\n❌ ERROR: El webhook devolvió un código de error.");
@@ -117,11 +78,6 @@ async function testPayPalCapture() {
   } catch (error: any) {
     console.error("\n❌ ERROR de conexión al intentar golpear el servidor:", error.message || error);
   } finally {
-    // Restaurar originales
-    PayPalService.capturePayment = originalCapture;
-    PayPalService.getAccessToken = originalGetAccessToken;
-    (PayPalService as any).getCredentials = originalGetCredentials;
-    
     // 5. Limpiar la orden de prueba para no ensuciar la base de datos
     await prisma.order.delete({
       where: { id: order.id },
