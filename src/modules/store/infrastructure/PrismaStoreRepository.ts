@@ -12,29 +12,29 @@ export class PrismaStoreRepository implements IStoreRepository {
   }
 
   async clearAndSaveMany(items: StoreItem[]): Promise<void> {
-    // Fetch all existing items currently in the database to inspect manual overrides
+    // Fetch all existing items currently in the database to inspect manual overrides and deactivations
     const existing = await prisma.storeItem.findMany({
-      where: { isPriceManual: true }
+      where: {
+        OR: [
+          { isPriceManual: true },
+          { marketable: false }
+        ]
+      }
     });
 
-    const manualMap = new Map<string, typeof existing[0]>();
+    const existingMap = new Map<string, typeof existing[0]>();
     for (const item of existing) {
-      manualMap.set(item.assetId, item);
+      existingMap.set(item.assetId, item);
     }
 
-    // Carry over manual prices for items that are still in the synced bot inventory list
+    // Carry over manual prices and deactivation states
     const updatedItems = items.map(item => {
-      const manualItem = manualMap.get(item.assetId);
-      if (manualItem) {
-        return {
-          ...item,
-          price: manualItem.price,
-          isPriceManual: true
-        };
-      }
+      const dbItem = existingMap.get(item.assetId);
       return {
         ...item,
-        isPriceManual: false
+        price: dbItem?.isPriceManual ? dbItem.price : (item.price ?? 0.0),
+        isPriceManual: dbItem?.isPriceManual ?? false,
+        marketable: dbItem?.marketable ?? true
       };
     });
 

@@ -85,7 +85,10 @@ export class CreatePurchaseOrderUseCase {
     const storeItems =
       botIds.length > 0
         ? await prisma.storeItem.findMany({
-            where: { assetId: { in: botIds } },
+            where: {
+              assetId: { in: botIds },
+              marketable: true,
+            },
           })
         : [];
 

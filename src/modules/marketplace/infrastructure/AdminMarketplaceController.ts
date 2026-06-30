@@ -418,6 +418,28 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateStoreItemMarketable(req: Request, res: Response) {
+    try {
+      const { assetId } = req.params;
+      const { marketable } = req.body;
+
+      if (typeof marketable !== 'boolean') {
+        return res.status(400).json({ error: 'El campo marketable debe ser un booleano válido.' });
+      }
+
+      const updatedItem = await (prisma as any).storeItem.update({
+        where: { assetId },
+        data: {
+          marketable
+        }
+      });
+
+      res.json(updatedItem);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async getItemDetailsByAssetId(req: Request, res: Response) {
     try {
       const assetId = req.params.assetId as string;
