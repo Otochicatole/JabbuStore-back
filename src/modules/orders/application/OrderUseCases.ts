@@ -564,8 +564,8 @@ export class UpdateOrderStatusUseCase {
           }
         } else if (status === OrderStatus.TRADE_PENDING) {
           if (isSell) {
-            title = 'Venta aprobada (Enviar Trade)';
-            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido aprobada. Por favor, envía tus ítems mediante el intercambio de Steam.`;
+            title = 'Venta aprobada';
+            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido aprobada. Por favor, acepta el trade.`;
           } else {
             title = 'Intercambio de Steam pendiente';
             content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
