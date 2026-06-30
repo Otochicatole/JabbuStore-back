@@ -7,6 +7,7 @@ import {
 } from "../domain/Order";
 import { INotificationRepository } from "../../notifications/domain/Notification";
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
+import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
 import { BotService } from "../../marketplace/application/BotService";
@@ -279,6 +280,24 @@ export class CreatePurchaseOrderUseCase {
 
     const order = await this.orderRepository.create(orderData, orderItemsData);
     WebhookService.sendOrderNotification(order, "order.created");
+
+    // Send persistent notification to admin
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      await notificationUseCase.execute({
+        title: "Nueva Orden de Compra",
+        content: `El usuario ${user?.name || "Steam User"} ha realizado una compra por $${totalPrice.toLocaleString()} USD.`,
+        type: "ORDER_STATUS",
+        link: "/admin/panel/dashboard?tab=purchases",
+        userId: null,
+        adminId: null,
+      });
+    } catch (err) {
+      console.error("[CreatePurchaseOrderUseCase] Error sending admin notification:", err);
+    }
+
     return order;
   }
 }
@@ -461,6 +480,23 @@ export class CreateSellOrderUseCase {
       WebhookService.sendOrderNotification(fullOrder, "order.created");
     }
 
+    // Send persistent notification to admin
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      await notificationUseCase.execute({
+        title: "Nueva Solicitud de Venta",
+        content: `El usuario ${user?.name || "Steam User"} ha creado una nueva orden de venta por $${totalPrice.toLocaleString()} USD.`,
+        type: "ORDER_STATUS",
+        link: "/admin/panel/dashboard?tab=listings",
+        userId: null,
+        adminId: null,
+      });
+    } catch (err) {
+      console.error("[CreateSellOrderUseCase] Error sending admin notification:", err);
+    }
+
     return order;
   }
 }
@@ -498,21 +534,42 @@ export class UpdateOrderStatusUseCase {
       try {
         const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
         
+        const isSell = order.type === OrderType.SELL;
         let title = 'Estado de orden actualizado';
         let content = `El estado de tu orden #${order.id.slice(0, 8)} cambió a ${status}.`;
         
         if (status === OrderStatus.PAID) {
-          title = 'Orden pagada con éxito';
-          content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
+          if (isSell) {
+            title = 'Trade recibido';
+            content = `Hemos recibido los ítems para tu orden de venta #${order.id.slice(0, 8)}. En breve se te enviará el dinero.`;
+          } else {
+            title = 'Orden pagada con éxito';
+            content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
+          }
         } else if (status === OrderStatus.COMPLETED) {
-          title = 'Orden completada';
-          content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
+          if (isSell) {
+            title = 'Venta completada';
+            content = `El pago para tu orden de venta #${order.id.slice(0, 8)} ha sido enviado con éxito.`;
+          } else {
+            title = 'Orden completada';
+            content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
+          }
         } else if (status === OrderStatus.CANCELLED) {
-          title = 'Orden cancelada';
-          content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
+          if (isSell) {
+            title = 'Venta cancelada';
+            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido cancelada.`;
+          } else {
+            title = 'Orden cancelada';
+            content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
+          }
         } else if (status === OrderStatus.TRADE_PENDING) {
-          title = 'Intercambio de Steam pendiente';
-          content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+          if (isSell) {
+            title = 'Venta aprobada (Enviar Trade)';
+            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido aprobada. Por favor, envía tus ítems mediante el intercambio de Steam.`;
+          } else {
+            title = 'Intercambio de Steam pendiente';
+            content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+          }
         }
 
         await createNotificationUseCase.execute({

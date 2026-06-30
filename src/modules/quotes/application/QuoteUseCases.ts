@@ -86,6 +86,23 @@ export class CreateQuoteUseCase {
       },
     });
 
+    // Send persistent notification to admin
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      await notificationUseCase.execute({
+        title: "Nueva Solicitud de Cotización",
+        content: `El usuario ${user?.name || "Steam User"} ha solicitado la cotización de ${quote.items.length} ítems.`,
+        type: "ORDER_STATUS",
+        link: "/admin/panel/dashboard?tab=quotes",
+        userId: null,
+        adminId: null,
+      });
+    } catch (err) {
+      console.error("[CreateQuoteUseCase] Error sending admin notification:", err);
+    }
+
     return quote;
   }
 }
