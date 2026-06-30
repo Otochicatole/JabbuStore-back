@@ -908,6 +908,13 @@ export class OrderController {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
 
+        const overridesMap = new Map<string, any>();
+        if (Array.isArray(items)) {
+          items.forEach((ov) => {
+            if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+          });
+        }
+
         // Separar ids: bots | assets YouPin (youpin-) | listings legacy (market-)
         const youpinFloatIds = itemIds
           .filter((id: string) => id.startsWith("youpin-"))
@@ -928,18 +935,19 @@ export class OrderController {
               })
             : [];
 
-        if (storeItems.length !== botIds.length) {
-          const foundIds = storeItems.map((i: any) => i.assetId);
-          const missingIds = botIds.filter(
-            (id: string) => !foundIds.includes(id),
-          );
+        const specificBotIds = botIds.filter(id => overridesMap.get(id)?.isSpecific !== false);
+        const missingSpecificBotIds = specificBotIds.filter(id => !storeItems.some(i => i.assetId === id));
+        if (missingSpecificBotIds.length > 0) {
           return res.status(400).json({
-            error: `Algunos items de bot ya no están disponibles: ${missingIds.join(", ")}`,
+            error: `Algunos items de bot ya no están disponibles: ${missingSpecificBotIds.join(", ")}`,
           });
         }
 
         try {
-          await BotService.assertStoreItemsFromActiveBots(storeItems);
+          const storeItemsToAssert = storeItems.filter(item => specificBotIds.includes(item.assetId));
+          if (storeItemsToAssert.length > 0) {
+            await BotService.assertStoreItemsFromActiveBots(storeItemsToAssert);
+          }
         } catch (err: any) {
           return res.status(400).json({ error: err.message });
         }
@@ -952,13 +960,11 @@ export class OrderController {
               })
             : [];
 
-        if (marketItems.length !== marketNames.length) {
-          const foundNames = marketItems.map((i: any) => i.name);
-          const missingNames = marketNames.filter(
-            (name: string) => !foundNames.includes(name),
-          );
+        const specificMarketNames = marketNames.filter(name => overridesMap.get(`market-${name}`)?.isSpecific !== false);
+        const missingSpecificMarketNames = specificMarketNames.filter(name => !marketItems.some(i => i.name === name));
+        if (missingSpecificMarketNames.length > 0) {
           return res.status(400).json({
-            error: `Algunos listings de mercado ya no están disponibles: ${missingNames.join(", ")}`,
+            error: `Algunos listings de mercado ya no están disponibles: ${missingSpecificMarketNames.join(", ")}`,
           });
         }
 
@@ -970,101 +976,137 @@ export class OrderController {
               })
             : [];
 
-        if (youpinFloatItems.length !== youpinFloatIds.length) {
-          const foundIds = youpinFloatItems.map((f: any) => f.id);
-          const missingIds = youpinFloatIds.filter(
-            (id: string) => !foundIds.includes(id),
-          );
+        const specificYoupinFloatIds = youpinFloatIds.filter(id => overridesMap.get(`youpin-${id}`)?.isSpecific !== false);
+        const missingSpecificYoupinFloatIds = specificYoupinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+        if (missingSpecificYoupinFloatIds.length > 0) {
           return res.status(400).json({
-            error: `Algunos assets YouPin ya no están disponibles: ${missingIds.join(", ")}`,
-          });
-        }
-
-        const overridesMap = new Map<string, any>();
-        if (Array.isArray(items)) {
-          items.forEach((ov) => {
-            if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+            error: `Algunos assets YouPin ya no están disponibles: ${missingSpecificYoupinFloatIds.join(", ")}`,
           });
         }
 
         const settingsData = await getAdminSettingsOrDefaults();
 
-        const resolvedBotItems = storeItems.map((item: any) => {
-          const override = overridesMap.get(item.assetId);
-          return {
-            assetId: item.assetId,
-            name: item.name,
-            price: getBotCheckoutPrice(item.price, settingsData),
-            iconUrl: item.iconUrl || null,
-            provider: "bot",
-            float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
-            pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
-            exterior: item.exterior ?? null,
-            rarity: item.rarity ?? null,
-          };
-        });
-
-        const resolvedMarketItems = await Promise.all(
-          marketItems.map(async (item: any) => {
-            const override = overridesMap.get(`market-${item.name}`);
-            if (override && override.float !== undefined && override.float !== null) {
-              const floatQueryWhere: any = {
-                resaleItemId: item.id,
-                floatValue: Number(override.float),
-              };
-              if (override.pattern !== undefined && override.pattern !== null) {
-                floatQueryWhere.paintSeed = Number(override.pattern);
-              }
-              const dbFloat = await prisma.floatItem.findFirst({
-                where: floatQueryWhere,
-              });
-
-              if (dbFloat) {
-                const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
-
-                return {
-                  assetId: `market-${item.name}`,
-                  name: item.name,
-                  price: floatPrice,
-                  iconUrl: item.iconUrl || null,
-                  provider: 'youpin',
-                  float: dbFloat.floatValue,
-                  pattern: dbFloat.paintSeed,
-                  exterior: item.exterior ?? null,
-                  rarity: item.rarity ?? null,
-                };
-              }
-            }
-
+        const resolvedBotItems = botIds.map((id: string) => {
+          const item = storeItems.find((i: any) => i.assetId === id);
+          const override = overridesMap.get(id);
+          if (item) {
             return {
-              assetId: `market-${item.name}`,
+              assetId: item.assetId,
               name: item.name,
-              price: getMarketCheckoutPrice(item.price, settingsData),
+              price: getBotCheckoutPrice(item.price, settingsData),
               iconUrl: item.iconUrl || null,
-              provider: 'youpin',
-              float: null,
-              pattern: null,
+              provider: "bot",
+              float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
               exterior: item.exterior ?? null,
               rarity: item.rarity ?? null,
             };
+          } else {
+            return {
+              assetId: id,
+              name: override?.name || "CS2 Skin",
+              price: override?.price ? roundMoney(override.price) : 0,
+              iconUrl: override?.iconUrl || null,
+              provider: "bot",
+              float: override?.float !== undefined && override?.float !== null ? override.float : null,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+              exterior: override?.exterior ?? null,
+              rarity: override?.rarity ?? null,
+            };
+          }
+        });
+
+        const resolvedMarketItems = await Promise.all(
+          marketNames.map(async (name: string) => {
+            const item = marketItems.find((i: any) => i.name === name);
+            const override = overridesMap.get(`market-${name}`);
+            if (item) {
+              if (override && override.float !== undefined && override.float !== null) {
+                const floatQueryWhere: any = {
+                  resaleItemId: item.id,
+                  floatValue: Number(override.float),
+                };
+                if (override.pattern !== undefined && override.pattern !== null) {
+                  floatQueryWhere.paintSeed = Number(override.pattern);
+                }
+                const dbFloat = await prisma.floatItem.findFirst({
+                  where: floatQueryWhere,
+                });
+
+                if (dbFloat) {
+                  const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+
+                  return {
+                    assetId: `market-${name}`,
+                    name: item.name,
+                    price: floatPrice,
+                    iconUrl: item.iconUrl || null,
+                    provider: 'youpin',
+                    float: dbFloat.floatValue,
+                    pattern: dbFloat.paintSeed,
+                    exterior: item.exterior ?? null,
+                    rarity: item.rarity ?? null,
+                  };
+                }
+              }
+
+              return {
+                assetId: `market-${name}`,
+                name: item.name,
+                price: getMarketCheckoutPrice(item.price, settingsData),
+                iconUrl: item.iconUrl || null,
+                provider: 'youpin',
+                float: null,
+                pattern: null,
+                exterior: item.exterior ?? null,
+                rarity: item.rarity ?? null,
+              };
+            } else {
+              return {
+                assetId: `market-${name}`,
+                name: name,
+                price: override?.price ? roundMoney(override.price) : 0,
+                iconUrl: override?.iconUrl || null,
+                provider: 'youpin',
+                float: override?.float !== undefined && override?.float !== null ? override.float : null,
+                pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+                exterior: override?.exterior ?? null,
+                rarity: override?.rarity ?? null,
+              };
+            }
           })
         );
 
-        const resolvedYoupinItems = youpinFloatItems.map((dbFloat: any) => {
-          const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
-
-          const listing = dbFloat.resaleItem;
-          return {
-            assetId: `youpin-${dbFloat.id}`,
-            name: listing.name,
-            price: floatPrice,
-            iconUrl: listing.iconUrl || null,
-            provider: 'youpin',
-            float: dbFloat.floatValue,
-            pattern: dbFloat.paintSeed,
-            exterior: listing.exterior ?? null,
-            rarity: listing.rarity ?? null,
-          };
+        const resolvedYoupinItems = youpinFloatIds.map((floatId: string) => {
+          const dbFloat = youpinFloatItems.find((f: any) => f.id === floatId);
+          const override = overridesMap.get(`youpin-${floatId}`);
+          if (dbFloat) {
+            const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+            const listing = dbFloat.resaleItem;
+            return {
+              assetId: `youpin-${dbFloat.id}`,
+              name: listing.name,
+              price: floatPrice,
+              iconUrl: listing.iconUrl || null,
+              provider: 'youpin',
+              float: dbFloat.floatValue,
+              pattern: dbFloat.paintSeed,
+              exterior: listing.exterior ?? null,
+              rarity: listing.rarity ?? null,
+            };
+          } else {
+            return {
+              assetId: `youpin-${floatId}`,
+              name: override?.name || "CS2 Skin",
+              price: override?.price ? roundMoney(override.price) : 0,
+              iconUrl: override?.iconUrl || null,
+              provider: 'youpin',
+              float: override?.float !== undefined && override?.float !== null ? override.float : null,
+              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : null,
+              exterior: override?.exterior ?? null,
+              rarity: override?.rarity ?? null,
+            };
+          }
         });
 
         let totalPrice = 0;
@@ -1204,9 +1246,16 @@ export class OrderController {
 
   async validateCart(req: Request, res: Response) {
     try {
-      const { itemIds } = req.body;
+      const { itemIds, items } = req.body;
       if (!Array.isArray(itemIds)) {
         return res.status(400).json({ error: "itemIds must be an array of strings" });
+      }
+
+      const overridesMap = new Map<string, any>();
+      if (Array.isArray(items)) {
+        items.forEach((ov) => {
+          if (ov && ov.assetId) overridesMap.set(ov.assetId, ov);
+        });
       }
 
       const { prisma } = require("../../../shared/infrastructure/PrismaClient");
@@ -1269,8 +1318,13 @@ export class OrderController {
         ...validYoupinIds,
       ]);
 
-      // Encontrar IDs inválidos
-      const invalidIds = itemIds.filter((id: string) => !validSet.has(id));
+      // Encontrar IDs inválidos (solo si son específicos, es decir isSpecific !== false)
+      const invalidIds = itemIds.filter((id: string) => {
+        const override = overridesMap.get(id);
+        const isSpecific = override?.isSpecific !== false;
+        if (!isSpecific) return false; // los ítems generales no son inválidos aunque no existan
+        return !validSet.has(id);
+      });
 
       return res.json({
         valid: invalidIds.length === 0,
