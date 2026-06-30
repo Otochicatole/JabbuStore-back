@@ -249,20 +249,21 @@ export class OrderController {
   async createSellOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { items, paymentMethod, metadata } = req.body; // [{ assetId, requestedPrice }]
+      const { items, paymentMethod, metadata, quoteId } = req.body; // [{ assetId, requestedPrice }]
 
-      if (!Array.isArray(items) || items.length === 0) {
+      if (!quoteId && (!Array.isArray(items) || items.length === 0)) {
         return res.status(400).json({
           error:
-            "items must be a non-empty array of { assetId, requestedPrice }",
+            "items must be a non-empty array of { assetId, requestedPrice } when quoteId is not provided",
         });
       }
 
       const order = await this.createSellOrderUseCase.execute(
         userId,
-        items,
+        items || [],
         paymentMethod,
         metadata,
+        quoteId,
       );
       res.status(201).json(order);
     } catch (error: any) {
@@ -895,7 +896,7 @@ export class OrderController {
   async validateOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { type, itemIds, items } = req.body; // type is 'BUY' or 'SELL'
+      const { type, itemIds, items, quoteId } = req.body; // type is 'BUY' or 'SELL'
 
       if (type === "BUY") {
         if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -1122,16 +1123,64 @@ export class OrderController {
           totalPrice,
         });
       } else if (type === "SELL") {
+        const {
+          prisma,
+        } = require("../../../shared/infrastructure/PrismaClient");
+
+        if (quoteId) {
+          const quote = await prisma.quote.findUnique({
+            where: { id: quoteId },
+            include: { items: true },
+          });
+
+          if (!quote) {
+            return res.status(400).json({
+              error: "Cotización no encontrada.",
+            });
+          }
+
+          if (quote.userId !== userId) {
+            return res.status(403).json({
+              error: "No tienes acceso a esta cotización.",
+            });
+          }
+
+          if (quote.status !== "QUOTED") {
+            return res.status(400).json({
+              error: "La cotización debe estar en estado respondida por el administrador.",
+            });
+          }
+
+          const resolvedItems = quote.items.map((item: any) => ({
+            assetId: item.assetId,
+            name: item.name,
+            price: item.price ?? 0,
+            iconUrl: item.iconUrl,
+            provider: "user",
+            float: item.float,
+            pattern: item.pattern,
+            exterior: item.exterior,
+            rarity: item.rarity,
+          }));
+
+          const totalPrice = roundMoney(
+            resolvedItems.reduce((sum: number, item: any) => sum + item.price, 0)
+          );
+
+          return res.json({
+            valid: true,
+            type: "SELL",
+            items: resolvedItems,
+            totalPrice,
+          });
+        }
+
         if (!Array.isArray(items) || items.length === 0) {
           return res.status(400).json({
             error:
               "items must be a non-empty array of { assetId, requestedPrice } for SELL type",
           });
         }
-
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
         const settings = await getAdminSettingsOrDefaults();
         const minSellPrice = settings.minimumUserSellPrice;
 

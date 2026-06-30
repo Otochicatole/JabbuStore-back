@@ -19,6 +19,7 @@ model User {
   updatedAt  DateTime @updatedAt
   inventory  UserInventoryItem[]
   orders     Order[]
+  quotes     Quote[]
 
   listings   SkinListing[]
   purchases  Purchase[]
@@ -378,3 +379,36 @@ model Notification {
   @@index([userId, read])
   @@index([adminId, read])
 }
+
+enum QuoteStatus {
+  PENDING
+  QUOTED
+  ACCEPTED
+  CANCELLED
+}
+
+model Quote {
+  id        String      @id @default(uuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    QuoteStatus @default(PENDING)
+  items     QuoteItem[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model QuoteItem {
+  id         String   @id @default(uuid())
+  quoteId    String
+  quote      Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  assetId    String
+  name       String
+  price      Float?
+  iconUrl    String?
+  rarity     String?
+  exterior   String?
+  float      Float?
+  pattern    Int?
+  paintIndex Int?
+}
+

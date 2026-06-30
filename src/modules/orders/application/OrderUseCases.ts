@@ -292,11 +292,8 @@ export class CreateSellOrderUseCase {
     items: { assetId: string; requestedPrice: number }[],
     paymentMethod?: string,
     metadata?: any,
+    quoteId?: string,
   ): Promise<Order> {
-    if (!items || items.length === 0) {
-      throw new Error("No items provided for the sell order");
-    }
-
     const user = await prisma.user.findUnique({
       where: { id: userId },
     });
@@ -304,97 +301,127 @@ export class CreateSellOrderUseCase {
       throw new Error("Para realizar ventas debes tener registrado tu Email y Trade URL en tu perfil.");
     }
 
-    const settings = await getAdminSettingsOrDefaults();
-    const minSellPrice = settings.minimumUserSellPrice;
-
-    // Validate each item: must be in user's inventory and meet minimum price
-    const resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
+    let resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
     let totalPrice = 0;
 
-    for (const item of items) {
-      const inventoryItem = await prisma.userInventoryItem.findFirst({
-        where: { userId, assetId: item.assetId },
+    if (quoteId) {
+      const quote = await prisma.quote.findUnique({
+        where: { id: quoteId },
+        include: { items: true },
       });
+      if (!quote) throw new Error("Cotización no encontrada.");
+      if (quote.userId !== userId) throw new Error("Acceso denegado a esta cotización.");
+      if (quote.status !== "QUOTED") throw new Error("La cotización no está en estado respondida por el administrador.");
 
-      if (!inventoryItem) {
-        throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
-      }
-
-      const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
-      const requestedPrice = Number(item.requestedPrice);
-
-      if (backendPrice < minSellPrice) {
-        throw new Error(
-          `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
-        );
-      }
-
-      if (
-        Number.isFinite(requestedPrice) &&
-        Math.abs(requestedPrice - backendPrice) > PRICE_MISMATCH_TOLERANCE
-      ) {
-        throw new Error(
-          `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
-        );
-      }
-
-      const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
-      if (openSellOrder) {
-        throw new Error(
-          `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
-        );
-      }
-
-      const alreadyListed = await prisma.skinListing.findFirst({
-        where: { skinId: item.assetId, status: { in: ["active", "reserved"] } },
+      resolvedItems = quote.items.map((item) => {
+        if (item.price === null || item.price === undefined) {
+          throw new Error(`El ítem ${item.name} no tiene precio cotizado.`);
+        }
+        return {
+          assetId: item.assetId,
+          name: item.name,
+          price: item.price,
+          iconUrl: item.iconUrl ?? null,
+          rarity: item.rarity,
+          exterior: item.exterior,
+          float: item.float,
+          pattern: item.pattern,
+          provider: "user",
+        };
       });
+      totalPrice = roundMoney(resolvedItems.reduce((sum, item) => sum + item.price, 0));
+    } else {
+      if (!items || items.length === 0) {
+        throw new Error("No items provided for the sell order");
+      }
+      const settings = await getAdminSettingsOrDefaults();
+      const minSellPrice = settings.minimumUserSellPrice;
 
-      if (alreadyListed) {
-        // Self-healing check: If the listing is active but the only corresponding sell order is CANCELLED,
-        // we should self-heal the listing to 'cancelled' and allow this creation to pass!
-        const lastSellOrder = await prisma.order.findFirst({
-          where: {
-            userId,
-            type: "SELL",
-            items: {
-              some: { assetId: item.assetId },
-            },
-          },
-          orderBy: { createdAt: "desc" },
+      for (const item of items) {
+        const inventoryItem = await prisma.userInventoryItem.findFirst({
+          where: { userId, assetId: item.assetId },
         });
 
-        if (lastSellOrder && lastSellOrder.status === "CANCELLED") {
-          // Update the listing to cancelled
-          await prisma.skinListing.update({
-            where: { id: alreadyListed.id },
-            data: { status: "cancelled" },
-          });
-          console.log(
-            `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
-          );
-        } else {
+        if (!inventoryItem) {
+          throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
+        }
+
+        const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
+        const requestedPrice = Number(item.requestedPrice);
+
+        if (backendPrice < minSellPrice) {
           throw new Error(
-            `El item "${inventoryItem.name}" ya está listado para la venta.`,
+            `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
           );
         }
+
+        if (
+          Number.isFinite(requestedPrice) &&
+          Math.abs(requestedPrice - backendPrice) > PRICE_MISMATCH_TOLERANCE
+        ) {
+          throw new Error(
+            `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+          );
+        }
+
+        const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+        if (openSellOrder) {
+          throw new Error(
+            `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
+          );
+        }
+
+        const alreadyListed = await prisma.skinListing.findFirst({
+          where: { skinId: item.assetId, status: { in: ["active", "reserved"] } },
+        });
+
+        if (alreadyListed) {
+          // Self-healing check: If the listing is active but the only corresponding sell order is CANCELLED,
+          // we should self-heal the listing to 'cancelled' and allow this creation to pass!
+          const lastSellOrder = await prisma.order.findFirst({
+            where: {
+              userId,
+              type: "SELL",
+              items: {
+                some: { assetId: item.assetId },
+              },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+
+          if (lastSellOrder && lastSellOrder.status === "CANCELLED") {
+            // Update the listing to cancelled
+            await prisma.skinListing.update({
+              where: { id: alreadyListed.id },
+              data: { status: "cancelled" },
+            });
+            console.log(
+              `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
+            );
+          } else {
+            throw new Error(
+              `El item "${inventoryItem.name}" ya está listado para la venta.`,
+            );
+          }
+        }
+
+        resolvedItems.push({
+          assetId: inventoryItem.assetId,
+          name: inventoryItem.name,
+          price: backendPrice,
+          iconUrl: inventoryItem.iconUrl ?? null,
+          rarity: inventoryItem.rarity,
+          exterior: inventoryItem.exterior,
+          float: inventoryItem.float,
+          pattern: inventoryItem.pattern,
+          provider: "user",
+        });
+
+        totalPrice += backendPrice;
       }
 
-      resolvedItems.push({
-        assetId: inventoryItem.assetId,
-        name: inventoryItem.name,
-        price: backendPrice,
-        iconUrl: inventoryItem.iconUrl ?? null,
-        rarity: inventoryItem.rarity,
-        exterior: inventoryItem.exterior,
-        float: inventoryItem.float,
-        pattern: inventoryItem.pattern,
-        provider: "user",
-      });
-
-      totalPrice += backendPrice;
+      totalPrice = roundMoney(totalPrice);
     }
-
-    totalPrice = roundMoney(totalPrice);
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(
@@ -420,6 +447,13 @@ export class CreateSellOrderUseCase {
         status: "active",
       })),
     });
+
+    if (quoteId) {
+      await prisma.quote.update({
+        where: { id: quoteId },
+        data: { status: "ACCEPTED" },
+      });
+    }
 
     // Fetch full order with items populated for the webhook dispatcher
     const fullOrder = await this.orderRepository.findById(order.id);
