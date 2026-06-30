@@ -92,8 +92,8 @@ export class CreateQuoteUseCase {
       const notificationRepository = new PrismaNotificationRepository();
       const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
       await notificationUseCase.execute({
-        title: "Nueva Solicitud de Cotización",
-        content: `El usuario ${user?.name || "Steam User"} ha solicitado la cotización de ${quote.items.length} ítems.`,
+        title: "notifications.newQuote.title",
+        content: JSON.stringify({ key: "notifications.newQuote.content", params: { userName: user?.name || "Steam User", itemCount: quote.items.length } }),
         type: "ORDER_STATUS",
         link: "/admin/panel/dashboard?tab=quotes",
         userId: null,
@@ -258,8 +258,8 @@ export class AdminQuoteItemsUseCase {
       await notificationUseCase.execute({
         userId: updatedQuote.userId,
         adminId: null,
-        title: "Cotización respondida",
-        content: `El administrador ha cotizado los ítems de tu solicitud #${quoteId.slice(0, 8)}.`,
+        title: "notifications.quoteAnswered.title",
+        content: JSON.stringify({ key: "notifications.quoteAnswered.content", params: { quoteId: quoteId.slice(0, 8) } }),
         type: "ORDER_STATUS",
         link: "/quotes",
       });

@@ -287,8 +287,8 @@ export class CreatePurchaseOrderUseCase {
       const notificationRepository = new PrismaNotificationRepository();
       const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
       await notificationUseCase.execute({
-        title: "Nueva Orden de Compra",
-        content: `El usuario ${user?.name || "Steam User"} ha realizado una compra por $${totalPrice.toLocaleString()} USD.`,
+        title: "notifications.newBuyOrder.title",
+        content: JSON.stringify({ key: "notifications.newBuyOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
         type: "ORDER_STATUS",
         link: "/admin/panel/dashboard?tab=purchases",
         userId: null,
@@ -486,8 +486,8 @@ export class CreateSellOrderUseCase {
       const notificationRepository = new PrismaNotificationRepository();
       const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
       await notificationUseCase.execute({
-        title: "Nueva Solicitud de Venta",
-        content: `El usuario ${user?.name || "Steam User"} ha creado una nueva orden de venta por $${totalPrice.toLocaleString()} USD.`,
+        title: "notifications.newSellOrder.title",
+        content: JSON.stringify({ key: "notifications.newSellOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
         type: "ORDER_STATUS",
         link: "/admin/panel/dashboard?tab=listings",
         userId: null,
@@ -535,40 +535,40 @@ export class UpdateOrderStatusUseCase {
         const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
         
         const isSell = order.type === OrderType.SELL;
-        let title = 'Estado de orden actualizado';
-        let content = `El estado de tu orden #${order.id.slice(0, 8)} cambió a ${status}.`;
+        let title = 'notifications.orderUpdated.title';
+        let content = JSON.stringify({ key: 'notifications.orderUpdated.content', params: { orderId: order.id.slice(0, 8), status } });
         
         if (status === OrderStatus.PAID) {
           if (isSell) {
-            title = 'Trade recibido';
-            content = `Hemos recibido los ítems para tu orden de venta #${order.id.slice(0, 8)}. En breve se te enviará el dinero.`;
+            title = 'notifications.tradeReceived.title';
+            content = JSON.stringify({ key: 'notifications.tradeReceived.content', params: { orderId: order.id.slice(0, 8) } });
           } else {
-            title = 'Orden pagada con éxito';
-            content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
+            title = 'notifications.orderPaid.title';
+            content = JSON.stringify({ key: 'notifications.orderPaid.content', params: { orderId: order.id.slice(0, 8) } });
           }
         } else if (status === OrderStatus.COMPLETED) {
           if (isSell) {
-            title = 'Venta completada';
-            content = `El pago para tu orden de venta #${order.id.slice(0, 8)} ha sido enviado con éxito.`;
+            title = 'notifications.sellCompleted.title';
+            content = JSON.stringify({ key: 'notifications.sellCompleted.content', params: { orderId: order.id.slice(0, 8) } });
           } else {
-            title = 'Orden completada';
-            content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
+            title = 'notifications.orderCompleted.title';
+            content = JSON.stringify({ key: 'notifications.orderCompleted.content', params: { orderId: order.id.slice(0, 8) } });
           }
         } else if (status === OrderStatus.CANCELLED) {
           if (isSell) {
-            title = 'Venta cancelada';
-            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido cancelada.`;
+            title = 'notifications.sellCancelled.title';
+            content = JSON.stringify({ key: 'notifications.sellCancelled.content', params: { orderId: order.id.slice(0, 8) } });
           } else {
-            title = 'Orden cancelada';
-            content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
+            title = 'notifications.orderCancelled.title';
+            content = JSON.stringify({ key: 'notifications.orderCancelled.content', params: { orderId: order.id.slice(0, 8) } });
           }
         } else if (status === OrderStatus.TRADE_PENDING) {
           if (isSell) {
-            title = 'Venta aprobada';
-            content = `Tu orden de venta #${order.id.slice(0, 8)} ha sido aprobada. Por favor, acepta el trade.`;
+            title = 'notifications.sellApproved.title';
+            content = JSON.stringify({ key: 'notifications.sellApproved.content', params: { orderId: order.id.slice(0, 8) } });
           } else {
-            title = 'Intercambio de Steam pendiente';
-            content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+            title = 'notifications.tradePending.title';
+            content = JSON.stringify({ key: 'notifications.tradePending.content', params: { orderId: order.id.slice(0, 8) } });
           }
         }
 
