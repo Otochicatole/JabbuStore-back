@@ -22,6 +22,7 @@ import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMa
 import ticketRoutes from './modules/tickets/infrastructure/TicketRoutes';
 import notificationRoutes from './modules/notifications/infrastructure/NotificationRoutes';
 import quoteRoutes from './modules/quotes/infrastructure/QuoteRoutes';
+import raffleRoutes from './modules/raffles/infrastructure/RaffleRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
 
 
@@ -79,6 +80,7 @@ app.use('/api/admin/marketplace', adminMarketplaceRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/quotes', quoteRoutes);
+app.use('/api/raffles', raffleRoutes);
 
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';

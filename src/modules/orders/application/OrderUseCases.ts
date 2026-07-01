@@ -51,6 +51,62 @@ export class CreatePurchaseOrderUseCase {
     metadata?: any,
     itemsOverrides?: any[],
   ): Promise<Order> {
+    if (metadata && metadata.raffleId) {
+      const raffleId = metadata.raffleId;
+      const ticketsCount = Number(metadata.ticketsCount || 1);
+
+      const raffle = await prisma.raffle.findUnique({
+        where: { id: raffleId },
+        include: { tickets: true }
+      });
+
+      if (!raffle) {
+        throw new Error("El sorteo no existe.");
+      }
+
+      if (raffle.status !== "ACTIVE") {
+        throw new Error("Las compras solo están permitidas para sorteos activos.");
+      }
+
+      if (raffle.maxTickets) {
+        const soldTicketsCount = raffle.tickets.filter(t => t.status === "PAID").length;
+        if (soldTicketsCount + ticketsCount > raffle.maxTickets) {
+          throw new Error("No hay suficientes chances disponibles para este sorteo.");
+        }
+      }
+
+      const totalPrice = roundMoney(raffle.ticketPrice * ticketsCount);
+      const orderItemsData: any[] = [];
+
+      for (let i = 0; i < ticketsCount; i++) {
+        orderItemsData.push({
+          assetId: `raffle-ticket-${raffleId}-${i}`,
+          name: `Chance para Sorteo: ${raffle.name}`,
+          price: raffle.ticketPrice,
+          iconUrl: null,
+          rarity: "common",
+          exterior: null,
+          float: null,
+          pattern: null,
+          provider: "raffle",
+        });
+      }
+
+      const orderData = {
+        userId,
+        type: OrderType.BUY,
+        status: OrderStatus.PENDING_PAYMENT,
+        totalPrice,
+        paymentMethod: paymentMethod || null,
+        metadata,
+        items: [],
+      };
+
+      const order = await this.orderRepository.create(orderData, orderItemsData);
+      WebhookService.sendOrderNotification(order, "order.created");
+      return order;
+    }
+
     if (!assetIds || assetIds.length === 0) {
       throw new Error("No items provided for the order");
     }
@@ -61,6 +117,22 @@ export class CreatePurchaseOrderUseCase {
     if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
       throw new Error("Para realizar compras debes tener registrado tu Email y Trade URL en tu perfil.");
     }
+
+    // Verify no items are reserved for raffle
+    const reservedPrizes = await prisma.rafflePrize.findMany({
+      where: {
+        raffle: { status: { not: "CANCELLED" } }
+      },
+      select: { assetId: true }
+    });
+    const reservedAssetIds = new Set(reservedPrizes.map(p => p.assetId));
+
+    for (const id of assetIds) {
+      if (reservedAssetIds.has(id) || reservedAssetIds.has(id.replace(/^youpin-/, ""))) {
+        throw new Error(`El ítem ${id} está reservado para un sorteo y no está disponible para compra directa.`);
+      }
+    }
+
 
     // Map overrides for fast lookup
     const overridesMap = new Map<string, any>();
@@ -527,10 +599,78 @@ export class UpdateOrderStatusUseCase {
   ) {}
 
   async execute(orderId: string, status: OrderStatus, botId?: string | null): Promise<Order> {
-    const order = await this.orderRepository.updateStatus(orderId, status, botId);
+    const dbOrder = await this.orderRepository.findById(orderId);
+    if (!dbOrder) {
+      throw new Error("Order not found");
+    }
+
+    const metadata = dbOrder.metadata && typeof dbOrder.metadata === 'object' && !Array.isArray(dbOrder.metadata)
+      ? (dbOrder.metadata as Record<string, any>)
+      : null;
+
+    let order: Order;
+
+    if (metadata && metadata.raffleId && (status === OrderStatus.TRADE_PENDING || status === OrderStatus.PAID)) {
+      const raffleId = metadata.raffleId;
+      const ticketsCount = Number(metadata.ticketsCount || 1);
+
+      order = await prisma.$transaction(async (tx) => {
+        // Check raffle is still in a valid state for ticket allocation
+        const raffle = await tx.raffle.findUnique({
+          where: { id: raffleId },
+          select: { status: true },
+        });
+
+        if (!raffle || (raffle.status !== "ACTIVE" && raffle.status !== "FINISHED")) {
+          console.warn(
+            `[UpdateOrderStatusUseCase] Raffle ${raffleId} is in status ${raffle?.status ?? "not found"} — ticket allocation skipped.`
+          );
+          return tx.order.update({
+            where: { id: orderId },
+            data: { status: "COMPLETED" },
+            include: { items: true, bot: true },
+          });
+        }
+
+        const existingTickets = await tx.raffleTicket.findMany({
+          where: { orderId }
+        });
+
+        if (existingTickets.length === 0) {
+          const count = await tx.raffleTicket.count({
+            where: { raffleId, status: "PAID" }
+          });
+
+          const ticketsData: any[] = [];
+          for (let i = 0; i < ticketsCount; i++) {
+            ticketsData.push({
+              raffleId,
+              userId: dbOrder.userId,
+              ticketNumber: count + 1 + i,
+              orderId,
+              status: "PAID"
+            });
+          }
+
+          await tx.raffleTicket.createMany({
+            data: ticketsData
+          });
+        }
+
+        return tx.order.update({
+          where: { id: orderId },
+          data: { status: "COMPLETED" },
+          include: { items: true, bot: true }
+        });
+      }) as any;
+    } else {
+      order = await this.orderRepository.updateStatus(orderId, status, botId);
+    }
 
     // Dispatch webhook status change notification
     WebhookService.sendOrderNotification(order, "order.status_updated");
+
+
 
     // Crear notificación persistente para el cliente
     if (this.notificationRepository) {

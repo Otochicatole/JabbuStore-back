@@ -324,7 +324,9 @@ export class OrderController {
 
   async uploadBuyerPaymentProof(req: Request, res: Response) {
     try {
-      const userId = (req as any).user.id;
+      const requester = (req as any).user;
+      const userId = requester.id;
+      const isAdmin = requester?.role === "ADMIN" || requester?.role === "SUPER_ADMIN";
       const rawId = req.params.id;
       const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
@@ -337,7 +339,7 @@ export class OrderController {
         return res.status(404).json({ error: "Order not found" });
       }
 
-      if (order.userId !== userId) {
+      if (!isAdmin && order.userId !== userId) {
         return res.status(403).json({ error: "No autorizado para subir comprobante a esta orden" });
       }
 
@@ -491,7 +493,36 @@ export class OrderController {
     try {
       const userId = (req as any).user.id;
       const orders = await this.getUserOrdersUseCase.execute(userId);
-      res.json(orders);
+
+      const enriched = await Promise.all(
+        orders.map(async (order: any) => {
+          const metadata = order.metadata as Record<string, any> | null;
+          const raffleId = metadata?.raffleId;
+          if (!raffleId) return order;
+
+          const [raffle, userChancesInRaffle] = await Promise.all([
+            prisma.raffle.findUnique({
+              where: { id: raffleId },
+              select: { name: true, ticketPrice: true },
+            }),
+            prisma.raffleTicket.count({
+              where: { raffleId, userId, status: "PAID" },
+            }),
+          ]);
+
+          return {
+            ...order,
+            metadata: {
+              ...metadata,
+              raffleName: raffle?.name ?? metadata.raffleName ?? null,
+              raffleTicketPrice: raffle?.ticketPrice ?? metadata.raffleTicketPrice ?? null,
+              userChancesInRaffle,
+            },
+          };
+        })
+      );
+
+      res.json(enriched);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -899,6 +930,51 @@ export class OrderController {
       const userId = (req as any).user.id;
       const { type, itemIds, items, quoteId } = req.body; // type is 'BUY' or 'SELL'
 
+      if (type === "raffle") {
+        const raffleId = req.body.raffleId;
+        const ticketsCount = Number(req.body.ticketsCount || 1);
+
+        const raffle = await prisma.raffle.findUnique({
+          where: { id: raffleId },
+          include: { tickets: true }
+        });
+
+        if (!raffle) {
+          return res.status(400).json({ error: "El sorteo no existe." });
+        }
+
+        if (raffle.status !== "ACTIVE") {
+          return res.status(400).json({ error: "El sorteo no está activo." });
+        }
+
+        if (raffle.maxTickets) {
+          const soldTicketsCount = raffle.tickets.filter((t: any) => t.status === "PAID").length;
+          if (soldTicketsCount + ticketsCount > raffle.maxTickets) {
+            return res.status(400).json({ error: "No hay suficientes chances disponibles." });
+          }
+        }
+
+        const price = raffle.ticketPrice * ticketsCount;
+        const items = [{
+          assetId: `raffle-ticket-${raffleId}`,
+          name: `Chances para Sorteo: ${raffle.name} (x${ticketsCount})`,
+          price: raffle.ticketPrice * ticketsCount,
+          iconUrl: null,
+          provider: "raffle",
+          float: null,
+          pattern: null,
+          exterior: null,
+          rarity: "common",
+        }];
+
+        return res.json({
+          valid: true,
+          type: "raffle",
+          items,
+          totalPrice: roundMoney(price),
+        });
+      }
+
       if (type === "BUY") {
         if (!Array.isArray(itemIds) || itemIds.length === 0) {
           return res.status(400).json({
@@ -909,6 +985,23 @@ export class OrderController {
         const {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
+
+        const reservedPrizes = await prisma.rafflePrize.findMany({
+          where: {
+            raffle: { status: { not: "CANCELLED" } }
+          },
+          select: { assetId: true }
+        });
+        const reservedAssetIds = new Set(reservedPrizes.map((p: any) => p.assetId));
+
+        for (const id of itemIds) {
+          if (reservedAssetIds.has(id) || reservedAssetIds.has(id.replace(/^youpin-/, ""))) {
+            return res.status(400).json({
+              error: `El ítem ${id} está reservado para un sorteo y no está disponible para compra directa.`,
+            });
+          }
+        }
+
 
         const overridesMap = new Map<string, any>();
         if (Array.isArray(items)) {
