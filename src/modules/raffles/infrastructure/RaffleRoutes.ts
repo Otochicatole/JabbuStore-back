@@ -50,6 +50,9 @@ router.get("/admin/all", authMiddleware, adminOnly, (req, res) =>
 router.get("/admin/summaries", authMiddleware, adminOnly, (req, res) =>
   raffleController.getAdminRaffleSummaries(req, res)
 );
+router.get("/admin/orders", authMiddleware, adminOnly, (req, res) =>
+  raffleController.getAllRaffleOrders(req, res)
+);
 router.post("/admin", authMiddleware, adminOnly, (req, res) =>
   raffleController.createRaffle(req, res)
 );

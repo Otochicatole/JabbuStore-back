@@ -210,6 +210,77 @@ export class RaffleController {
     }
   }
 
+  async getAllRaffleOrders(req: Request, res: Response) {
+    try {
+      const allOrders = await prisma.order.findMany({
+        include: {
+          items: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              steamId: true,
+              avatar: true,
+              email: true,
+              tradeUrl: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const raffleOrders = allOrders.filter((order) => {
+        const meta = order.metadata as Record<string, any> | null;
+        return Boolean(meta?.raffleId);
+      });
+
+      const raffleIds = [
+        ...new Set(
+          raffleOrders
+            .map((order) => (order.metadata as Record<string, any> | null)?.raffleId)
+            .filter((id): id is string => typeof id === "string")
+        ),
+      ];
+
+      const raffles = await prisma.raffle.findMany({
+        where: { id: { in: raffleIds } },
+        select: { id: true, name: true, status: true },
+      });
+      const raffleMap = new Map(raffles.map((raffle) => [raffle.id, raffle]));
+
+      const enriched = await Promise.all(
+        raffleOrders.map(async (order) => {
+          const metadata = order.metadata as Record<string, any> | null;
+          const raffleId = metadata?.raffleId as string;
+
+          const tickets = await prisma.raffleTicket.findMany({
+            where: { orderId: order.id, status: "PAID" },
+            select: { ticketNumber: true, status: true },
+            orderBy: { ticketNumber: "asc" },
+          });
+
+          const raffle = raffleMap.get(raffleId);
+
+          return {
+            ...order,
+            raffleId,
+            raffle: raffle ?? {
+              id: raffleId,
+              name: metadata?.raffleName ?? "Sorteo",
+              status: "UNKNOWN",
+            },
+            ticketsCount: metadata?.ticketsCount ?? tickets.length,
+            raffleTickets: tickets.map((ticket) => ticket.ticketNumber),
+          };
+        })
+      );
+
+      res.json({ orders: enriched });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   async getRaffleOrders(req: Request, res: Response) {
     try {
       const { id } = req.params;
