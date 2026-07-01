@@ -526,8 +526,8 @@ export class UpdateOrderStatusUseCase {
     private notificationRepository?: INotificationRepository
   ) {}
 
-  async execute(orderId: string, status: OrderStatus): Promise<Order> {
-    const order = await this.orderRepository.updateStatus(orderId, status);
+  async execute(orderId: string, status: OrderStatus, botId?: string | null): Promise<Order> {
+    const order = await this.orderRepository.updateStatus(orderId, status, botId);
 
     // Dispatch webhook status change notification
     WebhookService.sendOrderNotification(order, "order.status_updated");
@@ -581,8 +581,27 @@ export class UpdateOrderStatusUseCase {
           title,
           content,
           type: 'ORDER_STATUS',
-          link: '/purchases',
+          link: isSell ? '/listings' : '/purchases',
         });
+
+        if (status === OrderStatus.TRADE_PENDING && order.bot) {
+          const botTitle = 'notifications.botAssigned.title';
+          const botContent = JSON.stringify({
+            key: isSell ? 'notifications.botAssigned.sellContent' : 'notifications.botAssigned.buyContent',
+            params: {
+              botName: order.bot.name,
+              botSteamId: order.bot.steamId,
+            }
+          });
+          await createNotificationUseCase.execute({
+            userId: order.userId,
+            adminId: null,
+            title: botTitle,
+            content: botContent,
+            type: 'ORDER_STATUS',
+            link: isSell ? '/listings' : '/purchases',
+          });
+        }
       } catch (err) {
         console.error('[UpdateOrderStatusUseCase] Error creating database notification:', err);
       }

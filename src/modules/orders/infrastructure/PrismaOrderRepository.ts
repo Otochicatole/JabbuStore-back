@@ -26,7 +26,8 @@ export class PrismaOrderRepository implements IOrderRepository {
         }
       },
       include: {
-        items: true
+        items: true,
+        bot: true
       }
     });
 
@@ -36,7 +37,7 @@ export class PrismaOrderRepository implements IOrderRepository {
   async findById(id: string): Promise<Order | null> {
     const order = await prisma.order.findUnique({
       where: { id },
-      include: { items: true }
+      include: { items: true, bot: true }
     });
     return order as any;
   }
@@ -44,7 +45,7 @@ export class PrismaOrderRepository implements IOrderRepository {
   async findByUserId(userId: string): Promise<Order[]> {
     const orders = await prisma.order.findMany({
       where: { userId },
-      include: { items: true },
+      include: { items: true, bot: true },
       orderBy: { createdAt: 'desc' }
     });
     return orders as any;
@@ -54,6 +55,7 @@ export class PrismaOrderRepository implements IOrderRepository {
     const orders = await prisma.order.findMany({
       include: { 
         items: true,
+        bot: true,
         user: {
           select: { name: true, steamId: true, avatar: true, tradeUrl: true }
         }
@@ -63,11 +65,15 @@ export class PrismaOrderRepository implements IOrderRepository {
     return orders as any;
   }
 
-  async updateStatus(id: string, status: OrderStatus): Promise<Order> {
+  async updateStatus(id: string, status: OrderStatus, botId?: string | null): Promise<Order> {
+    const updateData: any = { status: status as any };
+    if (botId !== undefined) {
+      updateData.botId = botId;
+    }
     const order = await prisma.order.update({
       where: { id },
-      data: { status: status as any },
-      include: { items: true }
+      data: updateData,
+      include: { items: true, bot: true }
     });
 
     // If a SELL order is cancelled, cancel any corresponding active or reserved skin listings as well

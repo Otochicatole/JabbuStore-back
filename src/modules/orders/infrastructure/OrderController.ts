@@ -518,7 +518,7 @@ export class OrderController {
   async updateStatus(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, botId } = req.body;
 
       if (!Object.values(OrderStatus).includes(status)) {
         return res.status(400).json({ error: "Invalid order status" });
@@ -536,6 +536,7 @@ export class OrderController {
       const order = await this.updateOrderStatusUseCase.execute(
         id as string,
         status as OrderStatus,
+        botId,
       );
       res.json(order);
     } catch (error: any) {
