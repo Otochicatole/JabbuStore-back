@@ -5,6 +5,7 @@ import {
   CreateRaffleUseCase,
   EditRaffleUseCase,
   CancelRaffleUseCase,
+  DeleteRaffleUseCase,
   DrawRaffleUseCase,
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
@@ -21,6 +22,7 @@ const raffleRepository = new PrismaRaffleRepository();
 const createRaffleUseCase = new CreateRaffleUseCase(raffleRepository);
 const editRaffleUseCase = new EditRaffleUseCase(raffleRepository);
 const cancelRaffleUseCase = new CancelRaffleUseCase(raffleRepository);
+const deleteRaffleUseCase = new DeleteRaffleUseCase(raffleRepository);
 const drawRaffleUseCase = new DrawRaffleUseCase(raffleRepository);
 const getClientRafflesUseCase = new GetClientRafflesUseCase(raffleRepository);
 const getAdminRafflesUseCase = new GetAdminRafflesUseCase(raffleRepository);
@@ -30,6 +32,7 @@ const raffleController = new RaffleController(
   createRaffleUseCase,
   editRaffleUseCase,
   cancelRaffleUseCase,
+  deleteRaffleUseCase,
   drawRaffleUseCase,
   getClientRafflesUseCase,
   getAdminRafflesUseCase,
@@ -55,6 +58,9 @@ router.put("/admin/:id", authMiddleware, adminOnly, (req, res) =>
 );
 router.patch("/admin/:id/cancel", authMiddleware, adminOnly, (req, res) =>
   raffleController.cancelRaffle(req, res)
+);
+router.delete("/admin/:id", authMiddleware, adminOnly, (req, res) =>
+  raffleController.deleteRaffle(req, res)
 );
 router.post("/admin/:id/draw", authMiddleware, adminOnly, (req, res) =>
   raffleController.drawRaffle(req, res)

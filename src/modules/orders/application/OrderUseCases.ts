@@ -104,6 +104,48 @@ export class CreatePurchaseOrderUseCase {
 
       const order = await this.orderRepository.create(orderData, orderItemsData);
       WebhookService.sendOrderNotification(order, "order.created");
+
+      try {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        const notificationRepository = new PrismaNotificationRepository();
+        const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+
+        await notificationUseCase.execute({
+          title: "notifications.newRaffleChancesOrder.title",
+          content: JSON.stringify({
+            key: "notifications.newRaffleChancesOrder.content",
+            params: {
+              userName: user?.name || "Steam User",
+              raffleName: raffle.name,
+              ticketsCount,
+              totalPrice: totalPrice.toLocaleString(),
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: `/admin/panel/raffle-purchases/${raffleId}`,
+          userId: null,
+          adminId: null,
+        });
+
+        await notificationUseCase.execute({
+          userId,
+          adminId: null,
+          title: "notifications.raffleChancesPurchased.title",
+          content: JSON.stringify({
+            key: "notifications.raffleChancesPurchased.content",
+            params: {
+              raffleName: raffle.name,
+              ticketsCount,
+              orderId: order.id.slice(0, 8),
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: "/purchases",
+        });
+      } catch (err) {
+        console.error("[CreatePurchaseOrderUseCase] Error sending raffle notifications:", err);
+      }
+
       return order;
     }
 
@@ -608,9 +650,44 @@ export class UpdateOrderStatusUseCase {
       ? (dbOrder.metadata as Record<string, any>)
       : null;
 
+    const isRaffleOrder = Boolean(metadata?.raffleId);
+    const hadAllocatedTickets =
+      dbOrder.status === OrderStatus.COMPLETED ||
+      dbOrder.status === OrderStatus.PAID ||
+      dbOrder.status === OrderStatus.TRADE_PENDING;
+
+    const shouldRevokeRaffleTickets =
+      isRaffleOrder &&
+      hadAllocatedTickets &&
+      (status === OrderStatus.CANCELLED || status === OrderStatus.PENDING_PAYMENT);
+
     let order: Order;
 
-    if (metadata && metadata.raffleId && (status === OrderStatus.TRADE_PENDING || status === OrderStatus.PAID)) {
+    if (shouldRevokeRaffleTickets) {
+      order = await prisma.$transaction(async (tx) => {
+        const tickets = await tx.raffleTicket.findMany({
+          where: { orderId },
+          include: { wonPrizes: { select: { id: true } } },
+        });
+
+        const hasWinningTicket = tickets.some((ticket) => ticket.wonPrizes.length > 0);
+        if (hasWinningTicket) {
+          throw new Error(
+            "No se pueden revocar chances de tickets que ya ganaron un premio en el sorteo.",
+          );
+        }
+
+        if (tickets.length > 0) {
+          await tx.raffleTicket.deleteMany({ where: { orderId } });
+        }
+
+        return tx.order.update({
+          where: { id: orderId },
+          data: { status: status as any },
+          include: { items: true, bot: true },
+        });
+      }) as any;
+    } else if (metadata && metadata.raffleId && (status === OrderStatus.TRADE_PENDING || status === OrderStatus.PAID)) {
       const raffleId = metadata.raffleId;
       const ticketsCount = Number(metadata.ticketsCount || 1);
 
@@ -676,55 +753,125 @@ export class UpdateOrderStatusUseCase {
     if (this.notificationRepository) {
       try {
         const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
-        
+
         const isSell = order.type === OrderType.SELL;
-        let title = 'notifications.orderUpdated.title';
-        let content = JSON.stringify({ key: 'notifications.orderUpdated.content', params: { orderId: order.id.slice(0, 8), status } });
-        
-        if (status === OrderStatus.PAID) {
+        const isRaffleOrder = Boolean(metadata?.raffleId);
+        const ticketsCount = Number(metadata?.ticketsCount || 1);
+        let raffleName = typeof metadata?.raffleName === "string" ? metadata.raffleName : undefined;
+
+        if (isRaffleOrder && !raffleName && metadata?.raffleId) {
+          const raffle = await prisma.raffle.findUnique({
+            where: { id: metadata.raffleId as string },
+            select: { name: true },
+          });
+          raffleName = raffle?.name;
+        }
+
+        const isRaffleApproval =
+          isRaffleOrder &&
+          (status === OrderStatus.PAID || status === OrderStatus.TRADE_PENDING) &&
+          order.status === OrderStatus.COMPLETED;
+
+        let title = "notifications.orderUpdated.title";
+        let content = JSON.stringify({
+          key: "notifications.orderUpdated.content",
+          params: { orderId: order.id.slice(0, 8), status },
+        });
+        let link = isSell ? "/listings" : "/purchases";
+
+        if (isRaffleApproval) {
+          title = "notifications.raffleChancesApproved.title";
+          content = JSON.stringify({
+            key: "notifications.raffleChancesApproved.content",
+            params: {
+              raffleName: raffleName || "Sorteo",
+              ticketsCount,
+              orderId: order.id.slice(0, 8),
+            },
+          });
+          link = "/purchases";
+        } else if (isRaffleOrder && status === OrderStatus.CANCELLED) {
+          title = "notifications.raffleChancesCancelled.title";
+          content = JSON.stringify({
+            key: "notifications.raffleChancesCancelled.content",
+            params: {
+              raffleName: raffleName || "Sorteo",
+              orderId: order.id.slice(0, 8),
+            },
+          });
+          link = "/purchases";
+        } else if (status === OrderStatus.PAID) {
           if (isSell) {
-            title = 'notifications.tradeReceived.title';
-            content = JSON.stringify({ key: 'notifications.tradeReceived.content', params: { orderId: order.id.slice(0, 8) } });
-          } else {
-            title = 'notifications.orderPaid.title';
-            content = JSON.stringify({ key: 'notifications.orderPaid.content', params: { orderId: order.id.slice(0, 8) } });
+            title = "notifications.tradeReceived.title";
+            content = JSON.stringify({
+              key: "notifications.tradeReceived.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderPaid.title";
+            content = JSON.stringify({
+              key: "notifications.orderPaid.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
           }
         } else if (status === OrderStatus.COMPLETED) {
           if (isSell) {
-            title = 'notifications.sellCompleted.title';
-            content = JSON.stringify({ key: 'notifications.sellCompleted.content', params: { orderId: order.id.slice(0, 8) } });
-          } else {
-            title = 'notifications.orderCompleted.title';
-            content = JSON.stringify({ key: 'notifications.orderCompleted.content', params: { orderId: order.id.slice(0, 8) } });
+            title = "notifications.sellCompleted.title";
+            content = JSON.stringify({
+              key: "notifications.sellCompleted.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderCompleted.title";
+            content = JSON.stringify({
+              key: "notifications.orderCompleted.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
           }
         } else if (status === OrderStatus.CANCELLED) {
           if (isSell) {
-            title = 'notifications.sellCancelled.title';
-            content = JSON.stringify({ key: 'notifications.sellCancelled.content', params: { orderId: order.id.slice(0, 8) } });
-          } else {
-            title = 'notifications.orderCancelled.title';
-            content = JSON.stringify({ key: 'notifications.orderCancelled.content', params: { orderId: order.id.slice(0, 8) } });
+            title = "notifications.sellCancelled.title";
+            content = JSON.stringify({
+              key: "notifications.sellCancelled.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderCancelled.title";
+            content = JSON.stringify({
+              key: "notifications.orderCancelled.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
           }
         } else if (status === OrderStatus.TRADE_PENDING) {
           if (isSell) {
-            title = 'notifications.sellApproved.title';
-            content = JSON.stringify({ key: 'notifications.sellApproved.content', params: { orderId: order.id.slice(0, 8) } });
-          } else {
-            title = 'notifications.tradePending.title';
-            content = JSON.stringify({ key: 'notifications.tradePending.content', params: { orderId: order.id.slice(0, 8) } });
+            title = "notifications.sellApproved.title";
+            content = JSON.stringify({
+              key: "notifications.sellApproved.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.tradePending.title";
+            content = JSON.stringify({
+              key: "notifications.tradePending.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
           }
         }
 
-        await createNotificationUseCase.execute({
-          userId: order.userId,
-          adminId: null,
-          title,
-          content,
-          type: 'ORDER_STATUS',
-          link: isSell ? '/listings' : '/purchases',
-        });
+        const shouldNotifyUser = !isRaffleOrder || isRaffleApproval || status === OrderStatus.CANCELLED;
 
-        if (status === OrderStatus.TRADE_PENDING && order.bot) {
+        if (shouldNotifyUser) {
+          await createNotificationUseCase.execute({
+            userId: order.userId,
+            adminId: null,
+            title,
+            content,
+            type: "ORDER_STATUS",
+            link,
+          });
+        }
+
+        if (status === OrderStatus.TRADE_PENDING && order.bot && !isRaffleOrder) {
           const botTitle = 'notifications.botAssigned.title';
           const botContent = JSON.stringify({
             key: isSell ? 'notifications.botAssigned.sellContent' : 'notifications.botAssigned.buyContent',

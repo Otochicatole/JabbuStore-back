@@ -112,6 +112,34 @@ export class EditRaffleUseCase {
     }
 
     if (raffle.status !== "PENDING" && raffle.status !== "ACTIVE") {
+      if (raffle.status === "CANCELLED") {
+        const hasPaidTickets = (raffle.tickets || []).some((t) => t.status === "PAID");
+        if (hasPaidTickets) {
+          const restrictedFields: (keyof typeof data)[] = ["ticketPrice", "maxTickets", "drawDate"];
+          const attemptedRestricted = restrictedFields.filter((f) => data[f] !== undefined);
+          if (attemptedRestricted.length > 0) {
+            throw new Error(
+              "No se puede modificar el precio, máximo de chances ni la fecha de sorteo mientras haya chances vendidas.",
+            );
+          }
+        }
+
+        if (data.status === "ACTIVE" || data.status === "PENDING") {
+          return this.raffleRepository.update(id, {
+            status: data.status,
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.description !== undefined ? { description: data.description } : {}),
+          });
+        }
+
+        if (data.name !== undefined || data.description !== undefined) {
+          return this.raffleRepository.update(id, {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.description !== undefined ? { description: data.description } : {}),
+          });
+        }
+      }
+
       throw new Error("Solo se pueden editar sorteos pendientes o activos.");
     }
 
@@ -149,6 +177,23 @@ export class CancelRaffleUseCase {
     // Notice that cancelled raffle prizes are dynamically excluded from catalog locks,
     // so items automatically become available again in standard catalog lists.
     return this.raffleRepository.cancelRaffle(id);
+  }
+}
+
+export class DeleteRaffleUseCase {
+  constructor(private raffleRepository: IRaffleRepository) {}
+
+  async execute(id: string): Promise<void> {
+    const raffle = await this.raffleRepository.findById(id);
+    if (!raffle) {
+      throw new Error("Sorteo no encontrado.");
+    }
+
+    if (raffle.status !== "CANCELLED") {
+      throw new Error("Solo se pueden eliminar sorteos cancelados.");
+    }
+
+    await this.raffleRepository.deleteRaffle(id);
   }
 }
 
@@ -222,7 +267,7 @@ export class DrawRaffleUseCase {
         await notificationUseCase.execute({
           userId: winnerInfo.winnerId,
           adminId: null,
-          title: "¡Felicitaciones! Ganaste un sorteo",
+          title: "notifications.raffleWon.title",
           content: JSON.stringify({
             key: "notifications.raffleWon.content",
             params: {

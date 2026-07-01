@@ -76,6 +76,7 @@ export interface IRaffleRepository {
   }): Promise<Raffle>;
   
   cancelRaffle(id: string): Promise<Raffle>;
+  deleteRaffle(id: string): Promise<void>;
   findTicketsByRaffleId(raffleId: string): Promise<RaffleTicket[]>;
   findTicketsByUserId(userId: string): Promise<RaffleTicket[]>;
   

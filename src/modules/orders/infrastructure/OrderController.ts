@@ -111,10 +111,12 @@ export class OrderController {
       return { updated: false, reason: "payment_id_mismatch" };
     }
 
+    const isRaffleOrder = Boolean(currentMetadata.raffleId);
+
     await prisma.order.update({
       where: { id: orderId },
       data: {
-        status: "TRADE_PENDING",
+        ...(isRaffleOrder ? {} : { status: "TRADE_PENDING" }),
         metadata: {
           ...currentMetadata,
           [metadataKey]: String(paymentId),
@@ -123,6 +125,10 @@ export class OrderController {
         },
       },
     });
+
+    if (isRaffleOrder) {
+      await this.updateOrderStatusUseCase.execute(orderId, OrderStatus.TRADE_PENDING);
+    }
 
     return { updated: true };
   }

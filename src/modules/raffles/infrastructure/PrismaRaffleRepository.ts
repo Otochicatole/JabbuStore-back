@@ -137,6 +137,16 @@ export class PrismaRaffleRepository implements IRaffleRepository {
     return cancelled as any;
   }
 
+  async deleteRaffle(id: string): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      await tx.rafflePrize.updateMany({
+        where: { raffleId: id },
+        data: { winningTicketId: null },
+      });
+      await tx.raffle.delete({ where: { id } });
+    });
+  }
+
   async findTicketsByRaffleId(raffleId: string): Promise<RaffleTicket[]> {
     const tickets = await prisma.raffleTicket.findMany({
       where: { raffleId },

@@ -3,6 +3,7 @@ import {
   CreateRaffleUseCase,
   EditRaffleUseCase,
   CancelRaffleUseCase,
+  DeleteRaffleUseCase,
   DrawRaffleUseCase,
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
@@ -13,6 +14,7 @@ import { prisma } from "../../../shared/infrastructure/PrismaClient";
 interface RaffleSummary {
   id: string;
   name: string;
+  description: string | null;
   status: string;
   drawDate: Date;
   ticketPrice: number;
@@ -30,6 +32,7 @@ export class RaffleController {
     private createRaffleUseCase: CreateRaffleUseCase,
     private editRaffleUseCase: EditRaffleUseCase,
     private cancelRaffleUseCase: CancelRaffleUseCase,
+    private deleteRaffleUseCase: DeleteRaffleUseCase,
     private drawRaffleUseCase: DrawRaffleUseCase,
     private getClientRafflesUseCase: GetClientRafflesUseCase,
     private getAdminRafflesUseCase: GetAdminRafflesUseCase,
@@ -80,6 +83,16 @@ export class RaffleController {
       const { id } = req.params;
       const raffle = await this.cancelRaffleUseCase.execute(id as string);
       res.json(raffle);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async deleteRaffle(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      await this.deleteRaffleUseCase.execute(id as string);
+      res.status(204).send();
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -177,6 +190,7 @@ export class RaffleController {
           return {
             id: raffle.id,
             name: raffle.name,
+            description: raffle.description,
             status: raffle.status,
             drawDate: raffle.drawDate,
             ticketPrice: raffle.ticketPrice,
@@ -202,7 +216,16 @@ export class RaffleController {
 
       const raffle = await prisma.raffle.findUnique({
         where: { id: id as string },
-        select: { id: true, name: true },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          status: true,
+          drawDate: true,
+          ticketPrice: true,
+          maxTickets: true,
+          tickets: { select: { status: true } },
+        },
       });
 
       if (!raffle) {
@@ -235,7 +258,7 @@ export class RaffleController {
       const enriched = await Promise.all(
         orders.map(async (order) => {
           const tickets = await prisma.raffleTicket.findMany({
-            where: { orderId: order.id },
+            where: { orderId: order.id, status: "PAID" },
             select: { ticketNumber: true, status: true },
             orderBy: { ticketNumber: "asc" },
           });
@@ -250,7 +273,15 @@ export class RaffleController {
         })
       );
 
-      res.json({ raffle, orders: enriched });
+      const { tickets, ...raffleData } = raffle;
+
+      res.json({
+        raffle: {
+          ...raffleData,
+          soldChances: tickets.filter((t) => t.status === "PAID").length,
+        },
+        orders: enriched,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -304,7 +335,7 @@ export class RaffleController {
 
       const [assignedTicketsRows, chancesInRaffleTotal] = await Promise.all([
         prisma.raffleTicket.findMany({
-          where: { orderId: order.id },
+          where: { orderId: order.id, status: "PAID" },
           select: { ticketNumber: true },
           orderBy: { ticketNumber: "asc" },
         }),
