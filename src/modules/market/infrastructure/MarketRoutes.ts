@@ -34,4 +34,7 @@ router.get('/listings/:id/floats', (req, res) => marketController.getFloats(req,
 // Ruta protegida — solo admin puede forzar una resincronización manual
 router.post('/sync', authMiddleware, adminOnly, (req, res) => marketController.triggerSync(req, res));
 
+// Ruta protegida — obtener estado de la sincronización en curso
+router.get('/sync/status', authMiddleware, adminOnly, (req, res) => marketController.getSyncStatus(req, res));
+
 export default router;

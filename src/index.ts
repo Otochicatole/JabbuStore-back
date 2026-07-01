@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import { createServer } from 'node:http';
+import { prisma } from './shared/infrastructure/PrismaClient';
 import session from 'express-session';
 import passport from 'passport';
 import { rateLimit } from 'express-rate-limit';
@@ -97,6 +98,15 @@ import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/
 import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
 
 async function bootstrap() {
+  // Limpiar configuraciones no editables en la DB para respetar el archivo .env
+  await prisma.runtimeSetting.deleteMany({
+    where: {
+      key: {
+        notIn: ['ENABLE_SYNC', 'ENABLE_ITEMS_CATALOG_SYNC'],
+      },
+    },
+  });
+
   await applyRuntimeConfigOverrides();
   await configurePassport();
 
