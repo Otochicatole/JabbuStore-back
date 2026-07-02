@@ -277,7 +277,7 @@ export class DrawRaffleUseCase {
             },
           }),
           type: "SYSTEM",
-          link: "/profile",
+          link: `/raffles/${raffle.id}`,
         });
       }
     } catch (notificationErr) {
