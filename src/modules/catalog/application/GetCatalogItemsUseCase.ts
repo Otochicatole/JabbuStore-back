@@ -248,7 +248,7 @@ export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
 
-    const [settings, allStoreItems, allMarketAssets, reservedPrizes] = await Promise.all([
+    const [settings, allStoreItems, allMarketAssets] = await Promise.all([
       prisma.adminSettings.findFirst(),
       prisma.storeItem.findMany({
         where: {
@@ -266,23 +266,10 @@ export class GetCatalogItemsUseCase {
           resaleItem: true,
         },
       }),
-      prisma.rafflePrize.findMany({
-        where: {
-          raffle: {
-            status: { not: "CANCELLED" },
-          },
-        },
-        select: {
-          assetId: true,
-        },
-      }),
     ]);
 
-    const reservedAssetIds = new Set(reservedPrizes.map((p) => p.assetId));
-    const storeItems = allStoreItems.filter((item) => !reservedAssetIds.has(item.assetId));
-    const marketAssets = allMarketAssets.filter(
-      (asset) => !reservedAssetIds.has(asset.id) && !reservedAssetIds.has(`youpin-${asset.id}`)
-    );
+    const storeItems = allStoreItems;
+    const marketAssets = allMarketAssets;
 
 
     const settingsData = settings ?? {

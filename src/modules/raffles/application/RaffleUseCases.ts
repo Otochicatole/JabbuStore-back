@@ -15,7 +15,7 @@ export class CreateRaffleUseCase {
       maxTickets?: number | null;
       status?: string;
     },
-    prizesData: { assetId: string }[]
+    prizesData: { assetId: string; position: number }[]
   ): Promise<Raffle> {
     if (!prizesData || prizesData.length === 0) {
       throw new Error("El sorteo debe tener al menos un premio.");
@@ -26,19 +26,6 @@ export class CreateRaffleUseCase {
     for (const item of prizesData) {
       const assetId = item.assetId;
 
-      // Check if item is already reserved in a non-cancelled raffle
-      const alreadyReserved = await prisma.rafflePrize.findFirst({
-        where: {
-          assetId,
-          raffle: {
-            status: { not: "CANCELLED" },
-          },
-        },
-      });
-
-      if (alreadyReserved) {
-        throw new Error(`El ítem con ID ${assetId} ya está reservado en otro sorteo activo.`);
-      }
 
       // Check if it is a bot item
       if (!assetId.startsWith("youpin-") && !assetId.startsWith("market-")) {
@@ -52,6 +39,7 @@ export class CreateRaffleUseCase {
 
         prizes.push({
           assetId,
+          position: item.position,
           name: storeItem.name,
           price: storeItem.price,
           iconUrl: storeItem.iconUrl,
@@ -74,6 +62,7 @@ export class CreateRaffleUseCase {
 
         prizes.push({
           assetId,
+          position: item.position,
           name: floatItem.resaleItem.name,
           price: floatItem.price,
           iconUrl: floatItem.resaleItem.iconUrl,
@@ -231,17 +220,29 @@ export class DrawRaffleUseCase {
     const pool = [...paidTickets];
     const winnerUserIds = new Set<string>();
 
+    const positionsMap = new Map<number, typeof prizes>();
     for (const prize of prizes) {
+      const pos = prize.position || 1;
+      if (!positionsMap.has(pos)) positionsMap.set(pos, []);
+      positionsMap.get(pos)!.push(prize);
+    }
+
+    const sortedPositions = Array.from(positionsMap.keys()).sort((a, b) => a - b);
+
+    for (const pos of sortedPositions) {
       if (pool.length === 0) break; // No more tickets to draw from
 
+      const posPrizes = positionsMap.get(pos)!;
       const randomIndex = Math.floor(Math.random() * pool.length);
       const winningTicket = pool[randomIndex]!;
 
-      winners.push({
-        prizeId: prize.id,
-        winnerId: winningTicket.userId,
-        winningTicketId: winningTicket.id,
-      });
+      for (const prize of posPrizes) {
+        winners.push({
+          prizeId: prize.id,
+          winnerId: winningTicket.userId,
+          winningTicketId: winningTicket.id,
+        });
+      }
 
       winnerUserIds.add(winningTicket.userId);
 

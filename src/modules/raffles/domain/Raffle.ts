@@ -18,6 +18,7 @@ export interface Raffle {
 export interface RafflePrize {
   id: string;
   raffleId: string;
+  position: number;
   assetId: string;
   name: string;
   price: number;
@@ -63,6 +64,7 @@ export interface IRaffleRepository {
     },
     prizes: {
       assetId: string;
+      position: number;
       name: string;
       price: number;
       iconUrl?: string | null;

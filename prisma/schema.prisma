@@ -439,6 +439,8 @@ model RafflePrize {
   raffleId    String
   raffle      Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
   
+  position    Int      @default(1) // Puesto en el sorteo (1er lugar, 2do lugar, etc.)
+
   assetId     String   // Can be bot assetId or youpin-id
   name        String
   price       Float

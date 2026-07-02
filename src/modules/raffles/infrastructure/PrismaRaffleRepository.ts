@@ -24,6 +24,7 @@ export class PrismaRaffleRepository implements IRaffleRepository {
     },
     prizes: {
       assetId: string;
+      position: number;
       name: string;
       price: number;
       iconUrl?: string | null;
@@ -45,6 +46,7 @@ export class PrismaRaffleRepository implements IRaffleRepository {
         prizes: {
           create: prizes.map((p) => ({
             assetId: p.assetId,
+            position: p.position,
             name: p.name,
             price: p.price,
             iconUrl: p.iconUrl || null,
