@@ -10,6 +10,7 @@ import {
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
   GetRaffleDetailsUseCase,
+  SetRaffleVisibilityUseCase,
 } from "../application/RaffleUseCases";
 import {
   authMiddleware,
@@ -27,6 +28,7 @@ const drawRaffleUseCase = new DrawRaffleUseCase(raffleRepository);
 const getClientRafflesUseCase = new GetClientRafflesUseCase(raffleRepository);
 const getAdminRafflesUseCase = new GetAdminRafflesUseCase(raffleRepository);
 const getRaffleDetailsUseCase = new GetRaffleDetailsUseCase(raffleRepository);
+const setRaffleVisibilityUseCase = new SetRaffleVisibilityUseCase(raffleRepository);
 
 const raffleController = new RaffleController(
   createRaffleUseCase,
@@ -36,7 +38,8 @@ const raffleController = new RaffleController(
   drawRaffleUseCase,
   getClientRafflesUseCase,
   getAdminRafflesUseCase,
-  getRaffleDetailsUseCase
+  getRaffleDetailsUseCase,
+  setRaffleVisibilityUseCase
 );
 
 // Client Public Routes
@@ -67,6 +70,9 @@ router.delete("/admin/:id", authMiddleware, adminOnly, (req, res) =>
 );
 router.post("/admin/:id/draw", authMiddleware, adminOnly, (req, res) =>
   raffleController.drawRaffle(req, res)
+);
+router.patch("/admin/:id/visibility", authMiddleware, adminOnly, (req, res) =>
+  raffleController.setRaffleVisibility(req, res)
 );
 router.get("/admin/:id/participants", authMiddleware, adminOnly, (req, res) =>
   raffleController.getRaffleParticipants(req, res)

@@ -8,6 +8,7 @@ import {
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
   GetRaffleDetailsUseCase,
+  SetRaffleVisibilityUseCase,
 } from "../application/RaffleUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 
@@ -36,7 +37,8 @@ export class RaffleController {
     private drawRaffleUseCase: DrawRaffleUseCase,
     private getClientRafflesUseCase: GetClientRafflesUseCase,
     private getAdminRafflesUseCase: GetAdminRafflesUseCase,
-    private getRaffleDetailsUseCase: GetRaffleDetailsUseCase
+    private getRaffleDetailsUseCase: GetRaffleDetailsUseCase,
+    private setRaffleVisibilityUseCase: SetRaffleVisibilityUseCase
   ) {}
 
   async createRaffle(req: Request, res: Response) {
@@ -130,12 +132,28 @@ export class RaffleController {
     try {
       const { id } = req.params;
       const raffle = await this.getRaffleDetailsUseCase.execute(id as string);
-      if (!raffle) {
+      if (!raffle || raffle.isPublic === false) {
         return res.status(404).json({ error: "Sorteo no encontrado." });
       }
       res.json(raffle);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  async setRaffleVisibility(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { isPublic } = req.body;
+
+      if (typeof isPublic !== "boolean") {
+        return res.status(400).json({ error: "El campo isPublic es obligatorio." });
+      }
+
+      const raffle = await this.setRaffleVisibilityUseCase.execute(id as string, isPublic);
+      res.json(raffle);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
   }
 

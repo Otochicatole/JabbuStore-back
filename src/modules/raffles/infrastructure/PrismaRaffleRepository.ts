@@ -1,5 +1,16 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
-import { Raffle, RafflePrize, RaffleTicket, IRaffleRepository } from '../domain/Raffle';
+import { Raffle, RaffleTicket, IRaffleRepository } from '../domain/Raffle';
+
+const prizeWithWinnerInclude = {
+  include: {
+    winner: {
+      select: { id: true, name: true, steamId: true, avatar: true, tradeUrl: true },
+    },
+    winningTicket: {
+      select: { ticketNumber: true },
+    },
+  },
+} as const;
 
 export class PrismaRaffleRepository implements IRaffleRepository {
   async create(
@@ -57,13 +68,7 @@ export class PrismaRaffleRepository implements IRaffleRepository {
     const raffle = await prisma.raffle.findUnique({
       where: { id },
       include: {
-        prizes: {
-          include: {
-            winner: {
-              select: { id: true, name: true, steamId: true, avatar: true }
-            }
-          }
-        },
+        prizes: prizeWithWinnerInclude,
         tickets: {
           include: {
             user: {
@@ -79,7 +84,7 @@ export class PrismaRaffleRepository implements IRaffleRepository {
   async findAll(): Promise<Raffle[]> {
     const raffles = await prisma.raffle.findMany({
       include: {
-        prizes: true,
+        prizes: prizeWithWinnerInclude,
         tickets: true,
       },
       orderBy: { createdAt: "desc" },
@@ -91,9 +96,10 @@ export class PrismaRaffleRepository implements IRaffleRepository {
     const raffles = await prisma.raffle.findMany({
       where: {
         status: { in: ["PENDING", "ACTIVE", "FINISHED"] },
+        isPublic: true,
       },
       include: {
-        prizes: true,
+        prizes: prizeWithWinnerInclude,
         tickets: true,
       },
       orderBy: { createdAt: "desc" },
@@ -110,6 +116,7 @@ export class PrismaRaffleRepository implements IRaffleRepository {
       ticketPrice?: number;
       maxTickets?: number | null;
       status?: string;
+      isPublic?: boolean;
     }
   ): Promise<Raffle> {
     const updated = await prisma.raffle.update({

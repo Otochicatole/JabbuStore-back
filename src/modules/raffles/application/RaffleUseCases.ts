@@ -310,3 +310,20 @@ export class GetRaffleDetailsUseCase {
     return this.raffleRepository.findById(id);
   }
 }
+
+export class SetRaffleVisibilityUseCase {
+  constructor(private raffleRepository: IRaffleRepository) {}
+
+  async execute(id: string, isPublic: boolean): Promise<Raffle> {
+    const raffle = await this.raffleRepository.findById(id);
+    if (!raffle) {
+      throw new Error("Sorteo no encontrado.");
+    }
+
+    if (raffle.status !== "FINISHED") {
+      throw new Error("Solo se puede ocultar o mostrar sorteos finalizados.");
+    }
+
+    return this.raffleRepository.update(id, { isPublic });
+  }
+}

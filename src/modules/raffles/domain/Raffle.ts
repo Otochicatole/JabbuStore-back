@@ -8,6 +8,7 @@ export interface Raffle {
   ticketPrice: number;
   maxTickets: number | null;
   status: string; // PENDING, ACTIVE, FINISHED, CANCELLED
+  isPublic: boolean;
   createdAt: Date;
   updatedAt: Date;
   prizes?: RafflePrize[];
@@ -28,6 +29,16 @@ export interface RafflePrize {
   provider: string; // 'bot' | 'youpin'
   winnerId: string | null;
   winningTicketId: string | null;
+  winner?: {
+    id: string;
+    name: string | null;
+    steamId: string | null;
+    avatar: string | null;
+    tradeUrl: string | null;
+  } | null;
+  winningTicket?: {
+    ticketNumber: number;
+  } | null;
 }
 
 export interface RaffleTicket {
@@ -73,6 +84,7 @@ export interface IRaffleRepository {
     ticketPrice?: number;
     maxTickets?: number | null;
     status?: string;
+    isPublic?: boolean;
   }): Promise<Raffle>;
   
   cancelRaffle(id: string): Promise<Raffle>;
