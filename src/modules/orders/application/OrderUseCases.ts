@@ -160,20 +160,7 @@ export class CreatePurchaseOrderUseCase {
       throw new Error("Para realizar compras debes tener registrado tu Email y Trade URL en tu perfil.");
     }
 
-    // Verify no items are reserved for raffle
-    const reservedPrizes = await prisma.rafflePrize.findMany({
-      where: {
-        raffle: { status: { not: "CANCELLED" } }
-      },
-      select: { assetId: true }
-    });
-    const reservedAssetIds = new Set(reservedPrizes.map(p => p.assetId));
 
-    for (const id of assetIds) {
-      if (reservedAssetIds.has(id) || reservedAssetIds.has(id.replace(/^youpin-/, ""))) {
-        throw new Error(`El ítem ${id} está reservado para un sorteo y no está disponible para compra directa.`);
-      }
-    }
 
 
     // Map overrides for fast lookup

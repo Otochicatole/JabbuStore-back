@@ -992,21 +992,7 @@ export class OrderController {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
 
-        const reservedPrizes = await prisma.rafflePrize.findMany({
-          where: {
-            raffle: { status: { not: "CANCELLED" } }
-          },
-          select: { assetId: true }
-        });
-        const reservedAssetIds = new Set(reservedPrizes.map((p: any) => p.assetId));
 
-        for (const id of itemIds) {
-          if (reservedAssetIds.has(id) || reservedAssetIds.has(id.replace(/^youpin-/, ""))) {
-            return res.status(400).json({
-              error: `El ítem ${id} está reservado para un sorteo y no está disponible para compra directa.`,
-            });
-          }
-        }
 
 
         const overridesMap = new Map<string, any>();
