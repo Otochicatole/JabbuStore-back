@@ -264,13 +264,17 @@ export class CreatePurchaseOrderUseCase {
         rarity: override?.rarity || item?.rarity || "common",
         exterior: override?.exterior || item?.exterior || null,
         float:
-          override?.float !== undefined && override?.float !== null
-            ? override.float
-            : (item?.float || null),
+          override?.isSpecific === false
+            ? null
+            : override?.float !== undefined && override?.float !== null
+              ? override.float
+              : (item?.float || null),
         pattern:
-          override?.pattern !== undefined && override?.pattern !== null
-            ? override.pattern
-            : (item?.pattern || null),
+          override?.isSpecific === false
+            ? null
+            : override?.pattern !== undefined && override?.pattern !== null
+              ? override.pattern
+              : (item?.pattern || null),
         provider: "bot",
       });
     }
@@ -319,8 +323,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl: item?.iconUrl || override?.iconUrl || null,
         rarity: item?.rarity || override?.rarity || "common",
         exterior: item?.exterior || override?.exterior || null,
-        float: itemFloat,
-        pattern: itemPattern,
+        float: override?.isSpecific === false ? null : itemFloat,
+        pattern: override?.isSpecific === false ? null : itemPattern,
         provider: itemProvider,
       });
     }
@@ -364,8 +368,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl,
         rarity,
         exterior,
-        float: floatVal,
-        pattern: patternVal,
+        float: override?.isSpecific === false ? null : floatVal,
+        pattern: override?.isSpecific === false ? null : patternVal,
         provider: 'youpin',
       });
     }

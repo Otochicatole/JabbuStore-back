@@ -1083,8 +1083,8 @@ export class OrderController {
               price: getBotCheckoutPrice(item.price, settingsData),
               iconUrl: item.iconUrl || null,
               provider: "bot",
-              float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
-              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
+              float: override?.isSpecific === false ? null : (override?.float !== undefined && override?.float !== null ? override.float : item.float),
+              pattern: override?.isSpecific === false ? null : (override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern),
               exterior: item.exterior ?? null,
               rarity: item.rarity ?? null,
             };
@@ -1176,8 +1176,8 @@ export class OrderController {
               price: floatPrice,
               iconUrl: listing.iconUrl || null,
               provider: 'youpin',
-              float: dbFloat.floatValue,
-              pattern: dbFloat.paintSeed,
+              float: override?.isSpecific === false ? null : dbFloat.floatValue,
+              pattern: override?.isSpecific === false ? null : dbFloat.paintSeed,
               exterior: listing.exterior ?? null,
               rarity: listing.rarity ?? null,
             };
