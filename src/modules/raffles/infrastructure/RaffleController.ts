@@ -143,11 +143,48 @@ export class RaffleController {
         return res.status(404).json({ error: "Sorteo no encontrado." });
       }
 
+      const uniqueUsers = new Map<string, any>();
+      (raffle.tickets || []).forEach((t: any) => {
+        if (t.user && t.user.id && !uniqueUsers.has(t.user.id)) {
+          uniqueUsers.set(t.user.id, { ...t.user });
+        }
+      });
+
+      await Promise.all(
+        Array.from(uniqueUsers.values()).map(async (user: any) => {
+          delete user.steamId;
+          delete user.tradeUrl;
+          if (user.avatar && !user.avatar.startsWith("data:")) {
+            try {
+              const avatarResponse = await fetch(user.avatar);
+              if (avatarResponse.ok) {
+                const buffer = await avatarResponse.arrayBuffer();
+                const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
+                user.avatar = `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
+              } else {
+                user.avatar = null;
+              }
+            } catch (e) {
+              user.avatar = null;
+            }
+          }
+        })
+      );
+
       const sanitizedRaffle = {
         ...raffle,
         prizes: (raffle.prizes || []).map((p: any) => {
           const { winner, ...rest } = p;
           return rest;
+        }),
+        tickets: (raffle.tickets || []).map((t: any) => {
+          if (t.user) {
+            return {
+              ...t,
+              user: uniqueUsers.get(t.user.id)
+            };
+          }
+          return t;
         })
       };
 
