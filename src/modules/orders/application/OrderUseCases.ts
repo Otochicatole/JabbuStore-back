@@ -264,17 +264,17 @@ export class CreatePurchaseOrderUseCase {
         rarity: override?.rarity || item?.rarity || "common",
         exterior: override?.exterior || item?.exterior || null,
         float:
-          override?.isSpecific === false
-            ? null
-            : override?.float !== undefined && override?.float !== null
+          override?.isSpecific === true
+            ? (override?.float !== undefined && override?.float !== null
               ? override.float
-              : (item?.float || null),
+              : (item?.float || null))
+            : null,
         pattern:
-          override?.isSpecific === false
-            ? null
-            : override?.pattern !== undefined && override?.pattern !== null
+          override?.isSpecific === true
+            ? (override?.pattern !== undefined && override?.pattern !== null
               ? override.pattern
-              : (item?.pattern || null),
+              : (item?.pattern || null))
+            : null,
         provider: "bot",
       });
     }
@@ -323,8 +323,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl: item?.iconUrl || override?.iconUrl || null,
         rarity: item?.rarity || override?.rarity || "common",
         exterior: item?.exterior || override?.exterior || null,
-        float: override?.isSpecific === false ? null : itemFloat,
-        pattern: override?.isSpecific === false ? null : itemPattern,
+        float: override?.isSpecific === true ? itemFloat : null,
+        pattern: override?.isSpecific === true ? itemPattern : null,
         provider: itemProvider,
       });
     }
@@ -368,8 +368,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl,
         rarity,
         exterior,
-        float: override?.isSpecific === false ? null : floatVal,
-        pattern: override?.isSpecific === false ? null : patternVal,
+        float: override?.isSpecific === true ? floatVal : null,
+        pattern: override?.isSpecific === true ? patternVal : null,
         provider: 'youpin',
       });
     }
