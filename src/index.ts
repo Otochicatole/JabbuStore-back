@@ -98,6 +98,7 @@ import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyn
 import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
 import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
 import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
+import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
 
 async function bootstrap() {
   // Limpiar configuraciones no editables en la DB para respetar el archivo .env
@@ -123,6 +124,8 @@ async function bootstrap() {
     startMarketSyncScheduler();
     // Sincronizador periódico de floats del plan Float Small
     startMarketFloatsSyncScheduler();
+    // Ejecución automática de sorteos programados vencidos
+    startRaffleScheduler();
   });
 }
 

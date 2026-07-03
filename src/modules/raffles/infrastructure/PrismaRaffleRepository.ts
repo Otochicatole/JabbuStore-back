@@ -109,6 +109,22 @@ export class PrismaRaffleRepository implements IRaffleRepository {
     return raffles as any;
   }
 
+  async findRafflesReadyToDraw(): Promise<Raffle[]> {
+    const raffles = await prisma.raffle.findMany({
+      where: {
+        status: "ACTIVE",
+        drawDate: {
+          lte: new Date(),
+        },
+      },
+      include: {
+        prizes: prizeWithWinnerInclude,
+        tickets: true,
+      },
+    });
+    return raffles as any;
+  }
+
   async update(
     id: string,
     data: {

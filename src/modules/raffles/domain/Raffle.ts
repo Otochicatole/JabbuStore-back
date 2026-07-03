@@ -79,6 +79,7 @@ export interface IRaffleRepository {
   findById(id: string): Promise<Raffle | null>;
   findAll(): Promise<Raffle[]>;
   findActiveAndFinished(): Promise<Raffle[]>;
+  findRafflesReadyToDraw(): Promise<Raffle[]>;
   update(id: string, data: {
     name?: string;
     description?: string | null;
