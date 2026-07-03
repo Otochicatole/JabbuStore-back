@@ -113,7 +113,14 @@ export class RaffleController {
   async getClientRaffles(req: Request, res: Response) {
     try {
       const raffles = await this.getClientRafflesUseCase.execute();
-      res.json(raffles);
+      const sanitized = raffles.map((r: any) => ({
+        ...r,
+        prizes: r.prizes.map((p: any) => {
+          const { winner, ...rest } = p;
+          return rest;
+        })
+      }));
+      res.json(sanitized);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -135,7 +142,68 @@ export class RaffleController {
       if (!raffle || raffle.isPublic === false) {
         return res.status(404).json({ error: "Sorteo no encontrado." });
       }
-      res.json(raffle);
+
+      const sanitizedRaffle = {
+        ...raffle,
+        prizes: (raffle.prizes || []).map((p: any) => {
+          const { winner, ...rest } = p;
+          return rest;
+        })
+      };
+
+      res.json(sanitizedRaffle);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getRaffleWinners(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const raffle = await this.getRaffleDetailsUseCase.execute(id as string);
+      
+      if (!raffle || raffle.isPublic === false) {
+        return res.status(404).json({ error: "Sorteo no encontrado." });
+      }
+
+      if (raffle.status !== "FINISHED") {
+        return res.json([]);
+      }
+
+      const winners = await Promise.all(
+        (raffle.prizes || [])
+          .filter((p: any) => p.winnerId && p.winner)
+          .map(async (p: any) => {
+            const originalName = p.winner.name || "Usuario Steam";
+            let avatarDataUrl: string | null = null;
+
+            if (p.winner.avatar) {
+              try {
+                const avatarResponse = await fetch(p.winner.avatar);
+                if (avatarResponse.ok) {
+                  const buffer = await avatarResponse.arrayBuffer();
+                  const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
+                  avatarDataUrl = `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
+                }
+              } catch (e) {
+                console.error("Failed to fetch avatar for winner", e);
+              }
+            }
+
+            return {
+              prizeId: p.id,
+              position: p.position,
+              winner: {
+                id: p.winner.id,
+                name: originalName,
+                avatar: avatarDataUrl
+              },
+              winningTicket: p.winningTicket
+            };
+          })
+      );
+
+      res.json(winners);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

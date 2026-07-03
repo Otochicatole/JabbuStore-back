@@ -45,6 +45,7 @@ const raffleController = new RaffleController(
 // Client Public Routes
 router.get("/", (req, res) => raffleController.getClientRaffles(req, res));
 router.get("/:id", (req, res) => raffleController.getRaffleDetails(req, res));
+router.get("/:id/winners", (req, res) => raffleController.getRaffleWinners(req, res));
 
 // Admin-only Routes
 router.get("/admin/all", authMiddleware, adminOnly, (req, res) =>
