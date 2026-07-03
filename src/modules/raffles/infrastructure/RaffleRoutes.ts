@@ -7,6 +7,7 @@ import {
   CancelRaffleUseCase,
   DeleteRaffleUseCase,
   DrawRaffleUseCase,
+  GetUpcomingRafflesUseCase,
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
   GetRaffleDetailsUseCase,
@@ -25,6 +26,7 @@ const editRaffleUseCase = new EditRaffleUseCase(raffleRepository);
 const cancelRaffleUseCase = new CancelRaffleUseCase(raffleRepository);
 const deleteRaffleUseCase = new DeleteRaffleUseCase(raffleRepository);
 const drawRaffleUseCase = new DrawRaffleUseCase(raffleRepository);
+const getUpcomingRafflesUseCase = new GetUpcomingRafflesUseCase(raffleRepository);
 const getClientRafflesUseCase = new GetClientRafflesUseCase(raffleRepository);
 const getAdminRafflesUseCase = new GetAdminRafflesUseCase(raffleRepository);
 const getRaffleDetailsUseCase = new GetRaffleDetailsUseCase(raffleRepository);
@@ -36,6 +38,7 @@ const raffleController = new RaffleController(
   cancelRaffleUseCase,
   deleteRaffleUseCase,
   drawRaffleUseCase,
+  getUpcomingRafflesUseCase,
   getClientRafflesUseCase,
   getAdminRafflesUseCase,
   getRaffleDetailsUseCase,
@@ -43,6 +46,7 @@ const raffleController = new RaffleController(
 );
 
 // Client Public Routes
+router.get("/upcoming", (req, res) => raffleController.getUpcomingRaffles(req, res));
 router.get("/", (req, res) => raffleController.getClientRaffles(req, res));
 router.get("/:id", (req, res) => raffleController.getRaffleDetails(req, res));
 router.get("/:id/winners", (req, res) => raffleController.getRaffleWinners(req, res));

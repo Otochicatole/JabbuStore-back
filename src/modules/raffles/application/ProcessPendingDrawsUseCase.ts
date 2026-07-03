@@ -1,5 +1,6 @@
 import { IRaffleRepository } from "../domain/Raffle";
 import { DrawRaffleUseCase } from "./RaffleUseCases";
+import { emitLiveRaffleStart } from "../../tickets/infrastructure/TicketSocket";
 
 export class ProcessPendingDrawsUseCase {
   constructor(
@@ -18,7 +19,18 @@ export class ProcessPendingDrawsUseCase {
 
     for (const raffle of readyRaffles) {
       try {
-        console.log(`[ProcessPendingDraws] Ejecutando sorteo para la rifa ${raffle.id} (${raffle.name})...`);
+        console.log(`[ProcessPendingDraws] Preparando sorteo en vivo para la rifa ${raffle.id} (${raffle.name})...`);
+        // Notify clients that the live draw is starting
+        try {
+          emitLiveRaffleStart(raffle.id);
+        } catch (e) {
+          console.error(`[ProcessPendingDraws Error] Fallo al emitir live start para ${raffle.id}:`, e);
+        }
+
+        // Wait 3 seconds to let clients show a "Starting..." animation if they want
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        console.log(`[ProcessPendingDraws] Ejecutando algoritmo de sorteo para ${raffle.id}...`);
         await this.drawRaffleUseCase.execute(raffle.id);
         console.log(`[ProcessPendingDraws] Sorteo ${raffle.id} ejecutado correctamente.`);
       } catch (error) {

@@ -2,6 +2,7 @@ import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { IRaffleRepository, Raffle, RafflePrize, RaffleTicket } from "../domain/Raffle";
 import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
+import { emitLiveRaffleResult } from "../../tickets/infrastructure/TicketSocket";
 
 export class CreateRaffleUseCase {
   constructor(private raffleRepository: IRaffleRepository) {}
@@ -149,6 +150,14 @@ export class EditRaffleUseCase {
   }
 }
 
+export class GetUpcomingRafflesUseCase {
+  constructor(private raffleRepository: IRaffleRepository) {}
+
+  async execute(minutes: number = 30): Promise<Raffle[]> {
+    return this.raffleRepository.findUpcomingDraws(minutes);
+  }
+}
+
 export class CancelRaffleUseCase {
   constructor(private raffleRepository: IRaffleRepository) {}
 
@@ -213,7 +222,13 @@ export class DrawRaffleUseCase {
 
     // If there are no tickets sold, transition to finished without winners
     if (paidTickets.length === 0) {
-      return this.raffleRepository.update(id, { status: "FINISHED" });
+      const updated = await this.raffleRepository.update(id, { status: "FINISHED" });
+      try {
+        emitLiveRaffleResult(id, { winners: [] });
+      } catch (err) {
+        console.error("[DrawRaffleUseCase] Fallo al emitir resultado vacío en vivo:", err);
+      }
+      return updated;
     }
 
     const winners: { prizeId: string; winnerId: string; winningTicketId: string }[] = [];
@@ -241,6 +256,8 @@ export class DrawRaffleUseCase {
           prizeId: prize.id,
           winnerId: winningTicket.userId,
           winningTicketId: winningTicket.id,
+          // @ts-ignore
+          user: winningTicket.user,
         });
       }
 
@@ -255,6 +272,13 @@ export class DrawRaffleUseCase {
     }
 
     const updatedRaffle = await this.raffleRepository.drawWinners(id, winners);
+
+    // Emit live event
+    try {
+      emitLiveRaffleResult(id, { winners });
+    } catch (err) {
+      console.error("[DrawRaffleUseCase] Fallo al emitir resultado en vivo:", err);
+    }
 
     // Send persistent notification to winners
     try {

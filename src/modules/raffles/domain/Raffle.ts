@@ -80,6 +80,7 @@ export interface IRaffleRepository {
   findAll(): Promise<Raffle[]>;
   findActiveAndFinished(): Promise<Raffle[]>;
   findRafflesReadyToDraw(): Promise<Raffle[]>;
+  findUpcomingDraws(minutes: number): Promise<Raffle[]>;
   update(id: string, data: {
     name?: string;
     description?: string | null;

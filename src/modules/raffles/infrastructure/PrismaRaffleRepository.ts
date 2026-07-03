@@ -119,8 +119,32 @@ export class PrismaRaffleRepository implements IRaffleRepository {
       },
       include: {
         prizes: prizeWithWinnerInclude,
+        tickets: {
+          include: { user: true }
+        },
+      },
+    });
+    return raffles as any;
+  }
+
+  async findUpcomingDraws(minutes: number): Promise<Raffle[]> {
+    const now = new Date();
+    const future = new Date(now.getTime() + minutes * 60000);
+    
+    const raffles = await prisma.raffle.findMany({
+      where: {
+        status: "ACTIVE",
+        isPublic: true,
+        drawDate: {
+          gt: now,
+          lte: future,
+        },
+      },
+      include: {
+        prizes: prizeWithWinnerInclude,
         tickets: true,
       },
+      orderBy: { drawDate: "asc" },
     });
     return raffles as any;
   }

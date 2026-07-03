@@ -5,6 +5,7 @@ import {
   CancelRaffleUseCase,
   DeleteRaffleUseCase,
   DrawRaffleUseCase,
+  GetUpcomingRafflesUseCase,
   GetClientRafflesUseCase,
   GetAdminRafflesUseCase,
   GetRaffleDetailsUseCase,
@@ -35,6 +36,7 @@ export class RaffleController {
     private cancelRaffleUseCase: CancelRaffleUseCase,
     private deleteRaffleUseCase: DeleteRaffleUseCase,
     private drawRaffleUseCase: DrawRaffleUseCase,
+    private getUpcomingRafflesUseCase: GetUpcomingRafflesUseCase,
     private getClientRafflesUseCase: GetClientRafflesUseCase,
     private getAdminRafflesUseCase: GetAdminRafflesUseCase,
     private getRaffleDetailsUseCase: GetRaffleDetailsUseCase,
@@ -130,6 +132,23 @@ export class RaffleController {
     try {
       const raffles = await this.getAdminRafflesUseCase.execute();
       res.json(raffles);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getUpcomingRaffles(req: Request, res: Response) {
+    try {
+      const minutes = req.query.minutes ? parseInt(req.query.minutes as string) : 30;
+      const raffles = await this.getUpcomingRafflesUseCase.execute(minutes);
+      // Omitir info sensible si queremos, pero getUpcoming debe devolver lo necesario para el nav.
+      const sanitized = raffles.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        drawDate: r.drawDate,
+        status: r.status
+      }));
+      res.json(sanitized);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

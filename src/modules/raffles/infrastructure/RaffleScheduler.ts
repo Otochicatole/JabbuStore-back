@@ -7,9 +7,9 @@ export function startRaffleScheduler() {
   const drawRaffleUseCase = new DrawRaffleUseCase(raffleRepository);
   const processPendingDrawsUseCase = new ProcessPendingDrawsUseCase(raffleRepository, drawRaffleUseCase);
 
-  const intervalMs = 60 * 1000; // 60 segundos
+  const intervalMs = 10 * 1000; // 10 segundos
   
-  console.log(`[Raffle Scheduler] Iniciando scheduler de sorteos automáticos. Intervalo de revisión: 60s`);
+  console.log(`[Raffle Scheduler] Iniciando scheduler de sorteos automáticos. Intervalo de revisión: 10s`);
 
   // Primera verificación al levantar
   processPendingDrawsUseCase.execute().catch(e => {
