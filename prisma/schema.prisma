@@ -242,6 +242,13 @@ model AdminSettings {
   manualCryptoAddress        String?
   manualCryptoNetwork        String?
   manualCryptoInstructions   String?
+  
+  // Estadísticas del Home
+  homeStatsActiveUsers       String   @default("150K+")
+  homeStatsAvailableSkins    String   @default("45K+")
+  homeStatsTransactions      String   @default("2.5M+")
+  homeStatsOnlineSupport     String   @default("24/7")
+
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }

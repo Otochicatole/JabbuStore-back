@@ -23,6 +23,10 @@ export class MarketplaceController {
         manualCryptoAddress: settings.manualCryptoAddress,
         manualCryptoNetwork: settings.manualCryptoNetwork,
         manualCryptoInstructions: settings.manualCryptoInstructions,
+        homeStatsActiveUsers: settings.homeStatsActiveUsers,
+        homeStatsAvailableSkins: settings.homeStatsAvailableSkins,
+        homeStatsTransactions: settings.homeStatsTransactions,
+        homeStatsOnlineSupport: settings.homeStatsOnlineSupport,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
