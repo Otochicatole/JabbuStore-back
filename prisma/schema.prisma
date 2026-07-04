@@ -29,6 +29,7 @@ model User {
   notifications  Notification[]
   raffleTickets  RaffleTicket[]
   wonPrizes      RafflePrize[]
+  isFake         Boolean  @default(false)
 }
 
 model Admin {

@@ -286,6 +286,12 @@ export class DrawRaffleUseCase {
       const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
 
       for (const winnerInfo of winners) {
+        // @ts-ignore
+        const user = winnerInfo.user;
+        if (user && user.isFake) {
+          continue; // Skip notifications for fake users
+        }
+
         const prize = prizes.find((p) => p.id === winnerInfo.prizeId);
         if (!prize) continue;
 
@@ -350,5 +356,87 @@ export class SetRaffleVisibilityUseCase {
     }
 
     return this.raffleRepository.update(id, { isPublic });
+  }
+}
+
+export class AddFakeParticipantsUseCase {
+  constructor(private raffleRepository: IRaffleRepository) {}
+
+  async execute(
+    id: string,
+    mode: "new" | "existing",
+    tickets: number,
+    botData?: { name?: string; avatar?: string; botId?: string }
+  ): Promise<void> {
+    const raffle = await this.raffleRepository.findById(id);
+    if (!raffle) {
+      throw new Error("Sorteo no encontrado.");
+    }
+
+    if (raffle.status !== "ACTIVE" && raffle.status !== "PENDING") {
+      throw new Error("Solo se pueden agregar bots a sorteos activos o pendientes.");
+    }
+
+    let fakeUser: any = null;
+
+    if (mode === "new") {
+      const name = botData?.name || `Bot_${Math.floor(Math.random() * 1000)}`;
+      const avatar = botData?.avatar || "https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg";
+      const steamId = `FAKE_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      
+      fakeUser = await prisma.user.create({
+        data: {
+          isFake: true,
+          name,
+          avatar,
+          steamId,
+        }
+      });
+    } else {
+      if (!botData?.botId) throw new Error("ID de bot no proporcionado.");
+      fakeUser = await prisma.user.findUnique({ where: { id: botData.botId } });
+      if (!fakeUser || !fakeUser.isFake) throw new Error("Bot no encontrado o inválido.");
+    }
+
+    // Create tickets and orders
+    const currentMaxTicket = await prisma.raffleTicket.aggregate({
+      where: { raffleId: id },
+      _max: { ticketNumber: true },
+    });
+    let startTicketNumber = (currentMaxTicket._max.ticketNumber || 0) + 1;
+
+    // Create a mock order for this bot so it appears in the participants list
+    const order = await prisma.order.create({
+      data: {
+        userId: fakeUser.id,
+        type: "BUY",
+        status: "COMPLETED",
+        totalPrice: tickets * raffle.ticketPrice,
+        paymentMethod: "BOT_INJECTION",
+        metadata: {
+          raffleId: id,
+          ticketsCount: tickets,
+          isBot: true,
+        }
+      }
+    });
+
+    const newTickets: any[] = [];
+    for (let i = 0; i < tickets; i++) {
+      newTickets.push({
+        raffleId: id,
+        userId: fakeUser.id,
+        orderId: order.id,
+        ticketNumber: startTicketNumber++,
+        status: "PAID",
+        purchaseDate: new Date(),
+      });
+    }
+
+    if (newTickets.length > 0) {
+      await prisma.raffleTicket.createMany({
+        data: newTickets,
+      });
+    }
   }
 }

@@ -10,8 +10,10 @@ import {
   GetAdminRafflesUseCase,
   GetRaffleDetailsUseCase,
   SetRaffleVisibilityUseCase,
+  AddFakeParticipantsUseCase,
 } from "../application/RaffleUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
+import { PrismaRaffleRepository } from "./PrismaRaffleRepository";
 
 interface RaffleSummary {
   id: string;
@@ -173,9 +175,14 @@ export class RaffleController {
         Array.from(uniqueUsers.values()).map(async (user: any) => {
           delete user.steamId;
           delete user.tradeUrl;
-          if (user.avatar && !user.avatar.startsWith("data:")) {
+          let avatarUrl = user.avatar;
+          if (avatarUrl && !avatarUrl.startsWith("data:")) {
+            if (avatarUrl.startsWith("/api/proxy/")) {
+              const filename = avatarUrl.split("/").pop();
+              avatarUrl = `http://localhost:${process.env.PORT || 3001}/api/raffles/avatars/${filename}`;
+            }
             try {
-              const avatarResponse = await fetch(user.avatar);
+              const avatarResponse = await fetch(avatarUrl);
               if (avatarResponse.ok) {
                 const buffer = await avatarResponse.arrayBuffer();
                 const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
@@ -233,9 +240,14 @@ export class RaffleController {
             const originalName = p.winner.name || "Usuario Steam";
             let avatarDataUrl: string | null = null;
 
-            if (p.winner.avatar) {
+            let avatarUrl = p.winner.avatar;
+            if (avatarUrl) {
+              if (avatarUrl.startsWith("/api/proxy/")) {
+                const filename = avatarUrl.split("/").pop();
+                avatarUrl = `http://localhost:${process.env.PORT || 3001}/api/raffles/avatars/${filename}`;
+              }
               try {
-                const avatarResponse = await fetch(p.winner.avatar);
+                const avatarResponse = await fetch(avatarUrl);
                 if (avatarResponse.ok) {
                   const buffer = await avatarResponse.arrayBuffer();
                   const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
@@ -532,6 +544,7 @@ export class RaffleController {
               avatar: true,
               email: true,
               tradeUrl: true,
+              isFake: true,
             },
           },
         },
@@ -598,6 +611,47 @@ export class RaffleController {
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getAdminBots(req: Request, res: Response) {
+    try {
+      const bots = await prisma.user.findMany({
+        where: { isFake: true },
+        select: {
+          id: true,
+          name: true,
+          avatar: true,
+          steamId: true,
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      res.json(bots);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async addFakeParticipants(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { mode, name, botId, tickets } = req.body;
+      let avatar = req.body.avatar;
+
+      if (req.file) {
+        // Usamos la ruta del proxy del frontend para evitar bloqueos CORS o de devtunnels
+        avatar = `/api/proxy/raffles/avatars/${req.file.filename}`;
+      }
+      
+      const useCase = new AddFakeParticipantsUseCase(
+        new PrismaRaffleRepository()
+      );
+      
+      await useCase.execute(id as string, mode, Number(tickets), { name, avatar, botId });
+      
+      res.status(200).json({ success: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
   }
 }
