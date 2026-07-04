@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import fs from "fs";
+import path from "path";
 import {
   CreateRaffleUseCase,
   EditRaffleUseCase,
@@ -13,6 +15,49 @@ import {
   AddFakeParticipantsUseCase,
 } from "../application/RaffleUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
+
+/**
+ * Resolves an avatar URL to a base64 data URL.
+ * - For local bot avatars stored on disk (/api/proxy/raffles/avatars/...), reads the file directly.
+ * - For external URLs (Steam, etc.), fetches via HTTP.
+ * - Returns null if resolution fails.
+ */
+async function resolveAvatarToBase64(avatarUrl: string | null | undefined): Promise<string | null> {
+  if (!avatarUrl || avatarUrl.startsWith("data:")) return avatarUrl || null;
+
+  // Local bot avatar stored on disk
+  if (avatarUrl.startsWith("/api/proxy/raffles/avatars/")) {
+    const filename = avatarUrl.split("/").pop();
+    if (!filename) return null;
+    const filePath = path.join(process.cwd(), "storage", "avatars", filename);
+    try {
+      const buffer = fs.readFileSync(filePath);
+      const ext = path.extname(filename).toLowerCase();
+      const mimeMap: Record<string, string> = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif",
+        ".webp": "image/webp",
+      };
+      const contentType = mimeMap[ext] || "image/jpeg";
+      return `data:${contentType};base64,${buffer.toString("base64")}`;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // External URL (Steam, etc.)
+  try {
+    const response = await fetch(avatarUrl);
+    if (response.ok) {
+      const buffer = await response.arrayBuffer();
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
+    }
+  } catch (e) {
+    // Silent fail for external URLs
+  }
+  return null;
+}
 import { PrismaRaffleRepository } from "./PrismaRaffleRepository";
 
 interface RaffleSummary {
@@ -175,25 +220,7 @@ export class RaffleController {
         Array.from(uniqueUsers.values()).map(async (user: any) => {
           delete user.steamId;
           delete user.tradeUrl;
-          let avatarUrl = user.avatar;
-          if (avatarUrl && !avatarUrl.startsWith("data:")) {
-            if (avatarUrl.startsWith("/api/proxy/")) {
-              const filename = avatarUrl.split("/").pop();
-              avatarUrl = `http://localhost:${process.env.PORT || 3001}/api/raffles/avatars/${filename}`;
-            }
-            try {
-              const avatarResponse = await fetch(avatarUrl);
-              if (avatarResponse.ok) {
-                const buffer = await avatarResponse.arrayBuffer();
-                const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
-                user.avatar = `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
-              } else {
-                user.avatar = null;
-              }
-            } catch (e) {
-              user.avatar = null;
-            }
-          }
+          user.avatar = await resolveAvatarToBase64(user.avatar);
         })
       );
 
@@ -238,25 +265,8 @@ export class RaffleController {
           .filter((p: any) => p.winnerId && p.winner)
           .map(async (p: any) => {
             const originalName = p.winner.name || "Usuario Steam";
-            let avatarDataUrl: string | null = null;
 
-            let avatarUrl = p.winner.avatar;
-            if (avatarUrl) {
-              if (avatarUrl.startsWith("/api/proxy/")) {
-                const filename = avatarUrl.split("/").pop();
-                avatarUrl = `http://localhost:${process.env.PORT || 3001}/api/raffles/avatars/${filename}`;
-              }
-              try {
-                const avatarResponse = await fetch(avatarUrl);
-                if (avatarResponse.ok) {
-                  const buffer = await avatarResponse.arrayBuffer();
-                  const contentType = avatarResponse.headers.get("content-type") || "image/jpeg";
-                  avatarDataUrl = `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
-                }
-              } catch (e) {
-                console.error("Failed to fetch avatar for winner", e);
-              }
-            }
+            const avatarDataUrl = await resolveAvatarToBase64(p.winner.avatar);
 
             return {
               prizeId: p.id,
