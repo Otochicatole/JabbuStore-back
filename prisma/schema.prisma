@@ -19,6 +19,7 @@ model User {
   updatedAt  DateTime @updatedAt
   inventory  UserInventoryItem[]
   orders     Order[]
+  quotes     Quote[]
 
   listings   SkinListing[]
   purchases  Purchase[]
@@ -26,6 +27,9 @@ model User {
   supportTickets OrderTicket[]
   ticketMessages TicketMessage[] @relation("UserTicketMessages")
   notifications  Notification[]
+  raffleTickets  RaffleTicket[]
+  wonPrizes      RafflePrize[]
+  isFake         Boolean  @default(false)
 }
 
 model Admin {
@@ -148,6 +152,9 @@ model Order {
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   tickets    OrderTicket[]
+  botId      String?
+  bot        Bot?        @relation(fields: [botId], references: [id], onDelete: SetNull)
+  raffleTickets RaffleTicket[]
 }
 
 model OrderItem {
@@ -236,6 +243,13 @@ model AdminSettings {
   manualCryptoAddress        String?
   manualCryptoNetwork        String?
   manualCryptoInstructions   String?
+  
+  // Estadísticas del Home
+  homeStatsActiveUsers       String   @default("150K+")
+  homeStatsAvailableSkins    String   @default("45K+")
+  homeStatsTransactions      String   @default("2.5M+")
+  homeStatsOnlineSupport     String   @default("24/7")
+
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }
@@ -284,6 +298,7 @@ model Bot {
   listings     SkinListing[]
   purchases    Purchase[]
   trades       Trade[]
+  orders       Order[]
 }
 
 model SkinListing {
@@ -378,3 +393,93 @@ model Notification {
   @@index([userId, read])
   @@index([adminId, read])
 }
+
+enum QuoteStatus {
+  PENDING
+  QUOTED
+  ACCEPTED
+  CANCELLED
+}
+
+model Quote {
+  id        String      @id @default(uuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    QuoteStatus @default(PENDING)
+  items     QuoteItem[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model QuoteItem {
+  id         String   @id @default(uuid())
+  quoteId    String
+  quote      Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  assetId    String
+  name       String
+  price      Float?
+  iconUrl    String?
+  rarity     String?
+  exterior   String?
+  float      Float?
+  pattern    Int?
+  paintIndex Int?
+}
+
+model Raffle {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  drawDate    DateTime
+  ticketPrice Float
+  maxTickets  Int?
+  status      String   @default("PENDING") // PENDING, ACTIVE, FINISHED, CANCELLED
+  isPublic    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  prizes      RafflePrize[]
+  tickets     RaffleTicket[]
+}
+
+model RafflePrize {
+  id          String   @id @default(uuid())
+  raffleId    String
+  raffle      Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  
+  position    Int      @default(1) // Puesto en el sorteo (1er lugar, 2do lugar, etc.)
+
+  assetId     String   // Can be bot assetId or youpin-id
+  name        String
+  price       Float
+  iconUrl     String?
+  rarity      String?
+  exterior    String?
+  float       Float?
+  pattern     Int?
+  provider    String   // 'bot' or 'youpin'
+  
+  winnerId    String?
+  winner      User?    @relation(fields: [winnerId], references: [id], onDelete: SetNull)
+  
+  winningTicketId String?
+  winningTicket  RaffleTicket? @relation("WinningTicket", fields: [winningTicketId], references: [id], onDelete: SetNull)
+}
+
+model RaffleTicket {
+  id           String   @id @default(uuid())
+  raffleId     String
+  raffle       Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  ticketNumber Int
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  status       String   @default("PENDING") // PENDING, PAID, CANCELLED
+  purchaseDate DateTime @default(now())
+  
+  wonPrizes    RafflePrize[] @relation("WinningTicket")
+}
+
+

@@ -4,6 +4,7 @@ import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
 import { FloatItem } from '../domain/FloatItem';
 import { MarketStoreAsset } from '../domain/MarketStoreAsset';
+import { marketSyncProgressService } from '../application/MarketSyncProgressService';
 
 function mapMarketListingRow(
   row: {
@@ -139,14 +140,23 @@ export class PrismaMarketRepository implements IMarketRepository {
   }
 
   async replaceAll(listings: MarketListingUpsert[]): Promise<void> {
-    // Preservar precios manuales antes de limpiar
+    // 1. Preservar precios manuales antes de limpiar
     const manualPrices = await prisma.marketListing.findMany({
       where: { isPriceManual: true },
       select: { name: true, price: true },
     });
     const manualMap = new Map(manualPrices.map((m) => [m.name, m.price]));
 
-    // Construir lista sanitizada con precios manuales aplicados
+    // 2. Eliminar todas las listings automáticas existentes (no manuales)
+    // Esto disparará cascade delete de sus FloatItems en cascada
+    const deletedCount = await prisma.marketListing.deleteMany({
+      where: { isPriceManual: false },
+    });
+    console.log(
+      `[Prisma Market Repository] Eliminadas ${deletedCount.count} listings automáticas obsoletas antes de re-importar.`,
+    );
+
+    // 3. Construir lista sanitizada con precios manuales aplicados
     const sanitized = listings.map((listing) => {
       const manualPrice = manualMap.get(listing.name);
       return {
@@ -165,11 +175,12 @@ export class PrismaMarketRepository implements IMarketRepository {
       };
     });
 
-    // Upsert por nombre para preservar IDs de listing y floats indexados
     const manualNames = new Set(manualMap.keys());
     const manualCount = sanitized.filter((s) => manualNames.has(s.name)).length;
     const autoCount = sanitized.length - manualCount;
-    const syncStartedAt = new Date();
+
+    // Reportar inicio de guardado en base de datos
+    marketSyncProgressService.startDatabaseSave(sanitized.length);
 
     const upsertOne = (listing: (typeof sanitized)[number]) => {
       const isManual = manualNames.has(listing.name);
@@ -193,7 +204,7 @@ export class PrismaMarketRepository implements IMarketRepository {
 
     const parallelSize = 10;
     console.log(
-      `[Prisma Market Repository] Upsert de ${sanitized.length} listings (${parallelSize} en paralelo, preservando IDs y floats)...`,
+      `[Prisma Market Repository] Guardando ${sanitized.length} listings (${parallelSize} en paralelo)...`,
     );
 
     for (let i = 0; i < sanitized.length; i += parallelSize) {
@@ -201,22 +212,16 @@ export class PrismaMarketRepository implements IMarketRepository {
       await Promise.all(batch.map((listing) => upsertOne(listing)));
 
       const done = Math.min(i + parallelSize, sanitized.length);
+      marketSyncProgressService.updateDatabaseProgress(done);
       if (done % 1000 === 0 || done === sanitized.length) {
         console.log(
-          `[Prisma Market Repository] Upsert progreso: ${done}/${sanitized.length}`,
+          `[Prisma Market Repository] Progreso: ${done}/${sanitized.length}`,
         );
       }
     }
 
-    const removed = await prisma.marketListing.deleteMany({
-      where: {
-        isPriceManual: false,
-        updatedAt: { lt: syncStartedAt },
-      },
-    });
-
     console.log(
-      `[Prisma Market Repository] Sync completo: ${autoCount} automáticos, ${manualCount} manuales preservados, ${removed.count} obsoletos eliminados.`,
+      `[Prisma Market Repository] Sync completo: ${autoCount} automáticos creados, ${manualCount} manuales actualizados/preservados.`,
     );
   }
 

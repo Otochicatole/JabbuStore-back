@@ -27,6 +27,11 @@ export const RUNTIME_SETTING_KEYS = [
   "ENABLE_SYNC",
 ] as const;
 
+export const EDITABLE_RUNTIME_SETTING_KEYS = [
+  "ENABLE_SYNC",
+  "ENABLE_ITEMS_CATALOG_SYNC",
+] as const;
+
 export type RuntimeSettingKey = (typeof RUNTIME_SETTING_KEYS)[number];
 
 const isSecretKey = (key: string): key is SecretKey => {
@@ -217,7 +222,9 @@ export class AdminSecureConfigService {
   }
 
   static async updateRuntimeSettings(values: Record<string, unknown>, adminId?: string) {
-    const entries = Object.entries(values).filter(([key]) => isRuntimeSettingKey(key));
+    const entries = Object.entries(values).filter(([key]) =>
+      EDITABLE_RUNTIME_SETTING_KEYS.includes(key as any)
+    );
 
     await prisma.$transaction(
       entries.map(([key, value]) =>
