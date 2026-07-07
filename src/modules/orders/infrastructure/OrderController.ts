@@ -111,10 +111,12 @@ export class OrderController {
       return { updated: false, reason: "payment_id_mismatch" };
     }
 
+    const isRaffleOrder = Boolean(currentMetadata.raffleId);
+
     await prisma.order.update({
       where: { id: orderId },
       data: {
-        status: "TRADE_PENDING",
+        ...(isRaffleOrder ? {} : { status: "TRADE_PENDING" }),
         metadata: {
           ...currentMetadata,
           [metadataKey]: String(paymentId),
@@ -123,6 +125,10 @@ export class OrderController {
         },
       },
     });
+
+    if (isRaffleOrder) {
+      await this.updateOrderStatusUseCase.execute(orderId, OrderStatus.TRADE_PENDING);
+    }
 
     return { updated: true };
   }
@@ -249,20 +255,21 @@ export class OrderController {
   async createSellOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { items, paymentMethod, metadata } = req.body; // [{ assetId, requestedPrice }]
+      const { items, paymentMethod, metadata, quoteId } = req.body; // [{ assetId, requestedPrice }]
 
-      if (!Array.isArray(items) || items.length === 0) {
+      if (!quoteId && (!Array.isArray(items) || items.length === 0)) {
         return res.status(400).json({
           error:
-            "items must be a non-empty array of { assetId, requestedPrice }",
+            "items must be a non-empty array of { assetId, requestedPrice } when quoteId is not provided",
         });
       }
 
       const order = await this.createSellOrderUseCase.execute(
         userId,
-        items,
+        items || [],
         paymentMethod,
         metadata,
+        quoteId,
       );
       res.status(201).json(order);
     } catch (error: any) {
@@ -323,7 +330,9 @@ export class OrderController {
 
   async uploadBuyerPaymentProof(req: Request, res: Response) {
     try {
-      const userId = (req as any).user.id;
+      const requester = (req as any).user;
+      const userId = requester.id;
+      const isAdmin = requester?.role === "ADMIN" || requester?.role === "SUPER_ADMIN";
       const rawId = req.params.id;
       const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
@@ -336,7 +345,7 @@ export class OrderController {
         return res.status(404).json({ error: "Order not found" });
       }
 
-      if (order.userId !== userId) {
+      if (!isAdmin && order.userId !== userId) {
         return res.status(403).json({ error: "No autorizado para subir comprobante a esta orden" });
       }
 
@@ -490,7 +499,36 @@ export class OrderController {
     try {
       const userId = (req as any).user.id;
       const orders = await this.getUserOrdersUseCase.execute(userId);
-      res.json(orders);
+
+      const enriched = await Promise.all(
+        orders.map(async (order: any) => {
+          const metadata = order.metadata as Record<string, any> | null;
+          const raffleId = metadata?.raffleId;
+          if (!raffleId) return order;
+
+          const [raffle, userChancesInRaffle] = await Promise.all([
+            prisma.raffle.findUnique({
+              where: { id: raffleId },
+              select: { name: true, ticketPrice: true },
+            }),
+            prisma.raffleTicket.count({
+              where: { raffleId, userId, status: "PAID" },
+            }),
+          ]);
+
+          return {
+            ...order,
+            metadata: {
+              ...metadata,
+              raffleName: raffle?.name ?? metadata.raffleName ?? null,
+              raffleTicketPrice: raffle?.ticketPrice ?? metadata.raffleTicketPrice ?? null,
+              userChancesInRaffle,
+            },
+          };
+        })
+      );
+
+      res.json(enriched);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -517,7 +555,7 @@ export class OrderController {
   async updateStatus(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, botId } = req.body;
 
       if (!Object.values(OrderStatus).includes(status)) {
         return res.status(400).json({ error: "Invalid order status" });
@@ -535,6 +573,7 @@ export class OrderController {
       const order = await this.updateOrderStatusUseCase.execute(
         id as string,
         status as OrderStatus,
+        botId,
       );
       res.json(order);
     } catch (error: any) {
@@ -895,7 +934,52 @@ export class OrderController {
   async validateOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { type, itemIds, items } = req.body; // type is 'BUY' or 'SELL'
+      const { type, itemIds, items, quoteId } = req.body; // type is 'BUY' or 'SELL'
+
+      if (type === "raffle") {
+        const raffleId = req.body.raffleId;
+        const ticketsCount = Number(req.body.ticketsCount || 1);
+
+        const raffle = await prisma.raffle.findUnique({
+          where: { id: raffleId },
+          include: { tickets: true }
+        });
+
+        if (!raffle) {
+          return res.status(400).json({ error: "El sorteo no existe." });
+        }
+
+        if (raffle.status !== "ACTIVE") {
+          return res.status(400).json({ error: "El sorteo no está activo." });
+        }
+
+        if (raffle.maxTickets) {
+          const soldTicketsCount = raffle.tickets.filter((t: any) => t.status === "PAID").length;
+          if (soldTicketsCount + ticketsCount > raffle.maxTickets) {
+            return res.status(400).json({ error: "No hay suficientes chances disponibles." });
+          }
+        }
+
+        const price = raffle.ticketPrice * ticketsCount;
+        const items = [{
+          assetId: `raffle-ticket-${raffleId}`,
+          name: `Chances para Sorteo: ${raffle.name} (x${ticketsCount})`,
+          price: raffle.ticketPrice * ticketsCount,
+          iconUrl: null,
+          provider: "raffle",
+          float: null,
+          pattern: null,
+          exterior: null,
+          rarity: "common",
+        }];
+
+        return res.json({
+          valid: true,
+          type: "raffle",
+          items,
+          totalPrice: roundMoney(price),
+        });
+      }
 
       if (type === "BUY") {
         if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -907,6 +991,9 @@ export class OrderController {
         const {
           prisma,
         } = require("../../../shared/infrastructure/PrismaClient");
+
+
+
 
         const overridesMap = new Map<string, any>();
         if (Array.isArray(items)) {
@@ -996,8 +1083,8 @@ export class OrderController {
               price: getBotCheckoutPrice(item.price, settingsData),
               iconUrl: item.iconUrl || null,
               provider: "bot",
-              float: override?.float !== undefined && override?.float !== null ? override.float : item.float,
-              pattern: override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern,
+              float: override?.isSpecific === true ? (override?.float !== undefined && override?.float !== null ? override.float : item.float) : null,
+              pattern: override?.isSpecific === true ? (override?.pattern !== undefined && override?.pattern !== null ? override.pattern : item.pattern) : null,
               exterior: item.exterior ?? null,
               rarity: item.rarity ?? null,
             };
@@ -1089,8 +1176,8 @@ export class OrderController {
               price: floatPrice,
               iconUrl: listing.iconUrl || null,
               provider: 'youpin',
-              float: dbFloat.floatValue,
-              pattern: dbFloat.paintSeed,
+              float: override?.isSpecific === true ? dbFloat.floatValue : null,
+              pattern: override?.isSpecific === true ? dbFloat.paintSeed : null,
               exterior: listing.exterior ?? null,
               rarity: listing.rarity ?? null,
             };
@@ -1122,16 +1209,64 @@ export class OrderController {
           totalPrice,
         });
       } else if (type === "SELL") {
+        const {
+          prisma,
+        } = require("../../../shared/infrastructure/PrismaClient");
+
+        if (quoteId) {
+          const quote = await prisma.quote.findUnique({
+            where: { id: quoteId },
+            include: { items: true },
+          });
+
+          if (!quote) {
+            return res.status(400).json({
+              error: "Cotización no encontrada.",
+            });
+          }
+
+          if (quote.userId !== userId) {
+            return res.status(403).json({
+              error: "No tienes acceso a esta cotización.",
+            });
+          }
+
+          if (quote.status !== "QUOTED") {
+            return res.status(400).json({
+              error: "La cotización debe estar en estado respondida por el administrador.",
+            });
+          }
+
+          const resolvedItems = quote.items.map((item: any) => ({
+            assetId: item.assetId,
+            name: item.name,
+            price: item.price ?? 0,
+            iconUrl: item.iconUrl,
+            provider: "user",
+            float: item.float,
+            pattern: item.pattern,
+            exterior: item.exterior,
+            rarity: item.rarity,
+          }));
+
+          const totalPrice = roundMoney(
+            resolvedItems.reduce((sum: number, item: any) => sum + item.price, 0)
+          );
+
+          return res.json({
+            valid: true,
+            type: "SELL",
+            items: resolvedItems,
+            totalPrice,
+          });
+        }
+
         if (!Array.isArray(items) || items.length === 0) {
           return res.status(400).json({
             error:
               "items must be a non-empty array of { assetId, requestedPrice } for SELL type",
           });
         }
-
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
         const settings = await getAdminSettingsOrDefaults();
         const minSellPrice = settings.minimumUserSellPrice;
 

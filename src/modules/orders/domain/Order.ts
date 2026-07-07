@@ -36,6 +36,8 @@ export interface Order {
   items: OrderItem[];
   createdAt: Date;
   updatedAt: Date;
+  botId?: string | null;
+  bot?: any;
 }
 
 export interface IOrderRepository {
@@ -43,5 +45,5 @@ export interface IOrderRepository {
   findById(id: string): Promise<Order | null>;
   findByUserId(userId: string): Promise<Order[]>;
   findAll(): Promise<Order[]>;
-  updateStatus(id: string, status: OrderStatus): Promise<Order>;
+  updateStatus(id: string, status: OrderStatus, botId?: string | null): Promise<Order>;
 }

@@ -33,7 +33,7 @@ export const config = {
    * Refresca los inventarios desde Steam hacia la base de datos local.
    * Se puede configurar mediante la variable de entorno STORE_SYNC_INTERVAL_MINUTES.
    */
-  storeSyncIntervalMinutes: parseInt(process.env.STORE_SYNC_INTERVAL_MINUTES || '10', 10),
+  storeSyncIntervalMinutes: parseInt(process.env.STORE_SYNC_INTERVAL_MINUTES || '180', 10),
   
   /**
    * Habilitar o deshabilitar la sincronización automática periódica con Steam Web API.
@@ -86,10 +86,10 @@ export const config = {
    * Cada fila = un asset real con float; limit=50 por página (tope plan Float Small).
    */
   marketSync: {
-    pageSize: parseInt(process.env.MARKET_SYNC_PAGE_SIZE || '50', 10),
-    maxPages: parseInt(process.env.MARKET_SYNC_MAX_PAGES || '50', 10),
+    pageSize: parseInt(process.env.MARKET_SYNC_PAGE_SIZE || '100', 10),
+    maxPages: parseInt(process.env.MARKET_SYNC_MAX_PAGES || '100', 10),
     /** Filtro local post-API; 0 = solo descarta precio ≤ 0. No existe en query params de SteamWebAPI. */
-    minPrice: parseFloat(process.env.MARKET_SYNC_MIN_PRICE || '0'),
+    minPrice: parseFloat(process.env.MARKET_SYNC_MIN_PRICE || '0.1'),
     sort: (process.env.MARKET_SYNC_SORT || 'newest') as
       | 'newest'
       | 'oldest'
@@ -122,7 +122,7 @@ export const config = {
     syncIntervalMinutes: parseInt(
       process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES ||
         process.env.STORE_SYNC_INTERVAL_MINUTES ||
-        '180',
+        '720',
       10,
     ),
     staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),

@@ -243,6 +243,26 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateHomeStatsSettings(req: Request, res: Response) {
+    try {
+      const {
+        homeStatsActiveUsers,
+        homeStatsAvailableSkins,
+        homeStatsTransactions,
+        homeStatsOnlineSupport,
+      } = req.body;
+      const settings = await AdminSettingsService.updateHomeStatsSettings({
+        homeStatsActiveUsers,
+        homeStatsAvailableSkins,
+        homeStatsTransactions,
+        homeStatsOnlineSupport,
+      });
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
@@ -409,6 +429,28 @@ export class AdminMarketplaceController {
         data: {
           price,
           isPriceManual: manualFlag
+        }
+      });
+
+      res.json(updatedItem);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateStoreItemMarketable(req: Request, res: Response) {
+    try {
+      const { assetId } = req.params;
+      const { marketable } = req.body;
+
+      if (typeof marketable !== 'boolean') {
+        return res.status(400).json({ error: 'El campo marketable debe ser un booleano válido.' });
+      }
+
+      const updatedItem = await (prisma as any).storeItem.update({
+        where: { assetId },
+        data: {
+          marketable
         }
       });
 

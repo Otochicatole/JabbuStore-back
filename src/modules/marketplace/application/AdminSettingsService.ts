@@ -102,4 +102,16 @@ export class AdminSettingsService {
       },
     });
   }
+  static async updateHomeStatsSettings(data: {
+    homeStatsActiveUsers?: string;
+    homeStatsAvailableSkins?: string;
+    homeStatsTransactions?: string;
+    homeStatsOnlineSupport?: string;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
 }

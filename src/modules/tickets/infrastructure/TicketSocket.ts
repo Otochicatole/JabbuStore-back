@@ -35,19 +35,39 @@ export function initializeTicketSocket(server: HttpServer) {
       ? socket.handshake.auth.token
       : '';
     const verified = token ? AuthService.verifySocketToken(token) : null;
-    if (!verified || !['USER', 'ADMIN', 'SUPER_ADMIN'].includes(verified.role)) {
-      return next(new Error('UNAUTHORIZED'));
+    
+    if (verified && ['USER', 'ADMIN', 'SUPER_ADMIN'].includes(verified.role)) {
+      socket.data.actor = verified as TicketActor;
+    } else {
+      socket.data.actor = { id: 'guest', role: 'GUEST' };
     }
-    socket.data.actor = verified as TicketActor;
+    
     next();
   });
 
   io.on('connection', (socket) => {
-    const actor = socket.data.actor as TicketActor;
-    socket.join(actorRoom(actor));
+    const actor = socket.data.actor as TicketActor | { id: string; role: 'GUEST' };
+    
+    if (actor.role !== 'GUEST') {
+      socket.join(actorRoom(actor as TicketActor));
+    }
+
     const sentAt: number[] = [];
 
+    socket.on('raffle:join_live', (payload: { raffleId: string }) => {
+      if (payload?.raffleId) {
+        socket.join(`raffle:live:${payload.raffleId}`);
+      }
+    });
+
+    socket.on('raffle:leave_live', (payload: { raffleId: string }) => {
+      if (payload?.raffleId) {
+        socket.leave(`raffle:live:${payload.raffleId}`);
+      }
+    });
+
     socket.on('ticket:join', async (payload: unknown, ack?: Ack) => {
+      if (actor.role === 'GUEST') return ack?.({ ok: false, error: 'UNAUTHORIZED' });
       try {
         const parsed = ticketIdSchema.safeParse((payload as any)?.ticketId);
         if (!parsed.success) throw new Error('INVALID_TICKET');
@@ -64,11 +84,13 @@ export function initializeTicketSocket(server: HttpServer) {
     });
 
     socket.on('ticket:leave', (payload: unknown) => {
+      if (actor.role === 'GUEST') return;
       const parsed = ticketIdSchema.safeParse((payload as any)?.ticketId);
       if (parsed.success) socket.leave(`ticket:${parsed.data}`);
     });
 
     socket.on('ticket:read', async (payload: unknown, ack?: Ack) => {
+      if (actor.role === 'GUEST') return ack?.({ ok: false, error: 'UNAUTHORIZED' });
       try {
         const parsed = ticketIdSchema.safeParse((payload as any)?.ticketId);
         if (!parsed.success) throw new Error('INVALID_TICKET');
@@ -87,6 +109,7 @@ export function initializeTicketSocket(server: HttpServer) {
     });
 
     socket.on('message:send', async (payload: unknown, ack?: Ack) => {
+      if (actor.role === 'GUEST') return ack?.({ ok: false, error: 'UNAUTHORIZED' });
       try {
         const now = Date.now();
         while (sentAt.length && sentAt[0]! < now - 10_000) sentAt.shift();
@@ -167,5 +190,16 @@ export function sendDbNotification(notification: any) {
   } else {
     io.to('ticket-admins').emit('notification:new_db', notification);
   }
+}
+
+export function emitLiveRaffleStart(raffleId: string) {
+  io?.to(`raffle:live:${raffleId}`).emit('raffle:live:start', { raffleId });
+}
+
+export function emitLiveRaffleResult(raffleId: string, result: any) {
+  io?.to(`raffle:live:${raffleId}`).emit('raffle:live:result', {
+    raffleId,
+    ...result
+  });
 }
 

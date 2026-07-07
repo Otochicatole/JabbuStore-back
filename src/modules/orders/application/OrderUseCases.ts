@@ -7,6 +7,7 @@ import {
 } from "../domain/Order";
 import { INotificationRepository } from "../../notifications/domain/Notification";
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
+import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { WebhookService } from "./WebhookService";
 import { BotService } from "../../marketplace/application/BotService";
@@ -50,6 +51,104 @@ export class CreatePurchaseOrderUseCase {
     metadata?: any,
     itemsOverrides?: any[],
   ): Promise<Order> {
+    if (metadata && metadata.raffleId) {
+      const raffleId = metadata.raffleId;
+      const ticketsCount = Number(metadata.ticketsCount || 1);
+
+      const raffle = await prisma.raffle.findUnique({
+        where: { id: raffleId },
+        include: { tickets: true }
+      });
+
+      if (!raffle) {
+        throw new Error("El sorteo no existe.");
+      }
+
+      if (raffle.status !== "ACTIVE") {
+        throw new Error("Las compras solo están permitidas para sorteos activos.");
+      }
+
+      if (raffle.maxTickets) {
+        const soldTicketsCount = raffle.tickets.filter(t => t.status === "PAID").length;
+        if (soldTicketsCount + ticketsCount > raffle.maxTickets) {
+          throw new Error("No hay suficientes chances disponibles para este sorteo.");
+        }
+      }
+
+      const totalPrice = roundMoney(raffle.ticketPrice * ticketsCount);
+      const orderItemsData: any[] = [];
+
+      for (let i = 0; i < ticketsCount; i++) {
+        orderItemsData.push({
+          assetId: `raffle-ticket-${raffleId}-${i}`,
+          name: `Chance para Sorteo: ${raffle.name}`,
+          price: raffle.ticketPrice,
+          iconUrl: null,
+          rarity: "common",
+          exterior: null,
+          float: null,
+          pattern: null,
+          provider: "raffle",
+        });
+      }
+
+      const orderData = {
+        userId,
+        type: OrderType.BUY,
+        status: OrderStatus.PENDING_PAYMENT,
+        totalPrice,
+        paymentMethod: paymentMethod || null,
+        metadata,
+        items: [],
+      };
+
+      const order = await this.orderRepository.create(orderData, orderItemsData);
+      WebhookService.sendOrderNotification(order, "order.created");
+
+      try {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        const notificationRepository = new PrismaNotificationRepository();
+        const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+
+        await notificationUseCase.execute({
+          title: "notifications.newRaffleChancesOrder.title",
+          content: JSON.stringify({
+            key: "notifications.newRaffleChancesOrder.content",
+            params: {
+              userName: user?.name || "Steam User",
+              raffleName: raffle.name,
+              ticketsCount,
+              totalPrice: totalPrice.toLocaleString(),
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: `/admin/panel/raffle-purchases/${raffleId}`,
+          userId: null,
+          adminId: null,
+        });
+
+        await notificationUseCase.execute({
+          userId,
+          adminId: null,
+          title: "notifications.raffleChancesPurchased.title",
+          content: JSON.stringify({
+            key: "notifications.raffleChancesPurchased.content",
+            params: {
+              raffleName: raffle.name,
+              ticketsCount,
+              orderId: order.id.slice(0, 8),
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: "/purchases",
+        });
+      } catch (err) {
+        console.error("[CreatePurchaseOrderUseCase] Error sending raffle notifications:", err);
+      }
+
+      return order;
+    }
+
     if (!assetIds || assetIds.length === 0) {
       throw new Error("No items provided for the order");
     }
@@ -60,6 +159,9 @@ export class CreatePurchaseOrderUseCase {
     if (!user || !user.email?.trim() || !user.tradeUrl?.trim()) {
       throw new Error("Para realizar compras debes tener registrado tu Email y Trade URL en tu perfil.");
     }
+
+
+
 
     // Map overrides for fast lookup
     const overridesMap = new Map<string, any>();
@@ -84,7 +186,10 @@ export class CreatePurchaseOrderUseCase {
     const storeItems =
       botIds.length > 0
         ? await prisma.storeItem.findMany({
-            where: { assetId: { in: botIds } },
+            where: {
+              assetId: { in: botIds },
+              marketable: true,
+            },
           })
         : [];
 
@@ -159,13 +264,17 @@ export class CreatePurchaseOrderUseCase {
         rarity: override?.rarity || item?.rarity || "common",
         exterior: override?.exterior || item?.exterior || null,
         float:
-          override?.float !== undefined && override?.float !== null
-            ? override.float
-            : (item?.float || null),
+          override?.isSpecific === true
+            ? (override?.float !== undefined && override?.float !== null
+              ? override.float
+              : (item?.float || null))
+            : null,
         pattern:
-          override?.pattern !== undefined && override?.pattern !== null
-            ? override.pattern
-            : (item?.pattern || null),
+          override?.isSpecific === true
+            ? (override?.pattern !== undefined && override?.pattern !== null
+              ? override.pattern
+              : (item?.pattern || null))
+            : null,
         provider: "bot",
       });
     }
@@ -214,8 +323,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl: item?.iconUrl || override?.iconUrl || null,
         rarity: item?.rarity || override?.rarity || "common",
         exterior: item?.exterior || override?.exterior || null,
-        float: itemFloat,
-        pattern: itemPattern,
+        float: override?.isSpecific === true ? itemFloat : null,
+        pattern: override?.isSpecific === true ? itemPattern : null,
         provider: itemProvider,
       });
     }
@@ -259,8 +368,8 @@ export class CreatePurchaseOrderUseCase {
         iconUrl,
         rarity,
         exterior,
-        float: floatVal,
-        pattern: patternVal,
+        float: override?.isSpecific === true ? floatVal : null,
+        pattern: override?.isSpecific === true ? patternVal : null,
         provider: 'youpin',
       });
     }
@@ -279,6 +388,24 @@ export class CreatePurchaseOrderUseCase {
 
     const order = await this.orderRepository.create(orderData, orderItemsData);
     WebhookService.sendOrderNotification(order, "order.created");
+
+    // Send persistent notification to admin
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      await notificationUseCase.execute({
+        title: "notifications.newBuyOrder.title",
+        content: JSON.stringify({ key: "notifications.newBuyOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
+        type: "ORDER_STATUS",
+        link: "/admin/panel/dashboard?tab=purchases",
+        userId: null,
+        adminId: null,
+      });
+    } catch (err) {
+      console.error("[CreatePurchaseOrderUseCase] Error sending admin notification:", err);
+    }
+
     return order;
   }
 }
@@ -292,11 +419,8 @@ export class CreateSellOrderUseCase {
     items: { assetId: string; requestedPrice: number }[],
     paymentMethod?: string,
     metadata?: any,
+    quoteId?: string,
   ): Promise<Order> {
-    if (!items || items.length === 0) {
-      throw new Error("No items provided for the sell order");
-    }
-
     const user = await prisma.user.findUnique({
       where: { id: userId },
     });
@@ -304,97 +428,127 @@ export class CreateSellOrderUseCase {
       throw new Error("Para realizar ventas debes tener registrado tu Email y Trade URL en tu perfil.");
     }
 
-    const settings = await getAdminSettingsOrDefaults();
-    const minSellPrice = settings.minimumUserSellPrice;
-
-    // Validate each item: must be in user's inventory and meet minimum price
-    const resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
+    let resolvedItems: Omit<OrderItem, "id" | "orderId">[] = [];
     let totalPrice = 0;
 
-    for (const item of items) {
-      const inventoryItem = await prisma.userInventoryItem.findFirst({
-        where: { userId, assetId: item.assetId },
+    if (quoteId) {
+      const quote = await prisma.quote.findUnique({
+        where: { id: quoteId },
+        include: { items: true },
       });
+      if (!quote) throw new Error("Cotización no encontrada.");
+      if (quote.userId !== userId) throw new Error("Acceso denegado a esta cotización.");
+      if (quote.status !== "QUOTED") throw new Error("La cotización no está en estado respondida por el administrador.");
 
-      if (!inventoryItem) {
-        throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
-      }
-
-      const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
-      const requestedPrice = Number(item.requestedPrice);
-
-      if (backendPrice < minSellPrice) {
-        throw new Error(
-          `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
-        );
-      }
-
-      if (
-        Number.isFinite(requestedPrice) &&
-        Math.abs(requestedPrice - backendPrice) > PRICE_MISMATCH_TOLERANCE
-      ) {
-        throw new Error(
-          `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
-        );
-      }
-
-      const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
-      if (openSellOrder) {
-        throw new Error(
-          `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
-        );
-      }
-
-      const alreadyListed = await prisma.skinListing.findFirst({
-        where: { skinId: item.assetId, status: { in: ["active", "reserved"] } },
+      resolvedItems = quote.items.map((item) => {
+        if (item.price === null || item.price === undefined) {
+          throw new Error(`El ítem ${item.name} no tiene precio cotizado.`);
+        }
+        return {
+          assetId: item.assetId,
+          name: item.name,
+          price: item.price,
+          iconUrl: item.iconUrl ?? null,
+          rarity: item.rarity,
+          exterior: item.exterior,
+          float: item.float,
+          pattern: item.pattern,
+          provider: "user",
+        };
       });
+      totalPrice = roundMoney(resolvedItems.reduce((sum, item) => sum + item.price, 0));
+    } else {
+      if (!items || items.length === 0) {
+        throw new Error("No items provided for the sell order");
+      }
+      const settings = await getAdminSettingsOrDefaults();
+      const minSellPrice = settings.minimumUserSellPrice;
 
-      if (alreadyListed) {
-        // Self-healing check: If the listing is active but the only corresponding sell order is CANCELLED,
-        // we should self-heal the listing to 'cancelled' and allow this creation to pass!
-        const lastSellOrder = await prisma.order.findFirst({
-          where: {
-            userId,
-            type: "SELL",
-            items: {
-              some: { assetId: item.assetId },
-            },
-          },
-          orderBy: { createdAt: "desc" },
+      for (const item of items) {
+        const inventoryItem = await prisma.userInventoryItem.findFirst({
+          where: { userId, assetId: item.assetId },
         });
 
-        if (lastSellOrder && lastSellOrder.status === "CANCELLED") {
-          // Update the listing to cancelled
-          await prisma.skinListing.update({
-            where: { id: alreadyListed.id },
-            data: { status: "cancelled" },
-          });
-          console.log(
-            `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
-          );
-        } else {
+        if (!inventoryItem) {
+          throw new Error(`Item ${item.assetId} no encontrado en tu inventario.`);
+        }
+
+        const backendPrice = getUserSellCheckoutPrice(inventoryItem.price, settings);
+        const requestedPrice = Number(item.requestedPrice);
+
+        if (backendPrice < minSellPrice) {
           throw new Error(
-            `El item "${inventoryItem.name}" ya está listado para la venta.`,
+            `El precio mínimo de venta es $${minSellPrice}. El item ${item.assetId} tiene precio $${backendPrice}.`,
           );
         }
+
+        if (
+          Number.isFinite(requestedPrice) &&
+          Math.abs(requestedPrice - backendPrice) > PRICE_MISMATCH_TOLERANCE
+        ) {
+          throw new Error(
+            `El precio del item "${inventoryItem.name}" cambió a $${backendPrice}. Refrescá tu inventario e intentá nuevamente.`,
+          );
+        }
+
+        const openSellOrder = await findOpenSellOrderForAsset(userId, item.assetId);
+        if (openSellOrder) {
+          throw new Error(
+            `El item "${inventoryItem.name}" ya tiene una solicitud de venta en curso.`,
+          );
+        }
+
+        const alreadyListed = await prisma.skinListing.findFirst({
+          where: { skinId: item.assetId, status: { in: ["active", "reserved"] } },
+        });
+
+        if (alreadyListed) {
+          // Self-healing check: If the listing is active but the only corresponding sell order is CANCELLED,
+          // we should self-heal the listing to 'cancelled' and allow this creation to pass!
+          const lastSellOrder = await prisma.order.findFirst({
+            where: {
+              userId,
+              type: "SELL",
+              items: {
+                some: { assetId: item.assetId },
+              },
+            },
+            orderBy: { createdAt: "desc" },
+          });
+
+          if (lastSellOrder && lastSellOrder.status === "CANCELLED") {
+            // Update the listing to cancelled
+            await prisma.skinListing.update({
+              where: { id: alreadyListed.id },
+              data: { status: "cancelled" },
+            });
+            console.log(
+              `[Self-Healing] Updated orphan skin listing ${alreadyListed.id} to cancelled because its last sell order was CANCELLED.`,
+            );
+          } else {
+            throw new Error(
+              `El item "${inventoryItem.name}" ya está listado para la venta.`,
+            );
+          }
+        }
+
+        resolvedItems.push({
+          assetId: inventoryItem.assetId,
+          name: inventoryItem.name,
+          price: backendPrice,
+          iconUrl: inventoryItem.iconUrl ?? null,
+          rarity: inventoryItem.rarity,
+          exterior: inventoryItem.exterior,
+          float: inventoryItem.float,
+          pattern: inventoryItem.pattern,
+          provider: "user",
+        });
+
+        totalPrice += backendPrice;
       }
 
-      resolvedItems.push({
-        assetId: inventoryItem.assetId,
-        name: inventoryItem.name,
-        price: backendPrice,
-        iconUrl: inventoryItem.iconUrl ?? null,
-        rarity: inventoryItem.rarity,
-        exterior: inventoryItem.exterior,
-        float: inventoryItem.float,
-        pattern: inventoryItem.pattern,
-        provider: "user",
-      });
-
-      totalPrice += backendPrice;
+      totalPrice = roundMoney(totalPrice);
     }
-
-    totalPrice = roundMoney(totalPrice);
 
     // Create Order + SkinListings atomically
     const order = await this.orderRepository.create(
@@ -421,10 +575,34 @@ export class CreateSellOrderUseCase {
       })),
     });
 
+    if (quoteId) {
+      await prisma.quote.update({
+        where: { id: quoteId },
+        data: { status: "ACCEPTED" },
+      });
+    }
+
     // Fetch full order with items populated for the webhook dispatcher
     const fullOrder = await this.orderRepository.findById(order.id);
     if (fullOrder) {
       WebhookService.sendOrderNotification(fullOrder, "order.created");
+    }
+
+    // Send persistent notification to admin
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      await notificationUseCase.execute({
+        title: "notifications.newSellOrder.title",
+        content: JSON.stringify({ key: "notifications.newSellOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
+        type: "ORDER_STATUS",
+        link: "/admin/panel/dashboard?tab=listings",
+        userId: null,
+        adminId: null,
+      });
+    } catch (err) {
+      console.error("[CreateSellOrderUseCase] Error sending admin notification:", err);
     }
 
     return order;
@@ -453,42 +631,255 @@ export class UpdateOrderStatusUseCase {
     private notificationRepository?: INotificationRepository
   ) {}
 
-  async execute(orderId: string, status: OrderStatus): Promise<Order> {
-    const order = await this.orderRepository.updateStatus(orderId, status);
+  async execute(orderId: string, status: OrderStatus, botId?: string | null): Promise<Order> {
+    const dbOrder = await this.orderRepository.findById(orderId);
+    if (!dbOrder) {
+      throw new Error("Order not found");
+    }
+
+    const metadata = dbOrder.metadata && typeof dbOrder.metadata === 'object' && !Array.isArray(dbOrder.metadata)
+      ? (dbOrder.metadata as Record<string, any>)
+      : null;
+
+    const isRaffleOrder = Boolean(metadata?.raffleId);
+    const hadAllocatedTickets =
+      dbOrder.status === OrderStatus.COMPLETED ||
+      dbOrder.status === OrderStatus.PAID ||
+      dbOrder.status === OrderStatus.TRADE_PENDING;
+
+    const shouldRevokeRaffleTickets =
+      isRaffleOrder &&
+      hadAllocatedTickets &&
+      (status === OrderStatus.CANCELLED || status === OrderStatus.PENDING_PAYMENT);
+
+    let order: Order;
+
+    if (shouldRevokeRaffleTickets) {
+      order = await prisma.$transaction(async (tx) => {
+        const tickets = await tx.raffleTicket.findMany({
+          where: { orderId },
+          include: { wonPrizes: { select: { id: true } } },
+        });
+
+        const hasWinningTicket = tickets.some((ticket) => ticket.wonPrizes.length > 0);
+        if (hasWinningTicket) {
+          throw new Error(
+            "No se pueden revocar chances de tickets que ya ganaron un premio en el sorteo.",
+          );
+        }
+
+        if (tickets.length > 0) {
+          await tx.raffleTicket.deleteMany({ where: { orderId } });
+        }
+
+        return tx.order.update({
+          where: { id: orderId },
+          data: { status: status as any },
+          include: { items: true, bot: true },
+        });
+      }) as any;
+    } else if (metadata && metadata.raffleId && (status === OrderStatus.TRADE_PENDING || status === OrderStatus.PAID)) {
+      const raffleId = metadata.raffleId;
+      const ticketsCount = Number(metadata.ticketsCount || 1);
+
+      order = await prisma.$transaction(async (tx) => {
+        // Check raffle is still in a valid state for ticket allocation
+        const raffle = await tx.raffle.findUnique({
+          where: { id: raffleId },
+          select: { status: true },
+        });
+
+        if (!raffle || (raffle.status !== "ACTIVE" && raffle.status !== "FINISHED")) {
+          console.warn(
+            `[UpdateOrderStatusUseCase] Raffle ${raffleId} is in status ${raffle?.status ?? "not found"} — ticket allocation skipped.`
+          );
+          return tx.order.update({
+            where: { id: orderId },
+            data: { status: "COMPLETED" },
+            include: { items: true, bot: true },
+          });
+        }
+
+        const existingTickets = await tx.raffleTicket.findMany({
+          where: { orderId }
+        });
+
+        if (existingTickets.length === 0) {
+          const count = await tx.raffleTicket.count({
+            where: { raffleId, status: "PAID" }
+          });
+
+          const ticketsData: any[] = [];
+          for (let i = 0; i < ticketsCount; i++) {
+            ticketsData.push({
+              raffleId,
+              userId: dbOrder.userId,
+              ticketNumber: count + 1 + i,
+              orderId,
+              status: "PAID"
+            });
+          }
+
+          await tx.raffleTicket.createMany({
+            data: ticketsData
+          });
+        }
+
+        return tx.order.update({
+          where: { id: orderId },
+          data: { status: "COMPLETED" },
+          include: { items: true, bot: true }
+        });
+      }) as any;
+    } else {
+      order = await this.orderRepository.updateStatus(orderId, status, botId);
+    }
 
     // Dispatch webhook status change notification
     WebhookService.sendOrderNotification(order, "order.status_updated");
+
+
 
     // Crear notificación persistente para el cliente
     if (this.notificationRepository) {
       try {
         const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(this.notificationRepository);
-        
-        let title = 'Estado de orden actualizado';
-        let content = `El estado de tu orden #${order.id.slice(0, 8)} cambió a ${status}.`;
-        
-        if (status === OrderStatus.PAID) {
-          title = 'Orden pagada con éxito';
-          content = `Hemos recibido tu pago para la orden #${order.id.slice(0, 8)}. ¡Gracias por tu compra!`;
-        } else if (status === OrderStatus.COMPLETED) {
-          title = 'Orden completada';
-          content = `La orden #${order.id.slice(0, 8)} ha sido entregada y completada.`;
-        } else if (status === OrderStatus.CANCELLED) {
-          title = 'Orden cancelada';
-          content = `La orden #${order.id.slice(0, 8)} ha sido cancelada.`;
-        } else if (status === OrderStatus.TRADE_PENDING) {
-          title = 'Intercambio de Steam pendiente';
-          content = `La orden #${order.id.slice(0, 8)} está lista. Revisa tus ofertas de intercambio de Steam.`;
+
+        const isSell = order.type === OrderType.SELL;
+        const isRaffleOrder = Boolean(metadata?.raffleId);
+        const ticketsCount = Number(metadata?.ticketsCount || 1);
+        let raffleName = typeof metadata?.raffleName === "string" ? metadata.raffleName : undefined;
+
+        if (isRaffleOrder && !raffleName && metadata?.raffleId) {
+          const raffle = await prisma.raffle.findUnique({
+            where: { id: metadata.raffleId as string },
+            select: { name: true },
+          });
+          raffleName = raffle?.name;
         }
 
-        await createNotificationUseCase.execute({
-          userId: order.userId,
-          adminId: null,
-          title,
-          content,
-          type: 'ORDER_STATUS',
-          link: '/purchases',
+        const isRaffleApproval =
+          isRaffleOrder &&
+          (status === OrderStatus.PAID || status === OrderStatus.TRADE_PENDING) &&
+          order.status === OrderStatus.COMPLETED;
+
+        let title = "notifications.orderUpdated.title";
+        let content = JSON.stringify({
+          key: "notifications.orderUpdated.content",
+          params: { orderId: order.id.slice(0, 8), status },
         });
+        let link = isSell ? "/listings" : "/purchases";
+
+        if (isRaffleApproval) {
+          title = "notifications.raffleChancesApproved.title";
+          content = JSON.stringify({
+            key: "notifications.raffleChancesApproved.content",
+            params: {
+              raffleName: raffleName || "Sorteo",
+              ticketsCount,
+              orderId: order.id.slice(0, 8),
+            },
+          });
+          link = "/purchases";
+        } else if (isRaffleOrder && status === OrderStatus.CANCELLED) {
+          title = "notifications.raffleChancesCancelled.title";
+          content = JSON.stringify({
+            key: "notifications.raffleChancesCancelled.content",
+            params: {
+              raffleName: raffleName || "Sorteo",
+              orderId: order.id.slice(0, 8),
+            },
+          });
+          link = "/purchases";
+        } else if (status === OrderStatus.PAID) {
+          if (isSell) {
+            title = "notifications.tradeReceived.title";
+            content = JSON.stringify({
+              key: "notifications.tradeReceived.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderPaid.title";
+            content = JSON.stringify({
+              key: "notifications.orderPaid.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          }
+        } else if (status === OrderStatus.COMPLETED) {
+          if (isSell) {
+            title = "notifications.sellCompleted.title";
+            content = JSON.stringify({
+              key: "notifications.sellCompleted.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderCompleted.title";
+            content = JSON.stringify({
+              key: "notifications.orderCompleted.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          }
+        } else if (status === OrderStatus.CANCELLED) {
+          if (isSell) {
+            title = "notifications.sellCancelled.title";
+            content = JSON.stringify({
+              key: "notifications.sellCancelled.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.orderCancelled.title";
+            content = JSON.stringify({
+              key: "notifications.orderCancelled.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          }
+        } else if (status === OrderStatus.TRADE_PENDING) {
+          if (isSell) {
+            title = "notifications.sellApproved.title";
+            content = JSON.stringify({
+              key: "notifications.sellApproved.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          } else if (!isRaffleOrder) {
+            title = "notifications.tradePending.title";
+            content = JSON.stringify({
+              key: "notifications.tradePending.content",
+              params: { orderId: order.id.slice(0, 8) },
+            });
+          }
+        }
+
+        const shouldNotifyUser = !isRaffleOrder || isRaffleApproval || status === OrderStatus.CANCELLED;
+
+        if (shouldNotifyUser) {
+          await createNotificationUseCase.execute({
+            userId: order.userId,
+            adminId: null,
+            title,
+            content,
+            type: "ORDER_STATUS",
+            link,
+          });
+        }
+
+        if (status === OrderStatus.TRADE_PENDING && order.bot && !isRaffleOrder) {
+          const botTitle = 'notifications.botAssigned.title';
+          const botContent = JSON.stringify({
+            key: isSell ? 'notifications.botAssigned.sellContent' : 'notifications.botAssigned.buyContent',
+            params: {
+              botName: order.bot.name,
+              botSteamId: order.bot.steamId,
+            }
+          });
+          await createNotificationUseCase.execute({
+            userId: order.userId,
+            adminId: null,
+            title: botTitle,
+            content: botContent,
+            type: 'ORDER_STATUS',
+            link: isSell ? '/listings' : '/purchases',
+          });
+        }
       } catch (err) {
         console.error('[UpdateOrderStatusUseCase] Error creating database notification:', err);
       }

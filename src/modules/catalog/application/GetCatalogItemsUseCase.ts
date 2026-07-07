@@ -248,7 +248,7 @@ export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
 
-    const [settings, storeItems, marketAssets] = await Promise.all([
+    const [settings, allStoreItems, allMarketAssets] = await Promise.all([
       prisma.adminSettings.findFirst(),
       prisma.storeItem.findMany({
         where: {
@@ -268,6 +268,10 @@ export class GetCatalogItemsUseCase {
       }),
     ]);
 
+    const storeItems = allStoreItems;
+    const marketAssets = allMarketAssets;
+
+
     const settingsData = settings ?? {
       globalPriceModifierEnabled: false,
       globalPriceModifierType: 'percentage_increase',
@@ -279,32 +283,34 @@ export class GetCatalogItemsUseCase {
 
     const normalizedQuery = query.search?.trim().toLowerCase() ?? '';
 
-    const storeCatalogItems: InternalCatalogItem[] = storeItems.map((item) => {
-      const parsed = parseName(item.name);
-      return {
-        id: item.assetId,
-        name: parsed.name,
-        weapon: parsed.weapon,
-        rarity: item.rarity,
-        price: applyModifier(
-          item.price,
-          settingsData.globalPriceModifierEnabled,
-          settingsData.globalPriceModifierType,
-          settingsData.globalPriceModifierValue,
-        ),
-        imageUrl: item.iconUrl || '/skin.webp',
-        float: item.float,
-        pattern: item.pattern,
-        exterior: item.exterior,
-        category: item.category,
-        isStatTrak: item.isStatTrak,
-        isSouvenir: item.isSouvenir,
-        phase: parsed.phase,
-        isImmediate: true,
-        inspectLink: item.inspectLink,
-        createdAt: item.createdAt,
-      };
-    });
+    const storeCatalogItems: InternalCatalogItem[] = !query.immediate
+      ? []
+      : storeItems.map((item) => {
+          const parsed = parseName(item.name);
+          return {
+            id: item.assetId,
+            name: parsed.name,
+            weapon: parsed.weapon,
+            rarity: item.rarity,
+            price: applyModifier(
+              item.price,
+              settingsData.globalPriceModifierEnabled,
+              settingsData.globalPriceModifierType,
+              settingsData.globalPriceModifierValue,
+            ),
+            imageUrl: item.iconUrl || '/skin.webp',
+            float: item.float,
+            pattern: item.pattern,
+            exterior: item.exterior,
+            category: item.category,
+            isStatTrak: item.isStatTrak,
+            isSouvenir: item.isSouvenir,
+            phase: parsed.phase,
+            isImmediate: true,
+            inspectLink: item.inspectLink,
+            createdAt: item.createdAt,
+          };
+        });
 
     const marketCatalogItems: InternalCatalogItem[] = query.immediate
       ? []

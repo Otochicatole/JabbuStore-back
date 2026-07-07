@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import { createServer } from 'node:http';
+import { prisma } from './shared/infrastructure/PrismaClient';
 import session from 'express-session';
 import passport from 'passport';
 import { rateLimit } from 'express-rate-limit';
@@ -20,6 +21,8 @@ import marketplaceRoutes from './modules/marketplace/infrastructure/MarketplaceR
 import adminMarketplaceRoutes from './modules/marketplace/infrastructure/AdminMarketplaceRoutes';
 import ticketRoutes from './modules/tickets/infrastructure/TicketRoutes';
 import notificationRoutes from './modules/notifications/infrastructure/NotificationRoutes';
+import quoteRoutes from './modules/quotes/infrastructure/QuoteRoutes';
+import raffleRoutes from './modules/raffles/infrastructure/RaffleRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
 
 
@@ -76,6 +79,8 @@ app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/admin/marketplace', adminMarketplaceRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/quotes', quoteRoutes);
+app.use('/api/raffles', raffleRoutes);
 
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';
@@ -93,8 +98,18 @@ import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyn
 import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
 import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
 import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
+import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
 
 async function bootstrap() {
+  // Limpiar configuraciones no editables en la DB para respetar el archivo .env
+  await prisma.runtimeSetting.deleteMany({
+    where: {
+      key: {
+        notIn: ['ENABLE_SYNC', 'ENABLE_ITEMS_CATALOG_SYNC'],
+      },
+    },
+  });
+
   await applyRuntimeConfigOverrides();
   await configurePassport();
 
@@ -109,6 +124,8 @@ async function bootstrap() {
     startMarketSyncScheduler();
     // Sincronizador periódico de floats del plan Float Small
     startMarketFloatsSyncScheduler();
+    // Ejecución automática de sorteos programados vencidos
+    startRaffleScheduler();
   });
 }
 
