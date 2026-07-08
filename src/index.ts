@@ -32,30 +32,106 @@ const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3001;
 
+if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is required in production');
+}
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10000, // Aumentado a 10,000 para evitar bloqueos 429 durante el desarrollo
+  max: process.env.NODE_ENV === 'production' ? 1000 : 10000,
   message: 'Too many requests from this IP, please try again after 15 minutes',
 });
+
+const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function headerValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function splitConfig(value?: string) {
+  return (value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hostnameFromUrl(value?: string | null) {
+  if (!value) return null;
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function hostnameFromUrlOrHost(value?: string | null) {
+  if (!value) return null;
+  return (hostnameFromUrl(value) || value.trim()).toLowerCase();
+}
+
+const devAllowedOrigins =
+  process.env.NODE_ENV === 'production'
+    ? []
+    : [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:3001',
+        'http://127.0.0.1:3001',
+      ];
+
+const configuredFrontendOrigins = splitConfig(process.env.FRONTEND_URL || 'http://localhost:3000');
+const configuredBackendOrigins = splitConfig(process.env.BACKEND_URL || 'http://localhost:3001');
+const corsAllowedOrigins = Array.from(
+  new Set([...devAllowedOrigins, ...configuredFrontendOrigins].filter(Boolean)),
+);
+
+function csrfOriginGuard(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!unsafeMethods.has(req.method.toUpperCase())) return next();
+
+  const cookieHeader = req.headers.cookie || '';
+  const hasSessionCookie = /(?:^|;\s*)(auth_token|admin_token)\s*=/.test(cookieHeader);
+  if (!hasSessionCookie) return next();
+
+  const allowedHosts = new Set(
+    [
+      ...configuredFrontendOrigins.map(hostnameFromUrlOrHost),
+      ...configuredBackendOrigins.map(hostnameFromUrlOrHost),
+      ...devAllowedOrigins.map(hostnameFromUrlOrHost),
+      hostnameFromUrlOrHost(headerValue(req.headers['x-forwarded-host'])),
+      hostnameFromUrlOrHost(req.headers.host || null),
+    ].filter((value): value is string => Boolean(value)),
+  );
+
+  const originHost = hostnameFromUrl(req.headers.origin);
+  const refererHost = hostnameFromUrl(req.headers.referer);
+  const requestHost = originHost || refererHost;
+
+  if (!requestHost || !allowedHosts.has(requestHost)) {
+    return res.status(403).json({ error: 'Invalid request origin' });
+  }
+
+  return next();
+}
 
 app.use(helmet());
 app.use(limiter);
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    process.env.FRONTEND_URL || ''
-  ].filter(Boolean),
+  origin: corsAllowedOrigins,
   credentials: true,
 }));
 app.use(morgan('dev'));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    (req as any).rawBody = buf.toString('utf8');
+  },
+}));
+app.use(csrfOriginGuard);
 
 // Session & Passport
 app.set('trust proxy', 1); // Trust the dev tunnel proxy
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || 'secret',
+    secret: process.env.SESSION_SECRET || 'dev-session-secret',
     resave: false,
     saveUninitialized: false,
     cookie: {

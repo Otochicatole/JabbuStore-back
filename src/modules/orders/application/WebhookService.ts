@@ -1,5 +1,6 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { Order } from '../domain/Order';
+import crypto from 'node:crypto';
 
 export class WebhookService {
   /**
@@ -27,7 +28,6 @@ export class WebhookService {
           status: order.status,
           totalPrice: order.totalPrice,
           paymentMethod: (order as any).paymentMethod || null,
-          metadata: (order as any).metadata || null,
           items: order.items.map(item => ({
             id: item.id,
             assetId: item.assetId,
@@ -39,17 +39,33 @@ export class WebhookService {
           updatedAt: order.updatedAt,
         }
       };
+      const body = JSON.stringify(payload);
+      const signingSecret = process.env.OUTBOUND_WEBHOOK_SECRET;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'JabbuStore-Webhook-Agent/1.0',
+      };
+
+      if (signingSecret) {
+        headers['X-Jabbu-Signature'] = crypto
+          .createHmac('sha256', signingSecret)
+          .update(body)
+          .digest('hex');
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
 
       // Disparar la petición sin bloquear el hilo principal (en segundo plano)
       fetch(webhookUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'JabbuStore-Webhook-Agent/1.0',
-        },
-        body: JSON.stringify(payload),
+        headers,
+        body,
+        redirect: 'error',
+        signal: controller.signal,
       })
         .then(async (response) => {
+          clearTimeout(timeout);
           if (response.ok) {
             console.log(`[WebhookService] Webhook dispatched successfully! Status: ${response.status}`);
           } else {
@@ -58,6 +74,7 @@ export class WebhookService {
           }
         })
         .catch((error) => {
+          clearTimeout(timeout);
           console.error(`[WebhookService] Connection failed for webhook dispatcher:`, error.message || error);
         });
 

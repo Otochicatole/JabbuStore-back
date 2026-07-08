@@ -70,7 +70,7 @@ export class NOWPaymentsService {
       console.warn(
         "[NOWPayments] NOWPAYMENTS_IPN_SECRET no configurado. Saltando validación de firma.",
       );
-      return true; // Si no hay secreto configurado, no se puede verificar (no recomendado en producción)
+      return process.env.NODE_ENV !== "production";
     }
 
     if (!signature) return false;
@@ -80,6 +80,8 @@ export class NOWPaymentsService {
     hmac.update(rawBody);
     const calculatedSignature = hmac.digest("hex");
 
-    return calculatedSignature === signature;
+    const provided = Buffer.from(signature, "hex");
+    const expected = Buffer.from(calculatedSignature, "hex");
+    return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
   }
 }

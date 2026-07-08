@@ -1,11 +1,18 @@
 import { prisma } from '../src/shared/infrastructure/PrismaClient';
 import { AuthService } from '../src/shared/infrastructure/AuthService';
+import crypto from 'node:crypto';
 
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Refusing to run development seed in production.');
+  }
+
   console.log('Seeding database...');
 
-  const hashedPassword = await AuthService.hashPassword('password123');
-  const hashedAdminPassword = await AuthService.hashPassword('admin_password');
+  const userPassword = process.env.SEED_USER_PASSWORD || crypto.randomBytes(18).toString('base64url');
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(24).toString('base64url');
+  const hashedPassword = await AuthService.hashPassword(userPassword);
+  const hashedAdminPassword = await AuthService.hashPassword(adminPassword);
 
   // Create Users
   const user1 = await prisma.user.upsert({
@@ -40,7 +47,14 @@ async function main() {
     },
   });
 
-  console.log({ user1, user2, admin });
+  console.log({
+    users: [user1.email, user2.email],
+    admin: admin.email,
+    generatedPasswords: {
+      user: process.env.SEED_USER_PASSWORD ? 'from env' : 'generated',
+      admin: process.env.SEED_ADMIN_PASSWORD ? 'from env' : 'generated',
+    },
+  });
   console.log('Seeding finished.');
 }
 

@@ -21,8 +21,8 @@ const toPositiveInteger = (value: string | undefined, fallback: number) => {
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
-  jwtSecret: process.env.JWT_SECRET || 'secret',
-  sessionSecret: process.env.SESSION_SECRET || 'session-secret',
+  jwtSecret: process.env.JWT_SECRET || '',
+  sessionSecret: process.env.SESSION_SECRET || '',
   steamApiKey: process.env.STEAM_API_KEY || '',
   steamwebapiApiKey: process.env.STEAMWEBAPI_API_KEY || '',
   backendUrl: process.env.BACKEND_URL || 'http://localhost:3001',

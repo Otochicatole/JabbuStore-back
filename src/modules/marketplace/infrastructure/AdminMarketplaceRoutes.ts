@@ -1,8 +1,15 @@
 import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { AdminMarketplaceController } from './AdminMarketplaceController';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
 
 const router = Router();
+const secretsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Todas las rutas de admin requieren middleware de admin
 router.use(authMiddleware, adminOnly);
@@ -18,9 +25,9 @@ router.patch('/settings/payment-methods', AdminMarketplaceController.updatePayme
 router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
 router.patch('/settings/home-stats', AdminMarketplaceController.updateHomeStatsSettings);
 router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);
-router.post('/settings/secrets/:key', AdminMarketplaceController.upsertSecret);
-router.post('/settings/secrets/:key/reveal', AdminMarketplaceController.revealSecret);
-router.delete('/settings/secrets/:key', AdminMarketplaceController.deleteSecret);
+router.post('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.upsertSecret);
+router.post('/settings/secrets/:key/reveal', secretsLimiter, AdminMarketplaceController.revealSecret);
+router.delete('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.deleteSecret);
 router.get('/settings/runtime-config', AdminMarketplaceController.getRuntimeSettings);
 router.patch('/settings/runtime-config', AdminMarketplaceController.updateRuntimeSettings);
 

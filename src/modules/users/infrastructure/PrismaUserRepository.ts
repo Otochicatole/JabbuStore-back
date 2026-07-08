@@ -16,7 +16,19 @@ export class PrismaUserRepository implements IUserRepository {
   }
 
   async findAll(): Promise<User[]> {
-    return prisma.user.findMany() as any;
+    return prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        steamId: true,
+        avatar: true,
+        profileUrl: true,
+        tradeUrl: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }) as any;
   }
 
   async findById(id: string): Promise<User | null> {

@@ -9,7 +9,16 @@ export class PrismaAdminRepository implements IAdminRepository {
   }
 
   async findAll(): Promise<Admin[]> {
-    return prisma.admin.findMany();
+    return prisma.admin.findMany({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }) as any;
   }
 
   async findByEmail(email: string): Promise<Admin | null> {

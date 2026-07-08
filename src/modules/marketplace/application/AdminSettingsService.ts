@@ -1,4 +1,63 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
+function isPrivateIp(address: string) {
+  if (net.isIPv6(address)) {
+    const normalized = address.toLowerCase();
+    return (
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+
+  if (!net.isIPv4(address)) return false;
+
+  const [a = 0, b = 0] = address.split('.').map(Number);
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a === 0
+  );
+}
+
+async function normalizeWebhookUrl(webhookUrl: string | null | undefined) {
+  const raw = webhookUrl?.trim();
+  if (!raw) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('Webhook URL inválida.');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('El webhook debe usar HTTPS.');
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    throw new Error('El webhook no puede apuntar a localhost.');
+  }
+
+  const literalIp = net.isIP(hostname) ? [hostname] : [];
+  const resolvedIps = literalIp.length
+    ? literalIp
+    : (await dns.lookup(hostname, { all: true })).map((entry) => entry.address);
+
+  if (resolvedIps.length === 0 || resolvedIps.some(isPrivateIp)) {
+    throw new Error('El webhook no puede apuntar a redes privadas o reservadas.');
+  }
+
+  parsed.hash = '';
+  return parsed.toString();
+}
 
 export class AdminSettingsService {
   static async getSettings() {
@@ -46,9 +105,10 @@ export class AdminSettingsService {
 
   static async updateWebhookUrl(webhookUrl: string | null) {
     const settings = await this.getSettings();
+    const safeWebhookUrl = await normalizeWebhookUrl(webhookUrl);
     return prisma.adminSettings.update({
       where: { id: settings.id },
-      data: { webhookUrl }
+      data: { webhookUrl: safeWebhookUrl }
     });
   }
 

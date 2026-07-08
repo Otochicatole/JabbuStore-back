@@ -59,8 +59,11 @@ async function main() {
       return;
     }
 
-    const apiKey = process.env.CSFLOAT_API_KEY || "vq1X3VcfTgqd93O6Fu53bLGeuv6igg38";
-    console.log(`Using CSFloat API Key: ${apiKey.substring(0, 5)}...`);
+    const apiKey = process.env.CSFLOAT_API_KEY;
+    if (!apiKey) {
+      throw new Error("CSFLOAT_API_KEY requerido para consultar CSFloat.");
+    }
+    console.log("Using CSFloat API Key from environment.");
 
     const updatedItemsToSave: EnrichedStoreItem[] = [];
 

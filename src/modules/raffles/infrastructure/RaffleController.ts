@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import {
   CreateRaffleUseCase,
   EditRaffleUseCase,
@@ -15,6 +16,61 @@ import {
   AddFakeParticipantsUseCase,
 } from "../application/RaffleUseCases";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
+
+const AVATAR_TYPES: Record<string, { extension: string; contentType: string }> = {
+  jpeg: { extension: ".jpg", contentType: "image/jpeg" },
+  png: { extension: ".png", contentType: "image/png" },
+  webp: { extension: ".webp", contentType: "image/webp" },
+};
+
+function detectAvatarType(buffer: Buffer): keyof typeof AVATAR_TYPES | null {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "jpeg";
+  }
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "png";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "webp";
+  }
+  return null;
+}
+
+async function saveAvatarUpload(file: Express.Multer.File): Promise<string> {
+  if (!file.buffer || file.buffer.length === 0) {
+    throw new Error("El avatar está vacío.");
+  }
+
+  const detected = detectAvatarType(file.buffer);
+  if (!detected) {
+    throw new Error("Formato de avatar no permitido. Usá JPG, PNG o WEBP.");
+  }
+  const avatarType = AVATAR_TYPES[detected]!;
+
+  if (file.mimetype && file.mimetype !== avatarType.contentType) {
+    throw new Error("El tipo del avatar no coincide con su contenido real.");
+  }
+
+  const dir = path.join(process.cwd(), "storage", "avatars");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const fileName = `bot_${Date.now()}_${randomUUID()}${avatarType.extension}`;
+  await fs.promises.writeFile(path.join(dir, fileName), file.buffer, { flag: "wx" });
+  return fileName;
+}
 
 /**
  * Resolves an avatar URL to a base64 data URL.
@@ -649,8 +705,9 @@ export class RaffleController {
       let avatar = req.body.avatar;
 
       if (req.file) {
+        const fileName = await saveAvatarUpload(req.file);
         // Usamos la ruta del proxy del frontend para evitar bloqueos CORS o de devtunnels
-        avatar = `/api/proxy/raffles/avatars/${req.file.filename}`;
+        avatar = `/api/proxy/raffles/avatars/${fileName}`;
       }
       
       const useCase = new AddFakeParticipantsUseCase(

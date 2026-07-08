@@ -19,28 +19,24 @@ import {
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
 
 const router = Router();
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = path.join(process.cwd(), "storage", "avatars");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    const ext = path.extname(file.originalname) || ".jpg";
-    cb(null, `bot_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`);
-  }
-});
 const uploadAvatar = multer({ 
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
 // Serve avatars statically
-router.use("/avatars", require("express").static(path.join(process.cwd(), "storage", "avatars")));
+router.use(
+  "/avatars",
+  require("express").static(path.join(process.cwd(), "storage", "avatars"), {
+    setHeaders: (res: any) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    },
+  }),
+);
 
 const raffleRepository = new PrismaRaffleRepository();
 const createRaffleUseCase = new CreateRaffleUseCase(raffleRepository);
