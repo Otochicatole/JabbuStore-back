@@ -29,6 +29,7 @@ model User {
   notifications  Notification[]
   raffleTickets  RaffleTicket[]
   wonPrizes      RafflePrize[]
+  reviews        Review[]
   isFake         Boolean  @default(false)
 }
 
@@ -43,6 +44,7 @@ model Admin {
   closedTickets OrderTicket[] @relation("ClosedTickets")
   ticketMessages TicketMessage[] @relation("AdminTicketMessages")
   notifications  Notification[]
+  reviewedReviews Review[] @relation("ReviewedReviews")
 }
 
 model StoreItem {
@@ -392,6 +394,36 @@ model Notification {
 
   @@index([userId, read])
   @@index([adminId, read])
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ReviewSource {
+  STEAM
+  LEGACY
+}
+
+model Review {
+  id                String       @id @default(uuid())
+  userId            String
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body              String
+  status            ReviewStatus @default(PENDING)
+  source            ReviewSource @default(STEAM)
+  legacyKey         String?      @unique
+  reviewedByAdminId String?
+  reviewedByAdmin   Admin?       @relation("ReviewedReviews", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId, status])
 }
 
 enum QuoteStatus {

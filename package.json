@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "seed:reviews": "ts-node --transpile-only scripts/seed-home-reviews.ts",
     "reindex-floats": "ts-node --transpile-only scripts/reindex-floats.ts",
     "fix-bot-inspect-links": "ts-node --transpile-only scripts/fix-bot-inspect-links.ts"
   },
