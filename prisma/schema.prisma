@@ -256,6 +256,22 @@ model AdminSettings {
   updatedAt                  DateTime @updatedAt
 }
 
+model Sponsor {
+  id                String   @id @default(uuid())
+  name              String
+  imageStorageKey   String
+  imageMimeType     String
+  imageSize         Int
+  imageOriginalName String
+  displayOrder      Int      @default(0)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([isActive, displayOrder])
+  @@index([displayOrder])
+}
+
 model EncryptedSetting {
   key              String   @id
   encryptedValue   String
