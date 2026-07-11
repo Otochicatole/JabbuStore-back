@@ -1,5 +1,6 @@
 import { MercadoPagoConfig, Preference, Payment } from "mercadopago";
 import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
+import { readPaymentQuoteSnapshot } from "../../modules/payment-quotes/domain/PaymentQuote";
 
 export class MercadoPagoService {
   private static async getClientConfig() {
@@ -26,15 +27,25 @@ export class MercadoPagoService {
     backendUrl: string,
   ): Promise<string> {
     const preferenceClient = new Preference(await this.getClientConfig());
+    const paymentQuote = readPaymentQuoteSnapshot(order.metadata);
+    if (!paymentQuote || paymentQuote.settlement.currency !== "ARS") {
+      throw new Error("La orden no tiene una cotización ARS válida para Mercado Pago.");
+    }
 
-    // Mapear los ítems de la orden para Mercado Pago (con redondeo a 2 decimales para evitar fallos de API)
-    const items = order.items.map((item: any) => ({
-      id: item.assetId,
-      title: item.name,
-      quantity: 1,
-      unit_price: Math.round(Number(item.price) * 100) / 100,
-      currency_id: "ARS", // Mercado Pago opera por defecto en ARS en Argentina, o USD según tu cuenta
-    }));
+    const settlementAmount = Math.round(Number(paymentQuote.settlement.amount) * 100) / 100;
+    if (!Number.isFinite(settlementAmount) || settlementAmount <= 0) {
+      throw new Error("La cotización ARS de Mercado Pago tiene un monto inválido.");
+    }
+
+    const items = [
+      {
+        id: order.id,
+        title: `Compra JabbuStore #${String(order.id).slice(0, 8)}`,
+        quantity: 1,
+        unit_price: settlementAmount,
+        currency_id: "ARS",
+      },
+    ];
 
     const preferenceBody: any = {
       items,
@@ -48,6 +59,9 @@ export class MercadoPagoService {
       metadata: {
         order_id: order.id,
         user_id: order.userId,
+        base_amount_usd: paymentQuote.base.amount,
+        settlement_amount_ars: paymentQuote.settlement.amount,
+        rate_kind: paymentQuote.rate?.kind,
       },
     };
 

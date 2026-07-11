@@ -22,6 +22,7 @@ router.patch('/settings/resell', AdminMarketplaceController.updateResellSettings
 router.patch('/settings/minimum-sell-price', AdminMarketplaceController.updateMinimumSellPrice);
 router.patch('/settings/webhook-url', AdminMarketplaceController.updateWebhookUrl);
 router.patch('/settings/payment-methods', AdminMarketplaceController.updatePaymentMethodSettings);
+router.patch('/settings/currency-conversion', AdminMarketplaceController.updateCurrencyConversionSettings);
 router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
 router.patch('/settings/home-stats', AdminMarketplaceController.updateHomeStatsSettings);
 router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);

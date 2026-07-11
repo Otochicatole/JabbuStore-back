@@ -27,6 +27,13 @@ import {
   savePaymentProof,
 } from "./PaymentProofStorage";
 import { AdminSecureConfigService } from "../../marketplace/application/AdminSecureConfigService";
+import { CheckoutBaseAmountResolver } from "../../payment-quotes/application/CheckoutBaseAmountResolver";
+import { VerifyPaymentQuoteUseCase } from "../../payment-quotes/application/PaymentQuoteUseCases";
+import {
+  isArsSettlementMethod,
+  readPaymentQuoteSnapshot,
+  type PaymentQuoteSnapshot,
+} from "../../payment-quotes/domain/PaymentQuote";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
@@ -53,6 +60,8 @@ export class OrderController {
     private getUserOrdersUseCase: GetUserOrdersUseCase,
     private getAllOrdersUseCase: GetAllOrdersUseCase,
     private updateOrderStatusUseCase: UpdateOrderStatusUseCase,
+    private checkoutBaseAmountResolver: CheckoutBaseAmountResolver,
+    private verifyPaymentQuoteUseCase: VerifyPaymentQuoteUseCase,
   ) {}
 
   private async transitionOrderToTradePendingFromPayment({
@@ -80,9 +89,20 @@ export class OrderController {
       return { updated: false, reason: "invalid_status" };
     }
 
-    if (currency && currency.toUpperCase() !== expectedCurrency.toUpperCase()) {
+    const paymentQuote = readPaymentQuoteSnapshot(order.metadata);
+    if (provider === "mercadopago" && paymentQuote?.settlement.currency !== "ARS") {
       console.warn(
-        `[Payment Confirm] Orden ${orderId} rechazada por moneda ${currency}; esperado ${expectedCurrency}.`,
+        `[Payment Confirm] Orden ${orderId} rechazada porque no tiene snapshot ARS válido para Mercado Pago.`,
+      );
+      return { updated: false, reason: "missing_payment_quote" };
+    }
+
+    const finalExpectedCurrency = paymentQuote?.settlement.currency || expectedCurrency;
+    const finalExpectedAmount = paymentQuote?.settlement.amount ?? order.totalPrice;
+
+    if (currency && currency.toUpperCase() !== finalExpectedCurrency.toUpperCase()) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} rechazada por moneda ${currency}; esperado ${finalExpectedCurrency}.`,
       );
       return { updated: false, reason: "currency_mismatch" };
     }
@@ -90,10 +110,10 @@ export class OrderController {
     if (
       typeof paidAmount === "number" &&
       Number.isFinite(paidAmount) &&
-      Math.abs(paidAmount - order.totalPrice) > PAYMENT_AMOUNT_TOLERANCE
+      Math.abs(paidAmount - finalExpectedAmount) > PAYMENT_AMOUNT_TOLERANCE
     ) {
       console.warn(
-        `[Payment Confirm] Orden ${orderId} rechazada por monto ${paidAmount}; esperado ${order.totalPrice}.`,
+        `[Payment Confirm] Orden ${orderId} rechazada por monto ${paidAmount}; esperado ${finalExpectedAmount}.`,
       );
       return { updated: false, reason: "amount_mismatch" };
     }
@@ -136,7 +156,7 @@ export class OrderController {
   async createPurchaseOrder(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { itemIds, items, paymentMethod, metadata } = req.body;
+      const { itemIds, items, paymentMethod, metadata, paymentQuoteToken } = req.body;
 
       if (!Array.isArray(itemIds)) {
         return res
@@ -158,13 +178,64 @@ export class OrderController {
         return res.status(400).json({ error: "La transferencia manual no está habilitada." });
       }
 
+      const manualTransferType =
+        paymentMethod === "manual_transfer"
+          ? metadata?.manualTransferType === "crypto"
+            ? "crypto"
+            : "bank"
+          : null;
+      let paymentQuote: PaymentQuoteSnapshot | null = null;
+      let metadataForOrder = metadata || {};
+
+      if (isArsSettlementMethod(paymentMethod, manualTransferType)) {
+        const baseAmount = await this.checkoutBaseAmountResolver.resolve({
+          type: metadata?.raffleId ? "raffle" : "BUY",
+          itemIds,
+          items,
+          raffleId: metadata?.raffleId,
+          ticketsCount: metadata?.ticketsCount,
+        });
+
+        paymentQuote = this.verifyPaymentQuoteUseCase.execute({
+          token: paymentQuoteToken,
+          userId,
+          paymentMethod,
+          manualTransferType,
+          baseAmount,
+        });
+
+        metadataForOrder = {
+          ...metadataForOrder,
+          paymentQuote,
+        };
+      }
+
       const order = await this.createPurchaseOrderUseCase.execute(
         userId,
         itemIds,
         paymentMethod,
-        metadata,
+        metadataForOrder,
         items,
       );
+
+      if (
+        paymentQuote &&
+        Math.abs(order.totalPrice - paymentQuote.base.amount) > PAYMENT_AMOUNT_TOLERANCE
+      ) {
+        await prisma.order.update({
+          where: { id: order.id },
+          data: {
+            status: "CANCELLED",
+            metadata: {
+              ...(order.metadata && typeof order.metadata === "object" ? order.metadata : {}),
+              paymentQuoteMismatch: true,
+            } as any,
+          },
+        });
+        return res.status(400).json({
+          error: "El precio cambió desde la cotización. Refrescá el checkout e intentá nuevamente.",
+        });
+      }
 
       // Si el método seleccionado es Mercado Pago, generar la preferencia y devolver el link de redirección
       if (paymentMethod === "mercado_pago") {

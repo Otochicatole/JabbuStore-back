@@ -108,6 +108,28 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateCurrencyConversionSettings(req: Request, res: Response) {
+    try {
+      const { usdArsRateKind } = req.body;
+      if (!["oficial", "blue", "cripto"].includes(usdArsRateKind)) {
+        return res.status(400).json({ error: "Cotización inválida." });
+      }
+
+      const settings = await AdminSettingsService.updateCurrencyConversionSettings({
+        usdArsRateKind,
+      });
+
+      res.json({
+        ...settings,
+        resellModifierType: settings.marketModifierType,
+        resellModifierValue: settings.marketModifierValue,
+        resellModifierEnabled: settings.marketModifierEnabled,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async updateManualTransferSettings(req: Request, res: Response) {
     try {
       const {

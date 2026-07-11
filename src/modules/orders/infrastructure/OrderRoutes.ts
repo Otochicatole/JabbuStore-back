@@ -12,8 +12,18 @@ import {
   authMiddleware,
   adminOnly,
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
+import { validate } from "../../../shared/infrastructure/middlewares/validationMiddleware";
 import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { uploadPaymentProof } from "./PaymentProofStorage";
+import { CheckoutBaseAmountResolver } from "../../payment-quotes/application/CheckoutBaseAmountResolver";
+import {
+  CreatePaymentQuoteUseCase,
+  PaymentQuoteTokenService,
+  VerifyPaymentQuoteUseCase,
+} from "../../payment-quotes/application/PaymentQuoteUseCases";
+import { DolarApiExchangeRateProvider } from "../../payment-quotes/infrastructure/DolarApiExchangeRateProvider";
+import { PaymentQuoteController } from "../../payment-quotes/infrastructure/PaymentQuoteController";
+import { createPaymentQuoteSchema } from "../../payment-quotes/infrastructure/paymentQuoteSchemas";
 
 const router = Router();
 
@@ -25,6 +35,15 @@ const createSellOrderUseCase = new CreateSellOrderUseCase(orderRepository);
 const getUserOrdersUseCase = new GetUserOrdersUseCase(orderRepository);
 const getAllOrdersUseCase = new GetAllOrdersUseCase(orderRepository);
 const prismaNotificationRepo = new PrismaNotificationRepository();
+const checkoutBaseAmountResolver = new CheckoutBaseAmountResolver();
+const paymentQuoteTokenService = new PaymentQuoteTokenService();
+const paymentQuoteController = new PaymentQuoteController(
+  new CreatePaymentQuoteUseCase(
+    checkoutBaseAmountResolver,
+    new DolarApiExchangeRateProvider(),
+    paymentQuoteTokenService,
+  ),
+);
 const updateOrderStatusUseCase = new UpdateOrderStatusUseCase(
   orderRepository,
   prismaNotificationRepo,
@@ -36,9 +55,14 @@ const orderController = new OrderController(
   getUserOrdersUseCase,
   getAllOrdersUseCase,
   updateOrderStatusUseCase,
+  checkoutBaseAmountResolver,
+  new VerifyPaymentQuoteUseCase(paymentQuoteTokenService),
 );
 
 // Client Routes
+router.post("/payment-quote", authMiddleware, validate(createPaymentQuoteSchema), (req, res) =>
+  paymentQuoteController.create(req, res),
+);
 router.post("/", authMiddleware, (req, res) =>
   orderController.createPurchaseOrder(req, res),
 );

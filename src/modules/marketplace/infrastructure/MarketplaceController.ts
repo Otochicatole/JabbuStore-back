@@ -12,6 +12,7 @@ export class MarketplaceController {
       res.json({
         minimumUserSellPrice: settings.minimumUserSellPrice,
         currency: settings.currency,
+        usdArsRateKind: settings.usdArsRateKind,
         mercadoPagoEnabled: settings.mercadoPagoEnabled,
         paypalEnabled: settings.paypalEnabled,
         nowpaymentsEnabled: settings.nowpaymentsEnabled,

@@ -234,6 +234,7 @@ model AdminSettings {
   minimumUserSellPrice       Float    @default(1.0)
   webhookUrl                 String?
   currency                   String   @default("USD")
+  usdArsRateKind             String   @default("blue")
   mercadoPagoEnabled         Boolean  @default(true)
   paypalEnabled              Boolean  @default(true)
   nowpaymentsEnabled         Boolean  @default(true)
