@@ -7,14 +7,19 @@ import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUs
 import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
 import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
+import { PrismaMarketSyncStateRepository } from './PrismaMarketSyncStateRepository';
 
 const router = Router();
 
 // Inyección de dependencias del módulo market
 const marketRepository = new PrismaMarketRepository();
+const marketSyncStateRepository = new PrismaMarketSyncStateRepository();
 const storeRepository = new PrismaStoreRepository();
 const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase(marketRepository);
-const syncMarketListingsUseCase = new SyncMarketListingsUseCase(marketRepository);
+const syncMarketListingsUseCase = new SyncMarketListingsUseCase(
+  marketRepository,
+  marketSyncStateRepository,
+);
 const getResaleItemFloatsUseCase = new GetResaleItemFloatsUseCase(marketRepository);
 const syncStoreItemsUseCase = new SyncStoreItemsUseCase(storeRepository);
 

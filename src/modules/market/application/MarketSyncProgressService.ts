@@ -42,12 +42,12 @@ class MarketSyncProgressService {
     this.status.lastStartedAt = new Date().toISOString();
     this.status.lastFinishedAt = null;
     this.status.lastError = null;
-    this.status.message = 'Iniciando descarga de catálogo de YouPin...';
+    this.status.message = 'Iniciando sync de YouPin priorizado por catálogo local...';
   }
 
   updateFetchPage(page: number, assetsCount: number) {
     this.status.currentPage = page;
-    this.status.message = `Descargando página ${page}/${this.status.maxPages} de YouPin (${assetsCount} assets acumulados)...`;
+    this.status.message = `Consultando candidato ${page}/${this.status.maxPages} de YouPin (${assetsCount} assets acumulados)...`;
   }
 
   startDatabaseSave(totalListings: number) {

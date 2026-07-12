@@ -95,6 +95,10 @@ export const config = {
       | 'oldest'
       | 'lowest_float'
       | 'highest_float',
+    /** Presupuesto máximo de FILAS SteamWebAPI consumidas por corrida priorizada. */
+    priorityRowBudget: parseInt(process.env.MARKET_SYNC_PRIORITY_ROW_BUDGET || '1000', 10),
+    /** Filas pedidas por cada item consultado por market_hash_name. */
+    priorityRowsPerItem: parseInt(process.env.MARKET_SYNC_PRIORITY_ROWS_PER_ITEM || '10', 10),
   },
 
   /** Legacy/diagnóstico: GET /market/youpin/prices (MCP Market Prices). */
