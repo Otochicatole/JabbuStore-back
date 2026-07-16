@@ -1,23 +1,4 @@
-const PHASE_ALIASES: Record<string, string> = {
-  "phase 1": "phase 1",
-  p1: "phase 1",
-  "1": "phase 1",
-  "phase 2": "phase 2",
-  p2: "phase 2",
-  "2": "phase 2",
-  "phase 3": "phase 3",
-  p3: "phase 3",
-  "3": "phase 3",
-  "phase 4": "phase 4",
-  p4: "phase 4",
-  "4": "phase 4",
-  ruby: "ruby",
-  sapphire: "sapphire",
-  "black pearl": "black pearl",
-  blackpearl: "black pearl",
-  "black-pearl": "black pearl",
-  emerald: "emerald",
-};
+import { normalizeDopplerPhaseLabel } from "../../pricing/domain/DopplerPhase";
 
 const API_PHASE_PARAM: Record<string, string> = {
   "phase 1": "p1",
@@ -34,8 +15,10 @@ export function normalizePhaseName(
   phase: string | null | undefined,
 ): string | null {
   if (!phase) return null;
+  const canonical = normalizeDopplerPhaseLabel(phase);
+  if (canonical) return canonical.toLowerCase();
   const key = phase.trim().toLowerCase().replace(/-/g, " ");
-  return PHASE_ALIASES[key] ?? key;
+  return key || null;
 }
 
 export function phasesMatch(

@@ -3,22 +3,88 @@ import { FloatItem } from "../domain/FloatItem";
 import { PriceEnrichmentService } from "../../../shared/infrastructure/PriceEnrichmentService";
 import { buildInspectLinkFromCertificate } from "../../../shared/infrastructure/inspectLinkHelpers";
 import {
-  normalizePhaseName,
-  resolveAssetPrice,
-  stripWearFromMarketHashName,
-} from "./floatSyncHelpers";
+  getDopplerPhaseLabelByPaintIndex,
+  normalizeDopplerPhaseLabel,
+} from "../../pricing/domain/DopplerPhase";
+import { resolveAssetPrice } from "./floatSyncHelpers";
 
-const PHASE_FROM_API: Record<string, string> = {
-  p1: "Phase 1",
-  p2: "Phase 2",
-  p3: "Phase 3",
-  p4: "Phase 4",
-  ruby: "Ruby",
-  sapphire: "Sapphire",
-  "black-pearl": "Black Pearl",
-  blackpearl: "Black Pearl",
-  emerald: "Emerald",
-};
+const WEAR_SUFFIX =
+  /\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)\s*$/i;
+
+function stripWearFromMarketHashName(name: string): string {
+  return name.replace(WEAR_SUFFIX, "").trim();
+}
+
+function getWearSuffix(name: string): string {
+  const match = name.match(WEAR_SUFFIX);
+  return match?.[1] ? ` (${match[1]})` : "";
+}
+
+function toDisplayPhaseName(rawPhase: string | null | undefined): string | null {
+  return normalizeDopplerPhaseLabel(rawPhase);
+}
+
+function readAssetPaintIndex(asset: any): number | null {
+  const raw =
+    asset.paintindex ??
+    asset.paint_index ??
+    asset.paintIndex ??
+    asset.item?.paintindex ??
+    asset.item?.paint_index ??
+    asset.item?.paintIndex ??
+    asset.metadata?.paintindex ??
+    asset.metadata?.paint_index ??
+    asset.metadata?.paintIndex;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function splitRawName(raw: string): {
+  base: string;
+  phaseLabel: string | null;
+  wearSuffix: string;
+} {
+  const parts = raw.split(" | ").map((part) => part.trim());
+  const wearPart = parts.find((part) => WEAR_SUFFIX.test(part));
+  const wearSuffix = wearPart ? getWearSuffix(wearPart) : "";
+  const phaseIndex = parts.findIndex(
+    (part, index) => index > 1 && toDisplayPhaseName(part) != null,
+  );
+  const phaseLabel =
+    phaseIndex >= 0 ? toDisplayPhaseName(parts[phaseIndex]) : null;
+
+  if (!phaseLabel) {
+    return {
+      base: stripWearFromMarketHashName(raw),
+      phaseLabel: null,
+      wearSuffix: getWearSuffix(raw),
+    };
+  }
+
+  return {
+    base: parts
+      .filter((_part, index) => index !== phaseIndex)
+      .map(stripWearFromMarketHashName)
+      .join(" | "),
+    phaseLabel,
+    wearSuffix,
+  };
+}
+
+function resolveAssetPhaseLabel(asset: any, rawName: string): string | null {
+  const paintPhase = getDopplerPhaseLabelByPaintIndex(readAssetPaintIndex(asset));
+  if (paintPhase) return paintPhase;
+
+  const explicitPhase = toDisplayPhaseName(
+    asset.phase ?? asset.item?.phase ?? asset.metadata?.phase,
+  );
+  if (explicitPhase) return explicitPhase;
+
+  const { phaseLabel } = splitRawName(rawName);
+  if (phaseLabel) return phaseLabel;
+
+  return null;
+}
 
 export function resolveListingNameFromAsset(asset: any): string {
   const raw = String(
@@ -26,21 +92,14 @@ export function resolveListingNameFromAsset(asset: any): string {
   ).trim();
   if (!raw) return "";
 
-  const phaseKey = asset.phase ? String(asset.phase).toLowerCase() : null;
-  const phaseLabel = phaseKey
-    ? PHASE_FROM_API[phaseKey] ?? normalizePhaseName(phaseKey) ?? phaseKey
-    : null;
+  const phaseLabel = resolveAssetPhaseLabel(asset, raw);
+  if (!phaseLabel) {
+    return /\b(?:Gamma\s+)?Doppler\b/i.test(raw) ? "" : raw;
+  }
 
-  if (!phaseLabel) return raw;
-
-  const base = stripWearFromMarketHashName(raw);
-  const wearMatch = raw.match(
-    /\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)\s*$/i,
-  );
-  const wearSuffix = wearMatch ? ` (${wearMatch[1]})` : "";
+  const { base, wearSuffix } = splitRawName(raw);
   const withPhase = `${base} | ${phaseLabel}${wearSuffix}`;
 
-  if (raw.toLowerCase().includes(phaseLabel.toLowerCase())) return raw;
   return withPhase;
 }
 

@@ -1,5 +1,6 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { BotService } from '../../marketplace/application/BotService';
+import { normalizeDopplerPhaseLabel } from '../../pricing/domain/DopplerPhase';
 
 type SortOption =
   | 'price_desc'
@@ -119,6 +120,13 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
   return Math.max(0, Math.round((basePrice + modifier) * 100) / 100);
 }
 
+const WEAR_SUFFIX =
+  /\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred|FN|MW|FT|WW|BS|Recién fabricado|Casi nuevo|Algo desgastado|Bastante desgastado|Deplorable)\)\s*$/i;
+
+function stripWearSuffix(value: string): string {
+  return value.replace(WEAR_SUFFIX, '').trim();
+}
+
 function parseName(fullName: string): { weapon: string; name: string; phase: string | null } {
   if (!fullName.includes(' | ')) {
     return { weapon: 'Item', name: fullName, phase: null };
@@ -126,12 +134,10 @@ function parseName(fullName: string): { weapon: string; name: string; phase: str
 
   const parts = fullName.split(' | ');
   const weapon = parts[0] || 'Item';
-  let name = parts[1] || fullName;
-  const phase = parts.length > 2 ? parts.slice(2).join(' | ') : null;
-
-  if (name.includes(' (')) {
-    name = name.split(' (')[0] || name;
-  }
+  const name = stripWearSuffix(parts[1] || fullName);
+  const phase = normalizeDopplerPhaseLabel(
+    parts.length > 2 ? parts.slice(2).join(' | ') : null,
+  );
 
   return { weapon, name, phase };
 }
@@ -314,9 +320,13 @@ export class GetCatalogItemsUseCase {
 
     const marketCatalogItems: InternalCatalogItem[] = query.immediate
       ? []
-      : marketAssets.map((asset) => {
+      : marketAssets.flatMap((asset): InternalCatalogItem[] => {
           const parsed = parseName(asset.resaleItem.name);
-          return {
+          if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
+            return [];
+          }
+
+          return [{
             id: `youpin-${asset.id}`,
             name: parsed.name,
             weapon: parsed.weapon,
@@ -338,27 +348,33 @@ export class GetCatalogItemsUseCase {
             isImmediate: false,
             inspectLink: asset.inspectLink,
             createdAt: asset.lastSyncAt,
-          };
+          } satisfies InternalCatalogItem];
         });
 
-    const filtered = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {
+    const filteredByCatalogFacets = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {
       if (normalizedQuery) {
         const haystack = `${item.weapon} ${item.name} ${item.phase ?? ''}`.toLowerCase();
         if (!haystack.includes(normalizedQuery)) return false;
       }
 
-      if (query.minPrice !== undefined && item.price < query.minPrice) return false;
-      if (query.maxPrice !== undefined && item.price > query.maxPrice) return false;
       if (!matchesCategories(item, query.categories)) return false;
       if (!matchesConditions(item, query.conditions)) return false;
 
       return true;
     });
 
-    const sorted = sortItems(filtered, query.sort || DEFAULT_SORT);
-    const itemsForPagination = query.group
-      ? this.groupItems(sorted)
-      : sorted.map(stripInternal);
+    const priceMatches = (item: InternalCatalogItem) => {
+      if (query.minPrice !== undefined && item.price < query.minPrice) return false;
+      if (query.maxPrice !== undefined && item.price > query.maxPrice) return false;
+      return true;
+    };
+
+    const itemsForSorting = query.group
+      ? this.groupItems(filteredByCatalogFacets).filter(priceMatches)
+      : filteredByCatalogFacets.filter(priceMatches);
+
+    const sorted = sortItems(itemsForSorting, query.sort || DEFAULT_SORT);
+    const itemsForPagination = sorted.map(stripInternal);
 
     const total = itemsForPagination.length;
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
@@ -377,7 +393,7 @@ export class GetCatalogItemsUseCase {
     };
   }
 
-  private groupItems(items: InternalCatalogItem[]): CatalogItem[] {
+  private groupItems(items: InternalCatalogItem[]): InternalCatalogItem[] {
     const groups = new Map<string, InternalCatalogItem[]>();
 
     for (const item of items) {
@@ -391,12 +407,13 @@ export class GetCatalogItemsUseCase {
     }
 
     return Array.from(groups.values()).map((group) => {
-      const representative = stripInternal(group[0]!);
-      if (group.length < 2) return representative;
+      const variantsByLowestPrice = sortItems(group, 'price_asc');
+      const representative = variantsByLowestPrice[0]!;
+      if (variantsByLowestPrice.length < 2) return representative;
 
       return {
         ...representative,
-        variants: group.map(stripInternal),
+        variants: variantsByLowestPrice.map(stripInternal),
       };
     });
   }

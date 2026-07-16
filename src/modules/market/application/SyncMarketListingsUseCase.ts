@@ -195,6 +195,9 @@ export class SyncMarketListingsUseCase {
           emptyListingNames.push(candidate.marketHashName);
         } else {
           mergeCatalogGroups(groups, grouped.groups);
+          if (!grouped.groups.has(candidate.marketHashName)) {
+            emptyListingNames.push(candidate.marketHashName);
+          }
         }
 
         cursor = advanceCursor(cursor, queue.candidates.length);
