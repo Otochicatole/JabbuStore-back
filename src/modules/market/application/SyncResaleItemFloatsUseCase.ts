@@ -15,16 +15,27 @@ import {
   assetToFloatItem,
   resolveListingNameFromAsset,
 } from "./floatCatalogMapper";
-import { SteamWebApiFloatAssetsClient } from "../infrastructure/SteamWebApiFloatAssetsClient";
+import {
+  FloatAssetsSort,
+  SteamWebApiFloatAssetsClient,
+} from "../infrastructure/SteamWebApiFloatAssetsClient";
 
 export interface SyncFloatsOptions {
   includeCsfloat?: boolean;
+  pageSize?: number;
+  maxPages?: number;
+  maxPerItem?: number;
+  sort?: FloatAssetsSort;
 }
 
 export interface FloatFetchResult {
   floats: FloatItem[];
+  assets: any[];
+  assetsFetched: number;
   rowsUsed: number;
   rateLimited: boolean;
+  failed: boolean;
+  errors: string[];
 }
 
 export class SyncResaleItemFloatsUseCase {
@@ -38,6 +49,12 @@ export class SyncResaleItemFloatsUseCase {
     options: SyncFloatsOptions = {},
   ): Promise<FloatItem[]> {
     const result = await this.fetchFloats(resaleItemId, marketHashName, options);
+    if (result.failed || result.rateLimited) {
+      throw new Error(
+        result.errors[0] ||
+          `No se pudieron obtener floats para "${marketHashName}".`,
+      );
+    }
     await this.marketRepository.saveFloats(resaleItemId, result.floats);
     console.log(
       `[Sync Resale Floats] "${marketHashName}": ${result.floats.length} floats guardados (${result.rowsUsed} filas${result.rateLimited ? ", RATE LIMITED" : ""}).`,
@@ -52,16 +69,30 @@ export class SyncResaleItemFloatsUseCase {
   ): Promise<FloatFetchResult> {
     if (!config.steamwebapiApiKey) {
       console.warn("[Sync Resale Floats] STEAMWEBAPI_API_KEY no configurado. Omitiendo.");
-      return { floats: [], rowsUsed: 0, rateLimited: false };
+      return {
+        floats: [],
+        assets: [],
+        assetsFetched: 0,
+        rowsUsed: 0,
+        rateLimited: false,
+        failed: true,
+        errors: ["STEAMWEBAPI_API_KEY no configurado"],
+      };
     }
 
     const { baseName, phase } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
     const queryName = baseName || marketHashName;
-    const { pageSize, maxPages, maxPerItem, sort: floatSort } = config.floatSync;
+    const pageSize = options.pageSize ?? config.floatSync.pageSize;
+    const maxPages = options.maxPages ?? config.floatSync.maxPages;
+    const maxPerItem = options.maxPerItem ?? config.floatSync.maxPerItem;
+    const floatSort = options.sort ?? config.floatSync.sort;
 
     let rowsUsed = 0;
     let rateLimited = false;
+    let failed = false;
+    const errors: string[] = [];
     let matchedAssets: any[] = [];
+    let assetsFetched = 0;
 
     const collectFromPages = async (
       source: "youpin" | "csfloat",
@@ -77,10 +108,19 @@ export class SyncResaleItemFloatsUseCase {
         rowsUsed += result.rowsUsed;
         if (result.rateLimited) {
           rateLimited = true;
+          errors.push(`${source} float/assets rate limited`);
+          break;
+        }
+        if (!result.ok) {
+          failed = true;
+          errors.push(
+            `${source} float/assets HTTP ${result.status}: ${result.error ?? "error"}`,
+          );
           break;
         }
         if (result.assets.length === 0) break;
 
+        assetsFetched += result.assets.length;
         for (const asset of result.assets) {
           if (this.assetMatches(asset, queryName, phase, marketHashName)) {
             matched.push(asset);
@@ -124,7 +164,7 @@ export class SyncResaleItemFloatsUseCase {
         });
 
       let matched = await runQuery(true);
-      if (matched.length === 0 && defIndex != null) {
+      if (!failed && !rateLimited && matched.length === 0 && defIndex != null) {
         matched = await runQuery(false);
       }
 
@@ -160,7 +200,7 @@ export class SyncResaleItemFloatsUseCase {
 
     matchedAssets = await fetchSource("youpin");
 
-    if (matchedAssets.length === 0 && options.includeCsfloat) {
+    if (!failed && !rateLimited && matchedAssets.length === 0 && options.includeCsfloat) {
       matchedAssets = await fetchSource("csfloat");
       if (matchedAssets.length > 0) {
         console.log(
@@ -175,7 +215,15 @@ export class SyncResaleItemFloatsUseCase {
       .sort((a, b) => a.price - b.price)
       .slice(0, maxPerItem);
 
-    return { floats, rowsUsed, rateLimited };
+    return {
+      floats,
+      assets: matchedAssets,
+      assetsFetched,
+      rowsUsed,
+      rateLimited,
+      failed,
+      errors,
+    };
   }
 
   private assetMatches(

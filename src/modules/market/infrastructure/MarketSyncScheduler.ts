@@ -1,4 +1,5 @@
 import { PrismaMarketRepository } from './PrismaMarketRepository';
+import { PrismaMarketSyncStateRepository } from './PrismaMarketSyncStateRepository';
 import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { config } from '../../../shared/config';
 
@@ -13,7 +14,11 @@ export function startMarketSyncScheduler(): void {
   }
   const intervalMinutes = config.storeSyncIntervalMinutes; // reusar configuración existente
   const marketRepository = new PrismaMarketRepository();
-  const syncUseCase = new SyncMarketListingsUseCase(marketRepository);
+  const marketSyncStateRepository = new PrismaMarketSyncStateRepository();
+  const syncUseCase = new SyncMarketListingsUseCase(
+    marketRepository,
+    marketSyncStateRepository,
+  );
 
   // Sincronización inicial al arrancar el servidor
   console.log('[Market Sync Scheduler] Iniciando primera sincronización del catálogo de mercado...');

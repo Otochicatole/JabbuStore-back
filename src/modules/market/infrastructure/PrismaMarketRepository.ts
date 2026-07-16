@@ -267,6 +267,130 @@ export class PrismaMarketRepository implements IMarketRepository {
     }
   }
 
+  async syncCatalogSliceWithFloats(
+    listings: MarketListingUpsert[],
+    floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
+    emptyListingNames: string[],
+  ): Promise<void> {
+    const listingNames = listings.map((listing) => listing.name);
+    const listingNameSet = new Set(listingNames);
+    const emptyNames = [...new Set(emptyListingNames)].filter(
+      (name) => name && !listingNameSet.has(name),
+    );
+    const totalTouched = listings.length + emptyNames.length;
+
+    if (totalTouched === 0) return;
+
+    marketSyncProgressService.startDatabaseSave(totalTouched);
+
+    const manualPrices =
+      listingNames.length > 0
+        ? await prisma.marketListing.findMany({
+            where: { name: { in: listingNames }, isPriceManual: true },
+            select: { name: true, price: true },
+          })
+        : [];
+    const manualMap = new Map(manualPrices.map((m) => [m.name, m.price]));
+
+    const sanitized = listings.map((listing) => {
+      const manualPrice = manualMap.get(listing.name);
+      return {
+        name: listing.name,
+        provider: listing.provider,
+        youpinAsk: listing.youpinAsk,
+        youpinVolume: listing.youpinVolume,
+        price: manualPrice ?? listing.price,
+        iconUrl: listing.iconUrl ?? null,
+        rarity: listing.rarity || 'common',
+        exterior: listing.exterior ?? null,
+        category: listing.category || 'other',
+        isStatTrak: listing.isStatTrak ?? false,
+        isSouvenir: listing.isSouvenir ?? false,
+        isPriceManual: manualPrice != null,
+      };
+    });
+
+    const parallelSize = 10;
+    let processed = 0;
+
+    for (let i = 0; i < sanitized.length; i += parallelSize) {
+      const batch = sanitized.slice(i, i + parallelSize);
+      await Promise.all(
+        batch.map((listing) => {
+          const isManual = manualMap.has(listing.name);
+          return prisma.marketListing.upsert({
+            where: { name: listing.name },
+            create: listing,
+            update: {
+              provider: listing.provider,
+              youpinAsk: listing.youpinAsk,
+              youpinVolume: listing.youpinVolume,
+              iconUrl: listing.iconUrl,
+              rarity: listing.rarity,
+              exterior: listing.exterior,
+              category: listing.category,
+              isStatTrak: listing.isStatTrak,
+              isSouvenir: listing.isSouvenir,
+              ...(isManual ? {} : { price: listing.price }),
+            },
+          });
+        }),
+      );
+
+      processed += batch.length;
+      marketSyncProgressService.updateDatabaseProgress(processed);
+    }
+
+    if (listingNames.length > 0) {
+      const rows = await prisma.marketListing.findMany({
+        where: { name: { in: listingNames } },
+        select: { id: true, name: true },
+      });
+
+      for (const row of rows) {
+        const floatRows = floatsByName.get(row.name) ?? [];
+        await this.saveFloats(
+          row.id,
+          floatRows.map((floatRow) => ({
+            ...floatRow,
+            resaleItemId: row.id,
+          })),
+        );
+      }
+    }
+
+    if (emptyNames.length > 0) {
+      const emptyRows = await prisma.marketListing.findMany({
+        where: { name: { in: emptyNames } },
+        select: { id: true },
+      });
+      const ids = emptyRows.map((row) => row.id);
+
+      if (ids.length > 0) {
+        await prisma.$transaction([
+          prisma.floatItem.deleteMany({
+            where: { resaleItemId: { in: ids } },
+          }),
+          prisma.marketListing.updateMany({
+            where: { id: { in: ids } },
+            data: {
+              youpinAsk: null,
+              youpinVolume: 0,
+              floatsSyncedAt: new Date(),
+            },
+          }),
+          prisma.marketListing.updateMany({
+            where: { id: { in: ids }, isPriceManual: false },
+            data: { price: 0 },
+          }),
+        ]);
+      }
+
+      processed += emptyNames.length;
+      marketSyncProgressService.updateDatabaseProgress(processed);
+    }
+  }
+
   async updatePrice(id: string, price: number): Promise<void> {
     await prisma.marketListing.update({
       where: { id },

@@ -15,6 +15,8 @@ export interface ReindexResult {
   emptyResults: number;
   /** Ítems salteados por rate limit (NO se marcan como intentados; se reintentan luego). */
   skippedByRateLimit: number;
+  /** Ítems salteados por errores HTTP/API; no se tocan los datos existentes. */
+  failedResults: number;
   rowsUsed: number;
   candidates: number;
   abortedByRateLimit: boolean;
@@ -53,6 +55,7 @@ export class ReindexMarketFloatsUseCase {
     let withFloats = 0;
     let emptyResults = 0;
     let skippedByRateLimit = 0;
+    let failedResults = 0;
     let rowsUsed = 0;
     let consecutiveRateLimits = 0;
     let abortedByRateLimit = false;
@@ -76,6 +79,11 @@ export class ReindexMarketFloatsUseCase {
         } else if (result.rateLimited) {
           // Sin floats por rate limit: NO marcar como intentado, se reintenta luego.
           skippedByRateLimit++;
+        } else if (result.failed) {
+          failedResults++;
+          console.warn(
+            `[Reindex Floats] Error API en "${item.name}": ${result.errors.join("; ")}`,
+          );
         } else {
           // Genuinamente sin floats en la API: marcar como intentado.
           await this.marketRepository.saveFloats(item.id, []);
@@ -110,6 +118,7 @@ export class ReindexMarketFloatsUseCase {
       withFloats,
       emptyResults,
       skippedByRateLimit,
+      failedResults,
       rowsUsed,
       candidates: candidates.length,
       abortedByRateLimit,

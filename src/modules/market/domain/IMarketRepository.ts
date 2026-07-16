@@ -12,6 +12,13 @@ export interface IMarketRepository {
     floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
   ): Promise<void>;
 
+  /** Upsert incremental: solo toca los listings consultados en esta corrida. */
+  syncCatalogSliceWithFloats(
+    listings: MarketListingUpsert[],
+    floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
+    emptyListingNames: string[],
+  ): Promise<void>;
+
   /** Devuelve todos los listings activos */
   findAll(): Promise<MarketListing[]>;
 
