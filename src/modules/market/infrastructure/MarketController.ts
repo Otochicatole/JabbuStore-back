@@ -50,8 +50,14 @@ export class MarketController {
       });
 
       // Inicializar progreso
-      const maxPages = config.marketSync.maxPages;
-      marketSyncProgressService.startSync(maxPages);
+      const maxCandidates = Math.max(
+        1,
+        Math.floor(
+          config.marketSync.priorityRowBudget /
+            Math.max(1, config.marketSync.priorityRowsPerItem),
+        ),
+      );
+      marketSyncProgressService.startSync(maxCandidates);
 
       // Ejecución asíncrona en segundo plano sin bloquear la respuesta HTTP
       (async () => {

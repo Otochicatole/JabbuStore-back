@@ -2,11 +2,11 @@ import {
   DOPPLER_PHASE_DISPLAY,
   GLOVE_NAMES,
   KNIFE_NAMES,
-  MARKET_INDEPENDENT_DOPPLER_PHASES,
   PAINT_INDEX_TO_PHASE,
   WEAR_CONDITIONS,
   WEAPON_NAMES,
 } from "../domain/constants";
+import { normalizeDopplerPhaseLabel } from "../domain/DopplerPhase";
 import type { NormalizedMarketItem, WearCondition } from "../domain/types";
 
 const WEAR_SUFFIX =
@@ -72,12 +72,11 @@ export class MarketHashNameNormalizer {
     if (parts.length < 2) return { baseName: fullName, phase: null };
 
     const lastPart = parts[parts.length - 1]!.trim();
-    if (
-      (MARKET_INDEPENDENT_DOPPLER_PHASES as readonly string[]).includes(lastPart)
-    ) {
+    const normalizedPhase = normalizeDopplerPhaseLabel(lastPart);
+    if (normalizedPhase) {
       return {
         baseName: parts.slice(0, -1).join(" | "),
-        phase: lastPart,
+        phase: normalizedPhase,
       };
     }
     return { baseName: fullName, phase: null };

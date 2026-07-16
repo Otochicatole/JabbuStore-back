@@ -34,6 +34,9 @@ export interface FloatAssetsPage {
   limit: number;
   offset: number;
   sort: string;
+  ok: boolean;
+  status: number;
+  error: string | null;
   rateLimited: boolean;
   rowsUsed: number;
 }
@@ -77,6 +80,9 @@ export class SteamWebApiFloatAssetsClient {
         limit: query.limit ?? 10,
         offset: query.offset ?? 0,
         sort: query.sort ?? "newest",
+        ok: false,
+        status: 0,
+        error: "STEAMWEBAPI_API_KEY no configurado",
         rateLimited: false,
         rowsUsed: 0,
       };
@@ -116,18 +122,25 @@ export class SteamWebApiFloatAssetsClient {
         limit,
         offset,
         sort: query.sort ?? "newest",
+        ok: false,
+        status: res.status,
+        error: "Rate limit exceeded",
         rateLimited: true,
         rowsUsed: limit,
       };
     }
 
     if (!res.ok) {
+      const body = await res.text().catch(() => "");
       return {
         assets: [],
         total: 0,
         limit,
         offset,
         sort: query.sort ?? "newest",
+        ok: false,
+        status: res.status,
+        error: body.slice(0, 300) || `HTTP ${res.status}`,
         rateLimited: false,
         rowsUsed: limit,
       };
@@ -138,6 +151,9 @@ export class SteamWebApiFloatAssetsClient {
 
     return {
       ...page,
+      ok: true,
+      status: res.status,
+      error: null,
       rateLimited: false,
       rowsUsed: limit,
     };

@@ -1,6 +1,7 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketStoreAsset } from '../domain/MarketStoreAsset';
+import { resolveListingNameFromAsset } from './floatCatalogMapper';
 
 function applyModifier(basePrice: number, enabled: boolean, type: string, value: number): number {
   if (!enabled) return basePrice;
@@ -31,15 +32,23 @@ export class GetMarketStoreAssetsUseCase {
       marketModifierValue: 0,
     };
 
-    return assets.map((asset) => ({
-      ...asset,
-      id: `youpin-${asset.floatItemId}`,
-      displayPrice: applyModifier(
-        asset.price,
-        settingsData.marketModifierEnabled,
-        settingsData.marketModifierType,
-        settingsData.marketModifierValue,
-      ),
-    }));
+    return assets.flatMap((asset) => {
+      const canonicalName = resolveListingNameFromAsset({
+        market_hash_name: asset.name,
+      });
+      if (!canonicalName) return [];
+
+      return [{
+        ...asset,
+        id: `youpin-${asset.floatItemId}`,
+        name: canonicalName,
+        displayPrice: applyModifier(
+          asset.price,
+          settingsData.marketModifierEnabled,
+          settingsData.marketModifierType,
+          settingsData.marketModifierValue,
+        ),
+      }];
+    });
   }
 }
