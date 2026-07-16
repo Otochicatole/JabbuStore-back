@@ -44,6 +44,9 @@ function mergeCatalogGroups(
     if (incoming.listing.price < existing.listing.price) {
       existing.listing.price = incoming.listing.price;
       existing.listing.youpinAsk = incoming.listing.youpinAsk;
+      if (incoming.listing.iconUrl) {
+        existing.listing.iconUrl = incoming.listing.iconUrl;
+      }
     }
 
     if (!existing.listing.iconUrl && incoming.listing.iconUrl) {

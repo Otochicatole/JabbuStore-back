@@ -7,6 +7,10 @@ import {
   normalizeDopplerPhaseLabel,
 } from "../../pricing/domain/DopplerPhase";
 import { resolveAssetPrice } from "./floatSyncHelpers";
+import {
+  readAssetPaintIndex,
+  resolveAssetImageUrl,
+} from "./AssetImageResolver";
 
 const WEAR_SUFFIX =
   /\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)\s*$/i;
@@ -22,21 +26,6 @@ function getWearSuffix(name: string): string {
 
 function toDisplayPhaseName(rawPhase: string | null | undefined): string | null {
   return normalizeDopplerPhaseLabel(rawPhase);
-}
-
-function readAssetPaintIndex(asset: any): number | null {
-  const raw =
-    asset.paintindex ??
-    asset.paint_index ??
-    asset.paintIndex ??
-    asset.item?.paintindex ??
-    asset.item?.paint_index ??
-    asset.item?.paintIndex ??
-    asset.metadata?.paintindex ??
-    asset.metadata?.paint_index ??
-    asset.metadata?.paintIndex;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function splitRawName(raw: string): {
@@ -172,8 +161,7 @@ export function groupYoupinAssetsIntoCatalog(
 
     const { resaleItemId: _ignored, ...floatData } = floatDraft;
     const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
-    const itemMeta = asset.item ?? {};
-    const iconUrl = itemMeta.itemimage ?? asset.itemimage ?? null;
+    const iconUrl = resolveAssetImageUrl(asset);
 
     let group = groups.get(name);
     if (!group) {
@@ -199,6 +187,7 @@ export function groupYoupinAssetsIntoCatalog(
       if (price < group.listing.price) {
         group.listing.price = price;
         group.listing.youpinAsk = price;
+        if (iconUrl) group.listing.iconUrl = iconUrl;
       }
       if (!group.listing.iconUrl && iconUrl) {
         group.listing.iconUrl = iconUrl;
