@@ -187,10 +187,6 @@ export class DeleteRaffleUseCase {
       throw new Error("Sorteo no encontrado.");
     }
 
-    if (raffle.status !== "CANCELLED") {
-      throw new Error("Solo se pueden eliminar sorteos cancelados.");
-    }
-
     await this.raffleRepository.deleteRaffle(id);
   }
 }
