@@ -10,7 +10,7 @@ async function main() {
   console.log('Seeding database...');
 
   const userPassword = process.env.SEED_USER_PASSWORD || crypto.randomBytes(18).toString('hex');
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(24).toString('hex');
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || '15651106';
   
   console.log('User password type:', typeof userPassword);
   console.log('Admin password type:', typeof adminPassword);
