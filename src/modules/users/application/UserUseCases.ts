@@ -325,7 +325,12 @@ export class GetUserProfileUseCase {
 export class UpdateUserProfileUseCase {
   constructor(private userRepository: IUserRepository) {}
 
-  async execute(userId: string, data: { name?: string; email?: string; tradeUrl?: string }): Promise<User> {
+  async execute(userId: string, data: {
+    name?: string | null;
+    email?: string | null;
+    tradeUrl?: string | null;
+    preferredCurrency?: User["preferredCurrency"];
+  }): Promise<User> {
     const user = await this.userRepository.findById(userId);
     if (!user) {
       throw new Error('User not found');
@@ -336,6 +341,10 @@ export class UpdateUserProfileUseCase {
       name: data.name !== undefined ? data.name : user.name,
       email: data.email !== undefined ? data.email : user.email,
       tradeUrl: data.tradeUrl !== undefined ? data.tradeUrl : (user as any).tradeUrl,
+      preferredCurrency:
+        data.preferredCurrency !== undefined
+          ? data.preferredCurrency
+          : user.preferredCurrency,
     });
 
     return updatedUser;

@@ -1,6 +1,16 @@
-export const USD_ARS_RATE_KINDS = ["oficial", "blue", "cripto"] as const;
+import {
+  USD_ARS_RATE_KINDS,
+  isUsdArsRateKind,
+  type IExchangeRateProvider,
+  type UsdArsRateKind,
+} from "../../currency-conversion/domain/CurrencyConversion";
 
-export type UsdArsRateKind = (typeof USD_ARS_RATE_KINDS)[number];
+export {
+  USD_ARS_RATE_KINDS,
+  isUsdArsRateKind,
+  type IExchangeRateProvider,
+  type UsdArsRateKind,
+};
 export type SettlementCurrency = "ARS" | "USD" | "USDT";
 export type PaymentQuotePurpose = "payment_quote";
 
@@ -30,19 +40,6 @@ export interface PaymentQuoteSnapshot {
   expiresAt: string | null;
 }
 
-export interface ExchangeRate {
-  kind: UsdArsRateKind;
-  value: number;
-  casa: string | null;
-  name: string | null;
-  fetchedAt: string;
-  providerUpdatedAt: string | null;
-}
-
-export interface IExchangeRateProvider {
-  getUsdArsRate(kind: UsdArsRateKind): Promise<ExchangeRate>;
-}
-
 export interface PaymentQuoteTokenPayload {
   purpose: PaymentQuotePurpose;
   sub: string;
@@ -51,10 +48,6 @@ export interface PaymentQuoteTokenPayload {
   manualTransferType: "bank" | "crypto" | null;
   snapshot: PaymentQuoteSnapshot;
 }
-
-export const isUsdArsRateKind = (value: unknown): value is UsdArsRateKind => {
-  return USD_ARS_RATE_KINDS.includes(value as UsdArsRateKind);
-};
 
 export const isArsSettlementMethod = (
   paymentMethod: string | null | undefined,

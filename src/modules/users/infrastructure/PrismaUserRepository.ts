@@ -25,6 +25,7 @@ export class PrismaUserRepository implements IUserRepository {
         avatar: true,
         profileUrl: true,
         tradeUrl: true,
+        preferredCurrency: true,
         createdAt: true,
         updatedAt: true,
       },

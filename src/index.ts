@@ -25,6 +25,7 @@ import quoteRoutes from './modules/quotes/infrastructure/QuoteRoutes';
 import raffleRoutes from './modules/raffles/infrastructure/RaffleRoutes';
 import reviewRoutes from './modules/reviews/infrastructure/ReviewRoutes';
 import sponsorRoutes from './modules/sponsors/infrastructure/SponsorRoutes';
+import currencyConversionRoutes from './modules/currency-conversion/infrastructure/CurrencyConversionRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
 
 
@@ -161,6 +162,7 @@ app.use('/api/quotes', quoteRoutes);
 app.use('/api/raffles', raffleRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/sponsors', sponsorRoutes);
+app.use('/api/currency-conversion', currencyConversionRoutes);
 
 
 import { errorHandler } from './shared/infrastructure/middlewares/errorHandler';

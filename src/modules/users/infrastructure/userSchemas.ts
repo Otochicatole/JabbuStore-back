@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DISPLAY_CURRENCIES } from '../../currency-conversion/domain/CurrencyConversion';
 
 export const createUserSchema = z.object({
   body: z.object({
@@ -17,5 +18,14 @@ export const loginUserSchema = z.object({
   body: z.object({
     email: z.string().email(),
     password: z.string().min(1),
+  }),
+});
+
+export const updateUserProfileSchema = z.object({
+  body: z.object({
+    name: z.string().max(50).nullable().optional(),
+    email: z.string().email().nullable().optional(),
+    tradeUrl: z.string().max(2048).nullable().optional(),
+    preferredCurrency: z.enum(DISPLAY_CURRENCIES).optional(),
   }),
 });

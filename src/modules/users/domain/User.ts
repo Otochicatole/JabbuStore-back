@@ -1,3 +1,5 @@
+import type { DisplayCurrency } from "../../currency-conversion/domain/CurrencyConversion";
+
 export interface UserInventoryItem {
   assetId: string;
   classId: string;
@@ -29,6 +31,7 @@ export interface User {
   avatar: string | null;
   profileUrl: string | null;
   tradeUrl?: string | null;
+  preferredCurrency: DisplayCurrency;
   createdAt: Date;
   updatedAt: Date;
   inventory?: UserInventoryItem[];

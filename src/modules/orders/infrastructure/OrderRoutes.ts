@@ -21,7 +21,7 @@ import {
   PaymentQuoteTokenService,
   VerifyPaymentQuoteUseCase,
 } from "../../payment-quotes/application/PaymentQuoteUseCases";
-import { DolarApiExchangeRateProvider } from "../../payment-quotes/infrastructure/DolarApiExchangeRateProvider";
+import { dolarApiExchangeRateProvider } from "../../currency-conversion/infrastructure/CurrencyConversionDependencies";
 import { PaymentQuoteController } from "../../payment-quotes/infrastructure/PaymentQuoteController";
 import { createPaymentQuoteSchema } from "../../payment-quotes/infrastructure/paymentQuoteSchemas";
 
@@ -40,7 +40,7 @@ const paymentQuoteTokenService = new PaymentQuoteTokenService();
 const paymentQuoteController = new PaymentQuoteController(
   new CreatePaymentQuoteUseCase(
     checkoutBaseAmountResolver,
-    new DolarApiExchangeRateProvider(),
+    dolarApiExchangeRateProvider,
     paymentQuoteTokenService,
   ),
 );

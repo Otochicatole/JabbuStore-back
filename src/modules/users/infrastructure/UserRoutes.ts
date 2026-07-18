@@ -5,7 +5,7 @@ import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryU
 import { PrismaUserRepository } from './PrismaUserRepository';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
 import { validate } from '../../../shared/infrastructure/middlewares/validationMiddleware';
-import { createUserSchema, loginUserSchema } from './userSchemas';
+import { createUserSchema, loginUserSchema, updateUserProfileSchema } from './userSchemas';
 
 const router = Router();
 const accountCreateLimiter = rateLimit({
@@ -40,7 +40,7 @@ const userController = new UserController(
 
 router.get('/', authMiddleware, adminOnly, (req, res) => userController.getAll(req, res));
 router.get('/me', authMiddleware, (req, res) => userController.getMe(req, res));
-router.patch('/me', authMiddleware, (req, res) => userController.updateMe(req, res));
+router.patch('/me', authMiddleware, validate(updateUserProfileSchema), (req, res) => userController.updateMe(req, res));
 router.get('/me/inventory', authMiddleware, (req, res) => userController.getInventory(req, res));
 router.post('/', accountCreateLimiter, validate(createUserSchema), (req, res) => userController.create(req, res));
 router.post('/login', loginLimiter, validate(loginUserSchema), (req, res) => userController.login(req, res));

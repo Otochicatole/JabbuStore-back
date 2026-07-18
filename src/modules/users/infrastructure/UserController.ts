@@ -59,8 +59,13 @@ export class UserController {
   async updateMe(req: Request, res: Response) {
     try {
       const userId = (req as any).user.id;
-      const { name, email, tradeUrl } = req.body;
-      const updatedUser = await this.updateUserProfileUseCase.execute(userId, { name, email, tradeUrl });
+      const { name, email, tradeUrl, preferredCurrency } = req.body;
+      const updatedUser = await this.updateUserProfileUseCase.execute(userId, {
+        name,
+        email,
+        tradeUrl,
+        preferredCurrency,
+      });
       const { password: _, ...userWithoutPassword } = updatedUser;
       res.json(userWithoutPassword);
     } catch (error: any) {
