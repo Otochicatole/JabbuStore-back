@@ -9,8 +9,12 @@ async function main() {
 
   console.log('Seeding database...');
 
-  const userPassword = process.env.SEED_USER_PASSWORD || crypto.randomBytes(18).toString('base64url');
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(24).toString('base64url');
+  const userPassword = process.env.SEED_USER_PASSWORD || crypto.randomBytes(18).toString('hex');
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(24).toString('hex');
+  
+  console.log('User password type:', typeof userPassword);
+  console.log('Admin password type:', typeof adminPassword);
+  
   const hashedPassword = await AuthService.hashPassword(userPassword);
   const hashedAdminPassword = await AuthService.hashPassword(adminPassword);
 
