@@ -1,0 +1,13 @@
+{
+  "watch": ["src"],
+  "ext": "ts",
+  "ignore": [
+    "src/**/*.test.ts",
+    "src/**/__tests__/**",
+    "steamwebapi-json-data/**",
+    "storage/**",
+    "prisma/**",
+    "dist/**"
+  ],
+  "exec": "ts-node src/index.ts"
+}

@@ -7,6 +7,7 @@ import { SteamWebApiItemsCatalogStore } from "../infrastructure/SteamWebApiItems
 export interface BotPriceSyncOptions {
   forceRefreshCatalog?: boolean;
   preserveExistingWhenMissing?: boolean;
+  preserveSuspiciousExistingPrice?: boolean;
   useFallbackWhenMissing?: boolean;
   logWarnings?: boolean;
 }
@@ -50,6 +51,7 @@ export class BotPriceSyncService {
     const {
       forceRefreshCatalog = false,
       preserveExistingWhenMissing = false,
+      preserveSuspiciousExistingPrice = true,
       useFallbackWhenMissing = true,
       logWarnings = true,
     } = options;
@@ -148,7 +150,10 @@ export class BotPriceSyncService {
       let finalPrice: number;
       if (result.price != null && result.price > 0) {
         let acceptedCatalogPrice = true;
-        if (this.shouldPreserveSuspiciousExistingPrice(item, result.price)) {
+        if (
+          preserveSuspiciousExistingPrice &&
+          this.shouldPreserveSuspiciousExistingPrice(item, result.price)
+        ) {
           finalPrice = item.price;
           acceptedCatalogPrice = false;
           stats.unpriced++;

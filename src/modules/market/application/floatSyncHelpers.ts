@@ -71,11 +71,11 @@ const PHASE_PAINT_INDEX: Record<
   Ruby: { regular: 415, gamma: 849 },
   Sapphire: { regular: 416, gamma: 850 },
   "Black Pearl": { regular: 417, gamma: 851 },
-  "Phase 1": { regular: 418, gamma: 569, glock: 1119 },
-  "Phase 2": { regular: 419, gamma: 570, glock: 1120 },
-  "Phase 3": { regular: 420, gamma: 571, glock: 1121 },
-  "Phase 4": { regular: 421, gamma: 572, glock: 1122 },
-  Emerald: { regular: 568, gamma: 568, glock: 1118 },
+  "Phase 1": { regular: 418, gamma: 569, glock: 1120 },
+  "Phase 2": { regular: 419, gamma: 570, glock: 1121 },
+  "Phase 3": { regular: 420, gamma: 571, glock: 1122 },
+  "Phase 4": { regular: 421, gamma: 572, glock: 1123 },
+  Emerald: { regular: 568, gamma: 568, glock: 1119 },
 };
 
 /** def_index de cuchillos CS2 (weapon definition index). */

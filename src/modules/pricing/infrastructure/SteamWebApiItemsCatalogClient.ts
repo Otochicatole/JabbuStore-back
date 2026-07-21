@@ -9,6 +9,11 @@ export const STEAMWEBAPI_ITEMS_CATALOG_URL =
 
 export interface FetchItemsCatalogOptions {
   forceRefresh?: boolean;
+  onProgress?: (progress: {
+    currentPage: number;
+    totalPages: number;
+    itemCount: number;
+  }) => void;
 }
 
 export interface FetchItemsCatalogResult {
@@ -48,7 +53,7 @@ export class SteamWebApiItemsCatalogClient {
   ) {}
 
   async fetchCatalog(
-    _options: FetchItemsCatalogOptions = {},
+    options: FetchItemsCatalogOptions = {},
   ): Promise<FetchItemsCatalogResult> {
     const apiKey = this.apiKey || config.steamwebapiApiKey;
     if (!apiKey) {
@@ -64,6 +69,7 @@ export class SteamWebApiItemsCatalogClient {
     const errors: string[] = [];
     let lastStatus = 200;
     let pageCount = 0;
+    let complete = false;
 
     for (let page = 1; page <= this.maxPages; page++) {
       const params = new URLSearchParams({
@@ -93,15 +99,33 @@ export class SteamWebApiItemsCatalogClient {
 
       const rows = rowsFromPayload(await res.json());
       if (rows.length === 0) {
+        complete = true;
+        options.onProgress?.({
+          currentPage: page,
+          totalPages: this.maxPages,
+          itemCount: items.length,
+        });
         break;
       }
 
       pageCount = page;
       items.push(...rows);
+      options.onProgress?.({
+        currentPage: page,
+        totalPages: this.maxPages,
+        itemCount: items.length,
+      });
 
       if (rows.length < this.pageSize) {
+        complete = true;
         break;
       }
+    }
+
+    if (!complete && errors.length === 0) {
+      errors.push(
+        `El catálogo alcanzó ITEMS_CATALOG_MAX_PAGES=${this.maxPages} sin confirmar el final`,
+      );
     }
 
     if (items.length === 0) {
@@ -123,7 +147,7 @@ export class SteamWebApiItemsCatalogClient {
     if (this.market) sourceParams.set("markets", this.market);
 
     return {
-      ok: errors.length === 0,
+      ok: complete && errors.length === 0,
       status: lastStatus,
       errors,
       snapshot: {

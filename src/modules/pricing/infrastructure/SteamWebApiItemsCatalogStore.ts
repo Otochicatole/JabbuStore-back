@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { randomBytes } from "node:crypto";
 import path from "path";
 import { config } from "../../../shared/config";
 import type {
@@ -18,6 +19,42 @@ function normalizeKey(value: string): string {
 
 function hasName(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+async function recoverNewestBackup(filePath: string): Promise<boolean> {
+  const directory = path.dirname(filePath);
+  const prefix = `${path.basename(filePath)}.`;
+  let names: string[];
+  try {
+    names = await fs.readdir(directory);
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
+
+  const candidates = await Promise.all(
+    names
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
+      .map(async (name) => ({
+        path: path.join(directory, name),
+        modifiedAt: (await fs.stat(path.join(directory, name))).mtimeMs,
+      })),
+  );
+  const newest = candidates.sort(
+    (left, right) => right.modifiedAt - left.modifiedAt,
+  )[0];
+  if (!newest) return false;
+  await fs.rename(newest.path, filePath);
+  return true;
 }
 
 function addIndexRow(
@@ -55,8 +92,13 @@ export class SteamWebApiItemsCatalogStore {
       memorySnapshot = parsed;
       memoryIndex = null;
       return parsed;
-    } catch (err: any) {
-      if (err?.code === "ENOENT") return null;
+    } catch (err: unknown) {
+      if (isMissingFile(err)) {
+        if (await recoverNewestBackup(this.absolutePath)) {
+          return this.readCatalog();
+        }
+        return null;
+      }
       throw err;
     }
   }
@@ -65,9 +107,45 @@ export class SteamWebApiItemsCatalogStore {
     const filePath = this.absolutePath;
     await fs.mkdir(path.dirname(filePath), { recursive: true });
 
-    const tempPath = `${filePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(snapshot, null, 2), "utf8");
-    await fs.rename(tempPath, filePath);
+    const suffix = `${process.pid}.${randomBytes(6).toString("hex")}`;
+    const tempPath = `${filePath}.${suffix}.tmp`;
+    const backupPath = `${filePath}.${suffix}.bak`;
+    try {
+      const handle = await fs.open(tempPath, "wx");
+      try {
+        await handle.writeFile(JSON.stringify(snapshot, null, 2), "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+
+      try {
+        await fs.rename(tempPath, filePath);
+      } catch (error: any) {
+        if (!["EEXIST", "EPERM", "ENOTEMPTY"].includes(String(error?.code))) {
+          throw error;
+        }
+        let movedPrevious = false;
+        try {
+          await fs.rename(filePath, backupPath);
+          movedPrevious = true;
+        } catch (backupError: any) {
+          if (backupError?.code !== "ENOENT") throw backupError;
+        }
+        try {
+          await fs.rename(tempPath, filePath);
+          if (movedPrevious) await fs.rm(backupPath, { force: true });
+        } catch (replaceError) {
+          if (movedPrevious) {
+            await fs.rename(backupPath, filePath).catch(() => undefined);
+          }
+          throw replaceError;
+        }
+      }
+    } catch (error) {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
 
     memorySnapshot = snapshot;
     memoryIndex = this.buildIndex(snapshot);

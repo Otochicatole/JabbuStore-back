@@ -176,10 +176,8 @@ app.get('/', (req, res) => {
   });
 });
 
-import { startStoreSyncScheduler } from './modules/store/infrastructure/StoreSyncScheduler';
-import { startMarketSyncScheduler } from './modules/market/infrastructure/MarketSyncScheduler';
-import { startMarketFloatsSyncScheduler } from './modules/market/infrastructure/MarketFloatsSyncScheduler';
-import { startItemsCatalogSyncScheduler } from './modules/pricing/infrastructure/ItemsCatalogSyncScheduler';
+import { startMarketAssetsSyncScheduler } from './modules/market/infrastructure/FullCatalogSyncScheduler';
+import { startLocalPriceCatalogSyncScheduler } from './modules/pricing/infrastructure/LocalPriceCatalogSyncScheduler';
 import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
 
 async function bootstrap() {
@@ -198,14 +196,10 @@ async function bootstrap() {
   initializeTicketSocket(httpServer);
   httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
-    // Inventario físico de bots Steam
-    startStoreSyncScheduler();
-    // Catálogo local de precios de bots vía /steam/api/items
-    startItemsCatalogSyncScheduler();
-    // Catálogo de reventa YouPin vía /steam/api/float/assets (precios incluidos por asset)
-    startMarketSyncScheduler();
-    // Sincronizador periódico de floats del plan Float Small
-    startMarketFloatsSyncScheduler();
+    // Jobs independientes: catálogo local de precios y snapshot de assets.
+    // Ninguno ejecuta el inventario de bots; esa operación sigue siendo manual.
+    startLocalPriceCatalogSyncScheduler();
+    startMarketAssetsSyncScheduler();
     // Ejecución automática de sorteos programados vencidos
     startRaffleScheduler();
   });

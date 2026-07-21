@@ -399,20 +399,52 @@ model FloatItem {
   resaleItemId String
   resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
 
+  @@unique([market, assetId])
   @@map("floats")
 }
 
 model MarketSyncState {
-  key                   String   @id
-  queueVersion          String
-  cursorIndex           Int      @default(0)
-  lastRowsUsed          Int      @default(0)
-  lastCandidatesVisited Int      @default(0)
-  lastError             String?
-  lastStartedAt         DateTime?
-  lastFinishedAt        DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  key                     String   @id
+  queueVersion            String
+  cursorIndex             Int      @default(0)
+  lastRowsUsed            Int      @default(0)
+  lastCandidatesVisited   Int      @default(0)
+  lastError               String?
+  lastStartedAt           DateTime?
+  lastFinishedAt          DateTime?
+
+  // Estado de la descarga/snapshot mas reciente. Puede existir sin haberse publicado.
+  snapshotHash            String?
+  rawAssetCount           Int      @default(0)
+  validAssetCount         Int      @default(0)
+  skippedAssetCount       Int      @default(0)
+  publishedListingCount   Int      @default(0)
+  publishedFloatCount     Int      @default(0)
+  lastDownloadedAt        DateTime?
+  lastPublishedAt         DateTime?
+
+  // Progreso durable de la corrida activa.
+  currentPhase            String?
+  targetAssets            Int      @default(0)
+  assetsPerItem           Int      @default(0)
+  totalCandidates         Int      @default(0)
+  currentCandidate        String?
+  quotaUnitsUsed          Int      @default(0)
+  quotaLimit              Int      @default(0)
+  quotaResetsAt           DateTime?
+  completionReason        String?
+
+  // Metricas del ultimo snapshot efectivamente publicado; nunca se pisan con progreso parcial.
+  lastPublishedSnapshotHash      String?
+  lastPublishedRawAssetCount     Int      @default(0)
+  lastPublishedValidAssetCount   Int      @default(0)
+  lastPublishedSkippedAssetCount Int      @default(0)
+  lastPublishedListingCount      Int      @default(0)
+  lastPublishedFloatCount        Int      @default(0)
+  lastSuccessfulAt               DateTime?
+
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
 
 model Notification {

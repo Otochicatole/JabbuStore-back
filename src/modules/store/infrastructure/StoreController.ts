@@ -3,9 +3,11 @@ import { GetStoreItemsUseCase } from '../application/GetStoreItemsUseCase';
 import { PrismaStoreRepository } from './PrismaStoreRepository';
 import {
   BotPriceSyncService,
+  type ItemsCatalogRefreshService,
   itemsCatalogRefreshService,
 } from '../../../modules/pricing';
 import { BotService } from '../../marketplace/application/BotService';
+import { syncExecutionCoordinator } from '../../market/application/SyncExecutionCoordinator';
 
 const botPriceSyncService = new BotPriceSyncService();
 
@@ -13,6 +15,7 @@ export class StoreController {
   constructor(
     private getStoreItemsUseCase: GetStoreItemsUseCase,
     private storeRepository: PrismaStoreRepository,
+    private catalogRefresh: ItemsCatalogRefreshService = itemsCatalogRefreshService,
   ) {}
 
   async getItems(req: Request, res: Response) {
@@ -26,12 +29,26 @@ export class StoreController {
   }
 
   async syncPrices(req: Request, res: Response) {
+    let lease: ReturnType<typeof syncExecutionCoordinator.tryAcquire> = null;
     try {
+      lease = syncExecutionCoordinator.tryAcquire('bot_only');
+      if (!lease) {
+        const activeJob =
+          syncExecutionCoordinator.getBlockingKind('bot_only') ?? 'bot_only';
+        return res.status(409).json({
+          started: false,
+          error:
+            activeJob === 'market_assets'
+              ? 'Hay una sincronización de assets en curso; los bots se omiten hasta que termine.'
+              : 'Ya hay una sincronización de bots en curso.',
+          activeJob,
+        });
+      }
       console.log(
         '[StoreController] Solicitud de sync de precios de bots recibida. Ejecutando en segundo plano...',
       );
 
-      res.json({
+      res.status(202).json({
         message:
           'Sincronización de precios de bots iniciada en segundo plano. Fuente: catálogo local Items API (/steam/api/items).',
       });
@@ -60,6 +77,7 @@ export class StoreController {
             await botPriceSyncService.enrichItems(items, {
               forceRefreshCatalog: true,
               preserveExistingWhenMissing: true,
+              preserveSuspiciousExistingPrice: false,
               useFallbackWhenMissing: false,
               logWarnings: true,
             });
@@ -87,9 +105,12 @@ export class StoreController {
             '[Store Sync Prices Background Error]',
             err.message || err,
           );
+        } finally {
+          lease?.release();
         }
       })();
     } catch (error: any) {
+      lease?.release();
       console.error('[StoreController Error] Failed to sync bot prices:', error);
       res.status(500).json({ error: error.message || 'Failed to sync bot prices.' });
     }
@@ -97,7 +118,7 @@ export class StoreController {
 
   async getPriceCatalogStatus(req: Request, res: Response) {
     try {
-      const status = await itemsCatalogRefreshService.getStatus();
+      const status = await this.catalogRefresh.getStatus();
       res.json(status);
     } catch (error: any) {
       console.error('[StoreController Error] Failed to get price catalog status:', error);
@@ -107,26 +128,37 @@ export class StoreController {
 
   async refreshPriceCatalog(req: Request, res: Response) {
     try {
-      console.log('[StoreController] Solicitud de refresh del catálogo local Items API recibida.');
-      const result = await itemsCatalogRefreshService.startRefreshInBackground({
+      console.log('[StoreController] Iniciando refresh atómico de items-catalog.json.');
+      const result = this.catalogRefresh.tryStart({
         triggeredBy: 'manual',
       });
 
       if (!result.started) {
+        const message = 'Ya hay una descarga del catálogo local en curso.';
+        const status = await this.catalogRefresh.getStatus();
         return res.status(409).json({
-          error: 'Ya hay una descarga del catálogo de precios en curso.',
-          message: 'Ya hay una descarga del catálogo de precios en curso.',
-          catalog: result.status,
+          started: false,
+          error: message,
+          message,
+          status,
+          catalog: status,
         });
       }
 
+      const status = await this.catalogRefresh.getStatus();
       res.status(202).json({
-        message: 'Descarga del catálogo de precios iniciada en segundo plano.',
-        catalog: result.status,
+        started: true,
+        message: 'Descarga atómica de items-catalog.json iniciada en segundo plano.',
+        statusUrl: '/api/store/prices/catalog/status',
+        status,
+        catalog: status,
+      });
+      void result.execution.catch((error) => {
+        console.error('[StoreController] Refresh del catálogo local falló:', error);
       });
     } catch (error: any) {
       console.error('[StoreController Error] Failed to refresh price catalog:', error);
-      const status = await itemsCatalogRefreshService.getStatus().catch(() => null);
+      const status = await this.catalogRefresh.getStatus().catch(() => null);
       res.status(500).json({
         error: error.message || 'Failed to refresh price catalog.',
         previousCatalog: status,

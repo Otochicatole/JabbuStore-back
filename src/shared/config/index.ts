@@ -19,6 +19,12 @@ const toPositiveInteger = (value: string | undefined, fallback: number) => {
   return parsed > 0 ? parsed : fallback;
 };
 
+const marketAssetsSyncIntervalMinutes = toPositiveInteger(
+  process.env.MARKET_ASSETS_SYNC_INTERVAL_MINUTES ||
+    process.env.FULL_CATALOG_SYNC_INTERVAL_MINUTES,
+  300,
+);
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   jwtSecret: process.env.JWT_SECRET || '',
@@ -35,9 +41,7 @@ export const config = {
    */
   storeSyncIntervalMinutes: parseInt(process.env.STORE_SYNC_INTERVAL_MINUTES || '180', 10),
   
-  /**
-   * Habilitar o deshabilitar la sincronización automática periódica con Steam Web API.
-   */
+  /** Habilitar/deshabilitar sólo el scheduler de assets del Global Market. */
   enableSync: process.env.ENABLE_SYNC === 'true',
   /** Habilitar/deshabilitar solo el scheduler automático del catálogo local de precios. */
   enableItemsCatalogSync: process.env.ENABLE_ITEMS_CATALOG_SYNC === 'true',
@@ -45,9 +49,8 @@ export const config = {
   /**
    * Configuración del indexado de floats (endpoint /steam/api/float/assets).
    *
-   * IMPORTANTE — modelo de rate limit del plan "Float Small" (confirmado por headers
-   * x-ratelimit-*): el límite se mide en FILAS, no en requests. Cada request consume
-   * tantas unidades como el parámetro `limit`. Cupo: 100 filas/min, 5.000/día, 50.000/mes.
+   * El límite se mide en assets solicitados, no en requests HTTP. Cada llamada
+   * consume tantas unidades como su `limit`; el valor canónico actual es 10.000/min.
    */
   floatSync: {
     /** Máximo de floats que se guardan/piden por listing (on-demand; luego se ordena por precio). */
@@ -62,8 +65,15 @@ export const config = {
     pageSize: parseInt(process.env.FLOAT_SYNC_PAGE_SIZE || '50', 10),
     /** Páginas máximas a escanear en Dopplers para encontrar la fase correcta. */
     maxPages: parseInt(process.env.FLOAT_SYNC_MAX_PAGES || '3', 10),
-    /** Filas/min máximas a consumir (margen de seguridad bajo el límite real de 100). */
-    maxRowsPerMinute: parseInt(process.env.FLOAT_SYNC_MAX_ROWS_PER_MIN || '90', 10),
+    /**
+     * Assets/minuto disponibles en float/assets. El proveedor contabiliza cada fila
+     * solicitada, por lo que una petición con limit=10 reserva 10 unidades.
+     */
+    maxRowsPerMinute: toPositiveInteger(
+      process.env.FLOAT_SYNC_MAX_ASSETS_PER_MINUTE ||
+        process.env.FLOAT_SYNC_MAX_ROWS_PER_MIN,
+      10_000,
+    ),
     /**
      * Habilitar el REINDEXADO MASIVO en background. Apagado por defecto: consume el
      * cupo del plan indexando miles de ítems. Los floats se piden bajo demanda (modal).
@@ -74,7 +84,7 @@ export const config = {
     enableCsfloatFallback: process.env.FLOAT_SYNC_ENABLE_CSFLOAT !== 'false',
     /** Habilitar CSFloat en el reindexado masivo (consume más cupo de filas). */
     enableCsfloatInReindex: process.env.FLOAT_SYNC_REINDEX_CSFLOAT === 'true',
-    /** Tope de FILAS por ejecución del reindexado (seguro bajo el límite diario de 5.000). */
+    /** Tope legacy por ejecución del reindexado manual (el scheduler está retirado). */
     reindexRowBudget: parseInt(process.env.FLOAT_SYNC_ROW_BUDGET || '4500', 10),
     /** Considera fresco un float sincronizado hace menos de estos minutos (no re-sincroniza). */
     freshnessMinutes: parseInt(process.env.FLOAT_SYNC_FRESHNESS_MINUTES || '1440', 10),
@@ -83,7 +93,7 @@ export const config = {
   /**
    * Sync del catálogo YouPin vía GET /steam/api/float/assets (source=youpin).
    * Query params: source=youpin, only_market_id=1, with_items=1, sort=newest (catálogo vivo).
-   * Cada fila = un asset real con float; limit=50 por página (tope plan Float Small).
+   * Flujo legacy incremental. El snapshot canónico vive en marketAssetsCatalog.
    */
   marketSync: {
     pageSize: parseInt(process.env.MARKET_SYNC_PAGE_SIZE || '100', 10),
@@ -99,6 +109,44 @@ export const config = {
     priorityRowBudget: parseInt(process.env.MARKET_SYNC_PRIORITY_ROW_BUDGET || '1000', 10),
     /** Filas pedidas por cada item consultado por market_hash_name. */
     priorityRowsPerItem: parseInt(process.env.MARKET_SYNC_PRIORITY_ROWS_PER_ITEM || '10', 10),
+  },
+
+  /** Snapshot transaccional del Global Market obtenido desde float/assets. */
+  marketAssetsCatalog: {
+    target: toPositiveInteger(process.env.MARKET_ASSETS_TARGET, 10_000),
+    assetsPerItem: Math.min(
+      10,
+      toPositiveInteger(process.env.MARKET_ASSETS_PER_ITEM, 10),
+    ),
+    /** Requests float/assets simultáneos; 3 evita saturación observada con 12. */
+    concurrency: toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 3),
+    sort: (process.env.MARKET_ASSETS_SORT || 'newest') as
+      | 'newest'
+      | 'oldest'
+      | 'lowest_float'
+      | 'highest_float',
+    snapshotPath:
+      process.env.MARKET_ASSETS_CATALOG_PATH ||
+      process.env.MARKET_ASSETS_SNAPSHOT_PATH ||
+      'steamwebapi-json-data/market-assets-catalog.json',
+    checkpointPath:
+      process.env.MARKET_ASSETS_CHECKPOINT_PATH ||
+      process.env.MARKET_ASSETS_PENDING_PATH ||
+      'steamwebapi-json-data/market-assets-checkpoint.json',
+    maxResponseBytes: toPositiveInteger(
+      process.env.MARKET_ASSETS_MAX_RESPONSE_BYTES,
+      8 * 1024 * 1024,
+    ),
+  },
+
+  /** Scheduler independiente del snapshot de assets del Global Market. */
+  marketAssetsSync: {
+    intervalMinutes: marketAssetsSyncIntervalMinutes,
+  },
+
+  /** @deprecated Alias interno para código anterior a la separación de jobs. */
+  fullCatalogSync: {
+    intervalMinutes: marketAssetsSyncIntervalMinutes,
   },
 
   /** Legacy/diagnóstico: GET /market/youpin/prices (MCP Market Prices). */
@@ -123,11 +171,10 @@ export const config = {
     currency: process.env.ITEMS_CATALOG_CURRENCY || process.env.ITEMS_PRICES_CURRENCY || 'USD',
     pageSize: parseInt(process.env.ITEMS_CATALOG_PAGE_SIZE || '50000', 10),
     maxPages: parseInt(process.env.ITEMS_CATALOG_MAX_PAGES || '10', 10),
-    syncIntervalMinutes: parseInt(
+    syncIntervalMinutes: toPositiveInteger(
       process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES ||
-        process.env.STORE_SYNC_INTERVAL_MINUTES ||
-        '720',
-      10,
+        process.env.STORE_SYNC_INTERVAL_MINUTES,
+      300,
     ),
     staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),
     select:

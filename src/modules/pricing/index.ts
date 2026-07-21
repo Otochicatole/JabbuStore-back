@@ -7,6 +7,7 @@ export { BotPriceSyncService } from "./application/BotPriceSyncService";
 export {
   ItemsCatalogRefreshService,
   itemsCatalogRefreshService,
+  type ItemsCatalogRefreshStartResult,
 } from "./application/ItemsCatalogRefreshService";
 export {
   SteamWebApiMarketPricesClient,

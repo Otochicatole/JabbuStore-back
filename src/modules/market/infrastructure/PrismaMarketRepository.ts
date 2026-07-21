@@ -1,4 +1,5 @@
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
+import { createHash } from 'node:crypto';
 import { config } from '../../../shared/config';
 import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
@@ -49,6 +50,13 @@ function mapMarketListingRow(
 function storeMinPriceGt(): number {
   const min = config.marketSync.minPrice;
   return min > 0 ? min : 0;
+}
+
+/** Stable across snapshot publications, which keeps cart references deterministic. */
+export function stableMarketFloatId(market: string, assetId: string): string {
+  return createHash('sha256')
+    .update(`${market.trim().toLowerCase()}:${assetId.trim()}`)
+    .digest('hex');
 }
 
 export class PrismaMarketRepository implements IMarketRepository {
@@ -391,6 +399,144 @@ export class PrismaMarketRepository implements IMarketRepository {
     }
   }
 
+  async replaceAutomaticCatalogWithFloats(
+    listings: MarketListingUpsert[],
+    floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
+  ): Promise<void> {
+    const names = listings.map((listing) => listing.name);
+    const uniqueNames = new Set(names);
+    if (uniqueNames.size !== names.length) {
+      throw new Error('El snapshot contiene nombres de listing duplicados.');
+    }
+
+    const seenAssets = new Set<string>();
+    for (const [name, floats] of floatsByName) {
+      if (!uniqueNames.has(name)) {
+        throw new Error(`El snapshot contiene assets para un listing inexistente: ${name}`);
+      }
+      for (const floatItem of floats) {
+        const assetKey = `${floatItem.market}:${floatItem.assetId}`.toUpperCase();
+        if (seenAssets.has(assetKey)) {
+          throw new Error(`El snapshot contiene un asset duplicado: ${floatItem.assetId}`);
+        }
+        seenAssets.add(assetKey);
+      }
+    }
+
+    const now = new Date();
+    marketSyncProgressService.startDatabaseSave(listings.length);
+
+    await prisma.$transaction(
+      async (tx) => {
+        const manualRows = await tx.marketListing.findMany({
+          where: { isPriceManual: true },
+          select: { id: true, name: true },
+        });
+        const manualByName = new Map(manualRows.map((row) => [row.name, row]));
+
+        // Only YouPin provider data belongs to this snapshot. Other market assets
+        // and manual listings are deliberately left intact.
+        await tx.floatItem.deleteMany({ where: { market: 'YOUPIN' } });
+        await tx.marketListing.deleteMany({
+          where: { provider: 'youpin', isPriceManual: false },
+        });
+        await tx.marketListing.updateMany({
+          where: { provider: 'youpin', isPriceManual: true },
+          data: {
+            youpinAsk: null,
+            youpinVolume: 0,
+            floatsSyncedAt: now,
+          },
+        });
+
+        const automaticRows = listings
+          .filter((listing) => !manualByName.has(listing.name))
+          .map((listing) => ({
+            name: listing.name,
+            provider: listing.provider,
+            youpinAsk: listing.youpinAsk,
+            youpinVolume: listing.youpinVolume,
+            price: listing.price,
+            iconUrl: listing.iconUrl,
+            rarity: listing.rarity || 'common',
+            exterior: listing.exterior,
+            category: listing.category || 'other',
+            isStatTrak: listing.isStatTrak,
+            isSouvenir: listing.isSouvenir,
+            isPriceManual: false,
+            floatsSyncedAt: now,
+          }));
+
+        for (let index = 0; index < automaticRows.length; index += 400) {
+          await tx.marketListing.createMany({
+            data: automaticRows.slice(index, index + 400),
+          });
+          marketSyncProgressService.updateDatabaseProgress(
+            Math.min(index + 400, automaticRows.length),
+          );
+        }
+
+        // A manual listing included in the new snapshot keeps its price and ID,
+        // while all provider metadata and its live assets are refreshed.
+        for (const listing of listings) {
+          const manual = manualByName.get(listing.name);
+          if (!manual) continue;
+          await tx.marketListing.update({
+            where: { id: manual.id },
+            data: {
+              youpinAsk: listing.youpinAsk,
+              youpinVolume: listing.youpinVolume,
+              iconUrl: listing.iconUrl,
+              rarity: listing.rarity || 'common',
+              exterior: listing.exterior,
+              category: listing.category || 'other',
+              isStatTrak: listing.isStatTrak,
+              isSouvenir: listing.isSouvenir,
+              floatsSyncedAt: now,
+            },
+          });
+        }
+
+        const persistedListings = await tx.marketListing.findMany({
+          where: { name: { in: names } },
+          select: { id: true, name: true },
+        });
+        const listingIdByName = new Map(
+          persistedListings.map((listing) => [listing.name, listing.id]),
+        );
+
+        const floatRows = listings.flatMap((listing) => {
+          const resaleItemId = listingIdByName.get(listing.name);
+          if (!resaleItemId) {
+            throw new Error(`No se pudo persistir el listing ${listing.name}.`);
+          }
+          return (floatsByName.get(listing.name) ?? []).map((floatItem) => ({
+            id: stableMarketFloatId('YOUPIN', floatItem.assetId),
+            assetId: floatItem.assetId,
+            floatValue: floatItem.floatValue,
+            paintSeed: floatItem.paintSeed,
+            market: 'YOUPIN',
+            price: floatItem.price,
+            inspectLink: floatItem.inspectLink ?? null,
+            available: true,
+            externalId: floatItem.externalId ?? null,
+            lastSyncAt: now,
+            resaleItemId,
+          }));
+        });
+
+        for (let index = 0; index < floatRows.length; index += 400) {
+          await tx.floatItem.createMany({
+            data: floatRows.slice(index, index + 400),
+          });
+        }
+
+        marketSyncProgressService.updateDatabaseProgress(listings.length);
+      },
+      { maxWait: 10_000, timeout: 120_000 },
+    );
+  }
+
   async updatePrice(id: string, price: number): Promise<void> {
     await prisma.marketListing.update({
       where: { id },
@@ -432,6 +578,7 @@ export class PrismaMarketRepository implements IMarketRepository {
       }),
       prisma.floatItem.createMany({
         data: floats.map((f) => ({
+          id: f.id ?? stableMarketFloatId(f.market, f.assetId),
           assetId: f.assetId,
           floatValue: f.floatValue,
           paintSeed: f.paintSeed,

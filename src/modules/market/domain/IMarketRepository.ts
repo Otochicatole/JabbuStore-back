@@ -19,6 +19,16 @@ export interface IMarketRepository {
     emptyListingNames: string[],
   ): Promise<void>;
 
+  /**
+   * Publica un snapshot completo de YouPin en una unica transaccion. El catalogo
+   * anterior permanece visible hasta el commit y los listings manuales conservan
+   * su precio.
+   */
+  replaceAutomaticCatalogWithFloats(
+    listings: MarketListingUpsert[],
+    floatsByName: Map<string, Omit<FloatItem, 'resaleItemId'>[]>,
+  ): Promise<void>;
+
   /** Devuelve todos los listings activos */
   findAll(): Promise<MarketListing[]>;
 

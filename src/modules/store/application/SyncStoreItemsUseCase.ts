@@ -116,6 +116,20 @@ export class SyncStoreItemsUseCase {
     });
 
     const results = await Promise.allSettled(fetchPromises);
+    const failedInventories = results.filter(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failedInventories.length > 0) {
+      for (const failure of failedInventories) {
+        console.error(
+          '[Store Inventory Sync Error] Failed to fetch bot inventory:',
+          failure.reason,
+        );
+      }
+      throw new Error(
+        `Falló la descarga de ${failedInventories.length}/${activeBots.length} inventario(s) de bots; se preservó la tienda anterior.`,
+      );
+    }
     const aggregatedItems: StoreItem[] = [];
 
     for (const result of results) {
@@ -124,8 +138,6 @@ export class SyncStoreItemsUseCase {
         const inspectLinks = await this.fetchInspectLinksByAssetId(steamId);
         const parsedItems = this.parseSteamInventory(data, steamId, inspectLinks);
         aggregatedItems.push(...parsedItems);
-      } else {
-        console.error(`[Store Inventory Sync Error] Failed to fetch bot inventory:`, result.reason);
       }
     }
 
@@ -168,12 +180,23 @@ export class SyncStoreItemsUseCase {
       const existingByAsset = new Map(
         existingItems.map((item) => [item.assetId, item]),
       );
+      const itemsWithPreviousCatalogPrice = tradableAggregatedItems.map(
+        (item) => {
+          const previous = existingByAsset.get(item.assetId);
+          return previous && previous.price > 0
+            ? { ...item, price: previous.price }
+            : item;
+        },
+      );
 
       const { items: pricedItems, catalogAvailable } =
-        await botPriceSyncService.enrichItems(tradableAggregatedItems, {
+        await botPriceSyncService.enrichItems(itemsWithPreviousCatalogPrice, {
           forceRefreshCatalog: false,
           preserveExistingWhenMissing: true,
-          useFallbackWhenMissing: true,
+          preserveSuspiciousExistingPrice: false,
+          // El job de bots fija precios únicamente desde
+          // items-catalog.json; no inventa precios locales para faltantes.
+          useFallbackWhenMissing: false,
           logWarnings: true,
         });
 

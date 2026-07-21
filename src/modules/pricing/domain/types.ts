@@ -214,4 +214,7 @@ export interface BotPriceCatalogStatus {
   lastFinishedAt?: string | null;
   lastItemCount?: number | null;
   triggeredBy?: string | null;
+  currentPage?: number;
+  currentItemCount?: number;
+  totalPages?: number;
 }

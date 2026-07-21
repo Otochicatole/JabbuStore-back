@@ -67,15 +67,17 @@ export class PrismaStoreRepository implements IStoreRepository {
       batches.push(sanitizedItems.slice(i, i + chunkSize));
     }
 
-    await prisma.storeItem.deleteMany();
-    
     console.log(`[Prisma Store Repository] Saving ${sanitizedItems.length} items in ${batches.length} chunks...`);
-    for (let idx = 0; idx < batches.length; idx++) {
-      const batch = batches[idx]!;
-      await prisma.storeItem.createMany({
-        data: batch,
-      });
-    }
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.storeItem.deleteMany();
+        for (let idx = 0; idx < batches.length; idx++) {
+          const batch = batches[idx]!;
+          await tx.storeItem.createMany({ data: batch });
+        }
+      },
+      { maxWait: 10_000, timeout: 120_000 },
+    );
   }
 
   async updatePricesMany(updates: StorePriceUpdate[]): Promise<number> {

@@ -4,11 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "prisma generate && nodemon src/index.ts",
-    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "prisma generate && nodemon",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
+    "prisma:deploy": "prisma migrate deploy",
     "prisma:migrate": "prisma migrate dev",
     "seed:reviews": "ts-node --transpile-only scripts/seed-home-reviews.ts",
     "reindex-floats": "ts-node --transpile-only scripts/reindex-floats.ts",
@@ -60,7 +63,8 @@
     "nodemon": "^3.1.14",
     "prisma": "^7.8.0",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
   },
   "prisma": {
     "seed": "ts-node --transpile-only prisma/seed.ts"

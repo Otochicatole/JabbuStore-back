@@ -1,33 +1,25 @@
 import { Router } from 'express';
 import { MarketController } from './MarketController';
-import { PrismaMarketRepository } from './PrismaMarketRepository';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
-import { SyncMarketListingsUseCase } from '../application/SyncMarketListingsUseCase';
 import { GetResaleItemFloatsUseCase } from '../application/GetResaleItemFloatsUseCase';
-import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUseCase';
-import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
-import { PrismaMarketSyncStateRepository } from './PrismaMarketSyncStateRepository';
+import {
+  getMarketSyncStatusUseCase,
+  marketRepository,
+  runFullCatalogSyncUseCase,
+} from './MarketSyncDependencies';
 
 const router = Router();
 
 // Inyección de dependencias del módulo market
-const marketRepository = new PrismaMarketRepository();
-const marketSyncStateRepository = new PrismaMarketSyncStateRepository();
-const storeRepository = new PrismaStoreRepository();
 const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase(marketRepository);
-const syncMarketListingsUseCase = new SyncMarketListingsUseCase(
-  marketRepository,
-  marketSyncStateRepository,
-);
 const getResaleItemFloatsUseCase = new GetResaleItemFloatsUseCase(marketRepository);
-const syncStoreItemsUseCase = new SyncStoreItemsUseCase(storeRepository);
 
 const marketController = new MarketController(
   getMarketStoreAssetsUseCase,
-  syncMarketListingsUseCase,
+  runFullCatalogSyncUseCase,
+  getMarketSyncStatusUseCase,
   getResaleItemFloatsUseCase,
-  syncStoreItemsUseCase
 );
 
 // Ruta pública — catálogo YouPin (un asset/float por fila; admin y /buy reventa)

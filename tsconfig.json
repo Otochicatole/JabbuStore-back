@@ -48,5 +48,12 @@
     "noImplicitAny": false,
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "prisma", "prisma.config.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "prisma",
+    "prisma.config.ts",
+    "src/**/*.vitest.test.ts",
+    "src/**/__tests__/**"
+  ]
 }

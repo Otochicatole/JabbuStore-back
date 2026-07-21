@@ -1,13 +1,10 @@
 import 'dotenv/config';
-import { PrismaMarketRepository } from '../src/modules/market/infrastructure/PrismaMarketRepository';
-import { PrismaMarketSyncStateRepository } from '../src/modules/market/infrastructure/PrismaMarketSyncStateRepository';
-import { SyncMarketListingsUseCase } from '../src/modules/market/application/SyncMarketListingsUseCase';
+import { applyRuntimeConfigOverrides } from '../src/shared/config';
+import { runFullCatalogSyncUseCase } from '../src/modules/market/infrastructure/MarketSyncDependencies';
 
 async function main() {
-  const repo = new PrismaMarketRepository();
-  const syncStateRepo = new PrismaMarketSyncStateRepository();
-  const useCase = new SyncMarketListingsUseCase(repo, syncStateRepo);
-  const result = await useCase.execute();
+  await applyRuntimeConfigOverrides();
+  const result = await runFullCatalogSyncUseCase.execute('script');
   console.log('[Sync Market Catalog] Resultado:', result);
 }
 
