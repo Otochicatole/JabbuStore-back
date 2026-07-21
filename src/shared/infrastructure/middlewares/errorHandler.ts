@@ -8,8 +8,9 @@ export const errorHandler = (err: any, req: Request, res: Response, next: NextFu
 
   // Specific handling for known error types can be added here
   if (err.name === 'PrismaClientKnownRequestError') {
-    return res.status(400).json({
-      error: 'Database operation failed',
+    const isSchemaMismatch = err.code === 'P2021' || err.code === 'P2022';
+    return res.status(isSchemaMismatch ? 500 : 400).json({
+      error: isSchemaMismatch ? 'Database schema mismatch' : 'Database operation failed',
       message: isProduction ? 'A database error occurred' : err.message
     });
   }
