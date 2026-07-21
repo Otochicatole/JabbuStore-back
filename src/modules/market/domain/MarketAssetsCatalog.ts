@@ -1,5 +1,5 @@
 export const MARKET_ASSETS_CATALOG_SCHEMA_VERSION = 1 as const;
-export const MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION = 2 as const;
+export const MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION = 3 as const;
 
 export type MarketAssetsCatalogSort =
   | "newest"
@@ -52,6 +52,8 @@ export interface MarketAssetsCatalogSnapshot {
  * incompleto de la cola priorizada.
  */
 export interface MarketAssetsCandidateCheckpoint {
+  /** Tamaño elegido para la primera página; 0 hasta resolver el hint. */
+  initialLimit: number;
   offset: number;
   validAssetCount: number;
   rawAssetCount: number;
@@ -60,6 +62,9 @@ export interface MarketAssetsCandidateCheckpoint {
   creditsUsed: number;
   providerTotal: number;
   consecutiveFailures: number;
+  pageRequests: number;
+  httpAttempts: number;
+  deferredRecoveryAttempts: number;
   completed: boolean;
   exhausted: boolean;
   lastError: string | null;
@@ -67,11 +72,16 @@ export interface MarketAssetsCandidateCheckpoint {
 
 export interface MarketAssetsCollectionCheckpoint {
   schemaVersion: typeof MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION;
+  runId: string | null;
   queueVersion: string;
   targetAssets: number;
   assetsPerItem: number;
   sort: MarketAssetsCatalogSort;
   concurrency: number;
+  /** Estado AIMD durable; nunca supera tres requests simultáneas. */
+  effectiveConcurrency: number;
+  successfulBatchesSinceReduction: number;
+  adaptiveFailureRounds: number;
   cursorIndex: number;
   candidatesVisited: number;
   totalCandidates: number;

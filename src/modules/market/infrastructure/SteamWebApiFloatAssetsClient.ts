@@ -1,4 +1,5 @@
 import { config } from "../../../shared/config";
+import type { MarketAssetsRequestOutcome } from "../application/IMarketAssetsCatalogClient";
 import {
   floatRateLimiter,
   type FloatRateLimitPriority,
@@ -50,6 +51,8 @@ export interface FloatAssetsPage {
   quotaUnitsUsed: number;
   creditsUsed: number;
   rateLimit: FloatRateLimitSnapshot;
+  durationMs: number;
+  outcome: MarketAssetsRequestOutcome;
 }
 
 export function parseFloatAssetsResponse(parsed: any): {
@@ -119,6 +122,8 @@ function emptyPage(input: {
   error: string;
   rateLimited?: boolean;
   quotaUnitsUsed: number;
+  durationMs?: number;
+  outcome?: MarketAssetsRequestOutcome;
 }): FloatAssetsPage {
   return {
     assets: [],
@@ -134,6 +139,20 @@ function emptyPage(input: {
     quotaUnitsUsed: input.quotaUnitsUsed,
     creditsUsed: 0,
     rateLimit: floatRateLimiter.getSnapshot(),
+    durationMs: input.durationMs ?? 0,
+    outcome:
+      input.outcome ??
+      (input.status === 404
+        ? "not_found"
+        : input.status === 429
+          ? "rate_limited"
+          : input.status === 0
+            ? "network"
+            : input.status === 408 ||
+                input.status === 425 ||
+                input.status >= 500
+              ? "http_transient"
+              : "fatal"),
   };
 }
 
@@ -201,55 +220,41 @@ export class SteamWebApiFloatAssetsClient {
       () => controller.abort(),
       query.requestTimeoutMs ?? defaultTimeoutMs(),
     );
-    let res: Response;
+    const requestStartedAt = Date.now();
     try {
-      res = await fetch(`${STEAM_FLOAT_ASSETS_URL}?${params.toString()}`, {
-        signal: controller.signal,
-        headers: { accept: "application/json" },
-      });
-    } catch (error) {
-      return emptyPage({
-        limit,
-        offset,
-        sort,
-        status: 0,
-        error:
-          error instanceof Error && error.name === "AbortError"
-            ? "SteamWebAPI float/assets agotó el tiempo de espera"
-            : error instanceof Error
-              ? error.message
-              : String(error),
-        quotaUnitsUsed: limit,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
+      const res = await fetch(
+        `${STEAM_FLOAT_ASSETS_URL}?${params.toString()}`,
+        {
+          signal: controller.signal,
+          headers: { accept: "application/json" },
+        },
+      );
 
-    const rateHeaders = readRateLimitHeaders(res);
-    if (res.status === 429) {
-      await floatRateLimiter.penalize(rateHeaders);
-    } else {
-      await floatRateLimiter.observeHeaders(rateHeaders);
-    }
+      const rateHeaders = readRateLimitHeaders(res);
+      if (res.status === 429) {
+        await floatRateLimiter.penalize(rateHeaders);
+      } else {
+        await floatRateLimiter.observeHeaders(rateHeaders);
+      }
 
-    const advertisedLength = Number(res.headers.get("content-length"));
-    if (
-      Number.isFinite(advertisedLength) &&
-      advertisedLength > maxResponseBytes()
-    ) {
-      return emptyPage({
-        limit,
-        offset,
-        sort,
-        status: res.status,
-        error: `Respuesta float/assets demasiado grande (${advertisedLength} bytes)`,
-        rateLimited: res.status === 429,
-        quotaUnitsUsed: limit,
-      });
-    }
+      const advertisedLength = Number(res.headers.get("content-length"));
+      if (
+        Number.isFinite(advertisedLength) &&
+        advertisedLength > maxResponseBytes()
+      ) {
+        return emptyPage({
+          limit,
+          offset,
+          sort,
+          status: res.status,
+          error: `Respuesta float/assets demasiado grande (${advertisedLength} bytes)`,
+          rateLimited: res.status === 429,
+          quotaUnitsUsed: limit,
+          durationMs: Date.now() - requestStartedAt,
+          outcome: "fatal",
+        });
+      }
 
-    let body = "";
-    try {
       const bytes = Buffer.from(await res.arrayBuffer());
       if (bytes.byteLength > maxResponseBytes()) {
         return emptyPage({
@@ -260,58 +265,77 @@ export class SteamWebApiFloatAssetsClient {
           error: `Respuesta float/assets demasiado grande (${bytes.byteLength} bytes)`,
           rateLimited: res.status === 429,
           quotaUnitsUsed: limit,
+          durationMs: Date.now() - requestStartedAt,
+          outcome: "fatal",
         });
       }
-      body = bytes.toString("utf8");
+      const body = bytes.toString("utf8");
+
+      if (!res.ok) {
+        return emptyPage({
+          limit,
+          offset,
+          sort,
+          status: res.status,
+          error: body.slice(0, 500) || `HTTP ${res.status}`,
+          rateLimited: res.status === 429,
+          quotaUnitsUsed: limit,
+          durationMs: Date.now() - requestStartedAt,
+        });
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return emptyPage({
+          limit,
+          offset,
+          sort,
+          status: res.status,
+          error: "SteamWebAPI devolvió JSON inválido",
+          quotaUnitsUsed: limit,
+          durationMs: Date.now() - requestStartedAt,
+          // Un body truncado o una respuesta temporal del upstream no cambia
+          // el contrato de nuestra consulta y puede recuperarse serialmente.
+          outcome: "http_transient",
+        });
+      }
+
+      const page = parseFloatAssetsResponse(parsed);
+      return {
+        ...page,
+        ok: true,
+        status: res.status,
+        error: null,
+        rateLimited: false,
+        rowsUsed: limit,
+        quotaUnitsUsed: limit,
+        rateLimit: floatRateLimiter.getSnapshot(),
+        durationMs: Date.now() - requestStartedAt,
+        outcome: page.assets.length > 0 ? "success" : "success_empty",
+      };
     } catch (error) {
+      const timedOut =
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError");
       return emptyPage({
         limit,
         offset,
         sort,
-        status: res.status,
-        error: error instanceof Error ? error.message : String(error),
-        rateLimited: res.status === 429,
+        status: 0,
+        error: timedOut
+          ? "SteamWebAPI float/assets agotó el tiempo de espera"
+          : error instanceof Error
+            ? error.message
+            : String(error),
         quotaUnitsUsed: limit,
+        durationMs: Date.now() - requestStartedAt,
+        outcome: timedOut ? "timeout" : "network",
       });
+    } finally {
+      clearTimeout(timeout);
     }
-
-    if (!res.ok) {
-      return emptyPage({
-        limit,
-        offset,
-        sort,
-        status: res.status,
-        error: body.slice(0, 500) || `HTTP ${res.status}`,
-        rateLimited: res.status === 429,
-        quotaUnitsUsed: limit,
-      });
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      return emptyPage({
-        limit,
-        offset,
-        sort,
-        status: res.status,
-        error: "SteamWebAPI devolvió JSON inválido",
-        quotaUnitsUsed: limit,
-      });
-    }
-
-    const page = parseFloatAssetsResponse(parsed);
-    return {
-      ...page,
-      ok: true,
-      status: res.status,
-      error: null,
-      rateLimited: false,
-      rowsUsed: limit,
-      quotaUnitsUsed: limit,
-      rateLimit: floatRateLimiter.getSnapshot(),
-    };
   }
 
   /** Legacy/diagnóstico: catálogo general no priorizado. */

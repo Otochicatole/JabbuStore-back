@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { RunFullCatalogSyncUseCase } from "../RunFullCatalogSyncUseCase";
 import { syncExecutionCoordinator } from "../SyncExecutionCoordinator";
+import { MarketAssetsApiError } from "../IMarketAssetsCatalogClient";
 
 function marketResult() {
   return {
@@ -82,6 +83,142 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     expect(state.markFullSuccess).toHaveBeenCalledOnce();
   });
 
+  it("reanuda la misma corrida durable con un intento nuevo", async () => {
+    const recovered = { ...marketResult(), recoveredSnapshot: true };
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => true),
+      recoverPending: vi.fn(async () => recovered),
+      execute: vi.fn(),
+    };
+    const state = stateRepository();
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-1" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+    };
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      state as any,
+      runs as any,
+    );
+
+    await expect(useCase.execute("scheduler-startup")).resolves.toEqual(
+      recovered,
+    );
+
+    expect(runs.startAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateKey: expect.any(String),
+        triggeredBy: "scheduler-startup",
+        recoveryRequested: true,
+        recoveryKind: "pending",
+      }),
+    );
+    expect(state.markStarted).not.toHaveBeenCalled();
+    expect(runs.complete).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ completionReason: "catalog_exhausted" }),
+    );
+    expect(runs.finishAttempt).not.toHaveBeenCalled();
+    expect(runs.complete.mock.invocationCallOrder[0]).toBeLessThan(
+      state.markFullSuccess.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("conserva recuperable la publicación si falla el cierre durable de la corrida", async () => {
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => true),
+      recoverPending: vi.fn(async () => marketResult()),
+      execute: vi.fn(),
+    };
+    const state = stateRepository();
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-1" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => {
+        throw new Error("run transaction failed");
+      }),
+      finishAttempt: vi.fn(async () => undefined),
+    };
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      state as any,
+      runs as any,
+    );
+
+    await expect(useCase.execute("scheduler-startup")).rejects.toThrow(
+      "run transaction failed",
+    );
+
+    expect(state.markFullSuccess).not.toHaveBeenCalled();
+    expect(state.markFailed).toHaveBeenCalledWith(
+      expect.any(String),
+      "run transaction failed",
+      true,
+    );
+    expect(runs.finishAttempt).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ resumable: true }),
+    );
+  });
+
+  it("abre una corrida nueva cuando el checkpoint existe pero es incompatible", async () => {
+    const recovered = marketResult();
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => false),
+      // `recoverPending` deja que Collector elimine el checkpoint incompatible
+      // y ejecute desde cero dentro de la corrida recién abierta.
+      recoverPending: vi.fn(async () => recovered),
+      execute: vi.fn(),
+    };
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-new" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+    };
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      stateRepository() as any,
+      runs as any,
+    );
+
+    await expect(useCase.execute("scheduler")).resolves.toEqual(recovered);
+    expect(runs.startAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recoveryRequested: false,
+        recoveryKind: "none",
+      }),
+    );
+  });
+
+  it("no abre ni reemplaza una corrida si no puede evaluar readiness", async () => {
+    const readiness = new Error("catálogo local ausente");
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => {
+        throw readiness;
+      }),
+      recoverPending: vi.fn(),
+      execute: vi.fn(),
+    };
+    const runs = {
+      startAttempt: vi.fn(),
+      heartbeat: vi.fn(),
+      complete: vi.fn(),
+      finishAttempt: vi.fn(),
+    };
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      stateRepository() as any,
+      runs as any,
+    );
+
+    await expect(useCase.execute("scheduler")).rejects.toBe(readiness);
+    expect(runs.startAttempt).not.toHaveBeenCalled();
+    expect(refreshMarket.recoverPending).not.toHaveBeenCalled();
+  });
+
   it("marca failed si falla la recolección/publicación", async () => {
     const refreshMarket = {
       recoverPending: vi.fn(async () => null),
@@ -100,6 +237,45 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     expect(state.markFailed).toHaveBeenCalledWith(
       expect.any(String),
       "asset failure",
+    );
+  });
+
+  it("no marca auto-recuperable un checkpoint cuando SteamWebAPI falla de forma fatal", async () => {
+    const fatal = new MarketAssetsApiError(
+      "SteamWebAPI respondió 401",
+      "fatal",
+      401,
+      10,
+    );
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => true),
+      recoverPending: vi.fn(async () => null),
+      execute: vi.fn(async () => {
+        throw fatal;
+      }),
+    };
+    const state = stateRepository();
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-fatal" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+    };
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      state as any,
+      runs as any,
+    );
+
+    await expect(useCase.execute("scheduler")).rejects.toBe(fatal);
+
+    expect(state.markFailed).toHaveBeenCalledWith(
+      expect.any(String),
+      fatal.message,
+    );
+    expect(runs.finishAttempt).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ resumable: false }),
     );
   });
 

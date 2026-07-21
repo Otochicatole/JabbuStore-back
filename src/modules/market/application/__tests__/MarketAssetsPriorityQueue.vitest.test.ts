@@ -7,6 +7,7 @@ const items = [
     markethashname: "AK-47 | Redline (Field-Tested)",
     itemgroup: "rifle",
     pricereal: 100,
+    image: "https://example.test/redline.png",
   },
   {
     // Mismo listing: debe prevalecer el precio de prioridad más alto.
@@ -30,8 +31,18 @@ const items = [
     itemgroup: "knife",
     wear: "fn",
     variants: [
-      { phase: "Ruby", paintindex: 415, pricereal: 2_000 },
-      { phase: "Phase 1", paintindex: 418, pricemix: 1_500 },
+      {
+        phase: "Ruby",
+        paintindex: 415,
+        pricereal: 2_000,
+        image: "https://example.test/ruby.png",
+      },
+      {
+        phase: "Phase 1",
+        paintindex: 418,
+        pricemix: 1_500,
+        image: "https://example.test/phase-1.png",
+      },
       // Sin precio exacto de variante: no debe heredar el precio del padre.
       { phase: "Phase 2", paintindex: 419 },
       // Sin paint index no se puede validar contra float/assets.
@@ -93,6 +104,15 @@ describe("MarketAssetsPriorityQueueBuilder", () => {
       phase: "Ruby",
       paintIndex: 415,
       wear: "fn",
+      catalogImageUrl: "https://example.test/ruby.png",
+    });
+    expect(
+      queue.candidates.find(
+        (candidate) =>
+          candidate.marketHashName === "AK-47 | Redline (Field-Tested)",
+      ),
+    ).toMatchObject({
+      catalogImageUrl: "https://example.test/redline.png",
     });
   });
 

@@ -443,8 +443,136 @@ model MarketSyncState {
   lastPublishedFloatCount        Int      @default(0)
   lastSuccessfulAt               DateTime?
 
+  // Punteros a la corrida durable activa y a la ultima corrida terminal.
+  // Se mantienen como strings para que la migracion SQLite sea puramente aditiva.
+  activeRunId              String?
+  lastRunId                String?
+
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
+}
+
+model MarketSyncRun {
+  id                        String   @id @default(uuid())
+  stateKey                  String
+  status                    String
+  initialTriggeredBy        String?
+  latestTriggeredBy         String?
+  recoveryKind              String   @default("none")
+  resumedFromRecovery       Boolean  @default(false)
+  currentPhase              String
+
+  runStartedAt              DateTime
+  latestAttemptStartedAt    DateTime
+  latestAttemptFinishedAt   DateTime?
+  runFinishedAt             DateTime?
+  lastHeartbeatAt           DateTime
+  phaseStartedAt            DateTime
+  metricsFlushedAt          DateTime
+  attemptCount              Int      @default(1)
+
+  activeDurationMs          BigInt   @default(0)
+  pausedDurationMs          BigInt   @default(0)
+  quotaWaitDurationMs       BigInt   @default(0)
+  retryBackoffDurationMs    BigInt   @default(0)
+
+  pageRequests              Int      @default(0)
+  httpAttempts              Int      @default(0)
+  httpSucceeded             Int      @default(0)
+  httpFailed                Int      @default(0)
+  retryCount                Int      @default(0)
+  timeoutCount              Int      @default(0)
+  emptyResponseCount        Int      @default(0)
+  notFoundCount             Int      @default(0)
+  rateLimitedCount          Int      @default(0)
+  quotaWaitCount            Int      @default(0)
+
+  latencySampleCount        Int      @default(0)
+  latencyTotalMs            BigInt   @default(0)
+  latencyMaximumMs          Int      @default(0)
+  latencyLe250Count         Int      @default(0)
+  latencyLe1000Count        Int      @default(0)
+  latencyLe3000Count        Int      @default(0)
+  latencyLe10000Count       Int      @default(0)
+  latencyLe30000Count       Int      @default(0)
+  latencyGt30000Count       Int      @default(0)
+
+  runQuotaUnitsUsed         Int      @default(0)
+  creditsUsed               Float    @default(0)
+  configuredConcurrency     Int      @default(0)
+  currentConcurrency        Int      @default(0)
+  minimumConcurrencyUsed    Int      @default(0)
+  peakInFlight              Int      @default(0)
+  concurrencyReductionCount Int      @default(0)
+  concurrencyIncreaseCount  Int      @default(0)
+  deferredCandidateCount    Int      @default(0)
+  throughputWindowStartedAt DateTime?
+  throughputWindowStartValidAssets Int @default(0)
+  recentValidAssetsPerMinute Float?
+
+  targetAssets              Int      @default(0)
+  assetsPerItem             Int      @default(0)
+  totalCandidates           Int      @default(0)
+  candidatesVisited         Int      @default(0)
+  rawAssetCount             Int      @default(0)
+  validAssetCount           Int      @default(0)
+  skippedAssetCount         Int      @default(0)
+  publishedListingCount     Int      @default(0)
+  publishedFloatCount       Int      @default(0)
+  snapshotHash              String?
+  completionReason          String?
+  lastError                 String?
+
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  phases                    MarketSyncPhaseMetric[]
+  candidateHistory          MarketAssetCandidateHistory[]
+
+  @@index([stateKey, runStartedAt])
+  @@index([status, lastHeartbeatAt])
+}
+
+model MarketSyncPhaseMetric {
+  runId         String
+  phase         String
+  durationMs    BigInt   @default(0)
+  entryCount    Int      @default(0)
+  lastEnteredAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  run MarketSyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@id([runId, phase])
+  @@index([phase])
+}
+
+model MarketAssetCandidateHistory {
+  candidateKey       String   @id
+  runId              String?
+  queueVersion       String
+  marketHashName     String
+  outcome            String
+  providerTotal      Int      @default(0)
+  rawAssetCount      Int      @default(0)
+  validAssetCount    Int      @default(0)
+  skippedAssetCount  Int      @default(0)
+  pageRequests       Int      @default(0)
+  httpAttempts       Int      @default(0)
+  latencyMs          Int      @default(0)
+  lastOffset         Int      @default(0)
+  effectiveConcurrency Int?
+  errorStatus        Int?
+  errorMessage       String?
+  observedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  run MarketSyncRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([runId])
+  @@index([queueVersion, observedAt])
 }
 
 model Notification {

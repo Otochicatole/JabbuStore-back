@@ -1,4 +1,5 @@
 import type { MarketSyncState } from "./MarketSyncState";
+import type { MarketSyncTelemetryDelta } from "./MarketSyncRun";
 
 export type MarketSyncCompletionReason =
   | "target_reached"
@@ -27,6 +28,7 @@ export interface MarketCollectionProgress {
   quotaLimit?: number;
   quotaResetsAt?: Date | null;
   phase?: string;
+  telemetry?: MarketSyncTelemetryDelta;
 }
 
 export interface MarketSyncStartOptions {
@@ -51,6 +53,7 @@ export interface MarketSyncCurrentStatusUpdate {
   quotaResetsAt?: Date | null;
   completionReason?: MarketSyncCompletionReason | null;
   error?: string | null;
+  telemetry?: MarketSyncTelemetryDelta;
 }
 
 /** Legacy progress payload retained for the incremental sync during migration. */
@@ -92,7 +95,7 @@ export interface IMarketSyncStateRepository {
   ): Promise<void>;
   /** Se llama cuando la publicación transaccional del snapshot de assets terminó. */
   markFullSuccess(key: string): Promise<void>;
-  markFailed(key: string, error: string): Promise<void>;
+  markFailed(key: string, error: string, resumable?: boolean): Promise<void>;
 
   /** Legacy incremental-sync completion method. */
   markFinished(

@@ -39,7 +39,7 @@ describe("sync scheduler config", () => {
     expect(config.marketAssetsSync.intervalMinutes).toBe(90);
     expect(config.fullCatalogSync.intervalMinutes).toBe(90);
     expect(config.itemsCatalog.syncIntervalMinutes).toBe(45);
-    expect(config.marketAssetsCatalog.concurrency).toBe(5);
+    expect(config.marketAssetsCatalog.concurrency).toBe(3);
   });
 
   it("acepta FULL_CATALOG como alias de assets y usa 300 ante intervalos inválidos", async () => {

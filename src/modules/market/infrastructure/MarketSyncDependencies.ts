@@ -11,10 +11,15 @@ import { PrismaMarketRepository } from "./PrismaMarketRepository";
 import { PrismaMarketSyncStateRepository } from "./PrismaMarketSyncStateRepository";
 import { SteamWebApiFloatAssetsClient } from "./SteamWebApiFloatAssetsClient";
 import { SteamWebApiMarketAssetsCatalogClient } from "./SteamWebApiMarketAssetsCatalogClient";
+import { PrismaMarketSyncRunRepository } from "./PrismaMarketSyncRunRepository";
+import { PrismaMarketAssetCandidateHistoryRepository } from "./PrismaMarketAssetCandidateHistoryRepository";
 
 export const marketRepository = new PrismaMarketRepository();
+export const marketSyncRunRepository = new PrismaMarketSyncRunRepository();
+export const marketAssetCandidateHistoryRepository =
+  new PrismaMarketAssetCandidateHistoryRepository();
 export const marketSyncStateRepository =
-  new PrismaMarketSyncStateRepository();
+  new PrismaMarketSyncStateRepository(marketSyncRunRepository);
 export const marketAssetsCatalogStore = new MarketAssetsCatalogStore(
   config.marketAssetsCatalog.snapshotPath,
   config.marketAssetsCatalog.checkpointPath,
@@ -38,6 +43,12 @@ const collector = new CollectMarketAssetsCatalogUseCase(
     concurrency: config.marketAssetsCatalog.concurrency,
     sort: config.marketAssetsCatalog.sort,
   },
+  {
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    random: Math.random,
+    historyRepository: marketAssetCandidateHistoryRepository,
+    runRepository: marketSyncRunRepository,
+  },
 );
 
 export const refreshMarketAssetsCatalogUseCase =
@@ -51,9 +62,11 @@ export const refreshMarketAssetsCatalogUseCase =
 export const runFullCatalogSyncUseCase = new RunFullCatalogSyncUseCase(
   refreshMarketAssetsCatalogUseCase,
   marketSyncStateRepository,
+  marketSyncRunRepository,
 );
 
 export const getMarketSyncStatusUseCase = new GetMarketSyncStatusUseCase(
   marketAssetsCatalogStore,
   marketSyncStateRepository,
+  marketSyncRunRepository,
 );

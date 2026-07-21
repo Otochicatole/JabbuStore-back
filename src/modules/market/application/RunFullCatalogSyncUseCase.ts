@@ -7,6 +7,8 @@ import {
 } from "./RefreshMarketAssetsCatalogUseCase";
 import { marketSyncProgressService } from "./MarketSyncProgressService";
 import { syncExecutionCoordinator } from "./SyncExecutionCoordinator";
+import type { IMarketSyncRunRepository } from "../domain/MarketSyncRun";
+import { MarketAssetsApiError } from "./IMarketAssetsCatalogClient";
 
 /**
  * Resultado del job de assets. El nombre de la clase se conserva para no
@@ -43,6 +45,7 @@ export class RunFullCatalogSyncUseCase {
   constructor(
     private refreshMarketAssetsCatalog: RefreshMarketAssetsCatalogUseCase,
     private syncStateRepository: IMarketSyncStateRepository,
+    private syncRunRepository?: IMarketSyncRunRepository,
   ) {}
 
   isRunning(): boolean {
@@ -93,6 +96,21 @@ export class RunFullCatalogSyncUseCase {
   }
 
   private async executeExclusive(triggeredBy: string): Promise<FullCatalogSyncResult> {
+    const recoveryRequested = await this.hasPendingRecovery();
+    let stopHeartbeat: () => void = () => undefined;
+    if (this.syncRunRepository) {
+      await this.syncRunRepository.startAttempt({
+        stateKey: MARKET_ASSETS_SYNC_STATE_KEY,
+        triggeredBy,
+        phase: "building_priority_queue",
+        targetAssets: config.marketAssetsCatalog.target,
+        assetsPerItem: config.marketAssetsCatalog.assetsPerItem,
+        configuredConcurrency: config.marketAssetsCatalog.concurrency,
+        recoveryRequested,
+        recoveryKind: recoveryRequested ? "pending" : "none",
+      });
+      stopHeartbeat = this.startHeartbeat();
+    }
     marketSyncProgressService.startSync(
       config.marketAssetsCatalog.target,
       config.marketAssetsCatalog.assetsPerItem,
@@ -117,6 +135,13 @@ export class RunFullCatalogSyncUseCase {
         marketResult = await this.refreshMarketAssetsCatalog.execute();
       }
 
+      // Cerrar primero la corrida. Si esta transacción falla, lastSuccessfulAt
+      // aún queda anterior a lastPublishedAt y recoverPending reintenta sólo la
+      // finalización sin volver a descargar assets. Hacerlo al revés podía dejar
+      // snapshot exitoso + run activo imposible de reconciliar.
+      await this.syncRunRepository?.complete(MARKET_ASSETS_SYNC_STATE_KEY, {
+        completionReason: marketResult.completionReason,
+      });
       await this.syncStateRepository.markFullSuccess(
         MARKET_ASSETS_SYNC_STATE_KEY,
       );
@@ -128,11 +153,76 @@ export class RunFullCatalogSyncUseCase {
       return marketResult;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.syncStateRepository
-        .markFailed(MARKET_ASSETS_SYNC_STATE_KEY, message)
+      const fatalProviderError =
+        error instanceof MarketAssetsApiError && error.kind === "fatal";
+      // El checkpoint se conserva para una reanudación manual o el próximo
+      // ciclo, pero 401/402/403 no deben quedar marcados como auto-recuperables.
+      let resumable = false;
+      if (!fatalProviderError) {
+        try {
+          resumable = await this.hasPendingRecovery();
+        } catch {
+          // Si el catálogo desapareció mientras corría el pipeline, conservar
+          // el checkpoint como recuperable y no ocultar el error original.
+          resumable = true;
+        }
+      }
+      await (resumable
+        ? this.syncStateRepository.markFailed(
+            MARKET_ASSETS_SYNC_STATE_KEY,
+            message,
+            true,
+          )
+        : this.syncStateRepository.markFailed(
+            MARKET_ASSETS_SYNC_STATE_KEY,
+            message,
+          )
+      ).catch(() => undefined);
+      await this.syncRunRepository
+        ?.finishAttempt(MARKET_ASSETS_SYNC_STATE_KEY, {
+          error: message,
+          resumable,
+        })
         .catch(() => undefined);
-      marketSyncProgressService.failSync(message);
+      marketSyncProgressService.failSync(message, resumable);
       throw error;
+    } finally {
+      stopHeartbeat();
     }
+  }
+
+  private startHeartbeat(): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (stopped || !this.syncRunRepository) return;
+      timer = setTimeout(async () => {
+        try {
+          await this.syncRunRepository?.heartbeat(MARKET_ASSETS_SYNC_STATE_KEY);
+        } catch (error) {
+          console.error(
+            "[Market Assets Sync] No se pudo persistir el heartbeat:",
+            error,
+          );
+        } finally {
+          schedule();
+        }
+      }, 5_000);
+      timer.unref?.();
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }
+
+  private async hasPendingRecovery(): Promise<boolean> {
+    if (
+      typeof this.refreshMarketAssetsCatalog.hasPendingRecovery !== "function"
+    ) {
+      return false;
+    }
+    return this.refreshMarketAssetsCatalog.hasPendingRecovery();
   }
 }

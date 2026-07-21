@@ -1,6 +1,16 @@
 import type { MarketAssetsPriorityCandidate } from "./MarketAssetsPriorityQueue";
 import type { MarketAssetsCatalogSort } from "../domain/MarketAssetsCatalog";
 
+export type MarketAssetsRequestOutcome =
+  | "success"
+  | "success_empty"
+  | "not_found"
+  | "timeout"
+  | "network"
+  | "http_transient"
+  | "fatal"
+  | "rate_limited";
+
 export interface MarketAssetsCandidatePage {
   assets: unknown[];
   providerTotal: number;
@@ -11,6 +21,14 @@ export interface MarketAssetsCandidatePage {
   /** Alias histórico para métricas existentes. */
   rowsUsed: number;
   creditsUsed: number;
+  /** Intentos HTTP reales; los reintentos se coordinan fuera del cliente. */
+  httpAttempts?: number;
+  notFound?: boolean;
+  durationMs?: number;
+  outcome?: Extract<
+    MarketAssetsRequestOutcome,
+    "success" | "success_empty" | "not_found"
+  >;
 }
 
 export interface MarketAssetsPageRequest {
@@ -44,6 +62,12 @@ export class MarketAssetsApiError extends Error {
     readonly status: number,
     readonly quotaUnitsUsed: number,
     readonly creditsUsed = 0,
+    readonly httpAttempts = 1,
+    readonly durationMs = 0,
+    readonly failureKind: Exclude<
+      MarketAssetsRequestOutcome,
+      "success" | "success_empty" | "not_found"
+    > = kind === "fatal" ? "fatal" : status === 429 ? "rate_limited" : "network",
   ) {
     super(message);
     this.name = "MarketAssetsApiError";

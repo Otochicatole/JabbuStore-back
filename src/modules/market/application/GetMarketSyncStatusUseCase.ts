@@ -7,6 +7,8 @@ import {
   type MarketSyncStatus,
 } from "./MarketSyncProgressService";
 import { floatRateLimiter } from "./FloatRateLimiter";
+import type { IMarketSyncRunRepository } from "../domain/MarketSyncRun";
+import { buildMarketSyncRunStatusView } from "./MarketSyncRunStatusView";
 
 export const MARKET_ASSETS_SYNC_STATE_KEY = "youpin-assets-snapshot";
 
@@ -14,28 +16,48 @@ export class GetMarketSyncStatusUseCase {
   constructor(
     private store: IMarketAssetsCatalogStore,
     private syncStateRepository: IMarketSyncStateRepository,
+    private syncRunRepository?: IMarketSyncRunRepository,
   ) {}
 
   async execute(): Promise<MarketSyncStatus> {
     const runtime = marketSyncProgressService.getStatus();
-    const [file, checkpoint, state, rateLimit] = await Promise.all([
+    const [file, checkpoint, state, rateLimit, durableRun] = await Promise.all([
       this.store.getStatus(),
       this.store.getCheckpointStatus(),
       this.syncStateRepository.get(MARKET_ASSETS_SYNC_STATE_KEY),
       floatRateLimiter
         .getDurableSnapshot()
         .catch(() => floatRateLimiter.getSnapshot()),
+      this.syncRunRepository?.getCurrentOrLast(MARKET_ASSETS_SYNC_STATE_KEY) ??
+        Promise.resolve(null),
     ]);
+    const quotaResetsAt = new Date(rateLimit.windowResetsAt).toISOString();
 
     if (!file.exists && !checkpoint.exists && !state) {
+      const run = durableRun
+        ? buildMarketSyncRunStatusView(durableRun, {
+            validAssets: runtime.validAssets,
+            targetAssets: runtime.targetAssets,
+            windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
+            quotaLimit: rateLimit.effectiveCapacity,
+            quotaResetsAt,
+          })
+        : null;
       return {
         ...runtime,
+        run,
         lastPublished: null,
         quotaUnitsUsed: rateLimit.quotaUnitsUsed,
         rowsUsed: rateLimit.quotaUnitsUsed,
         quotaLimit: rateLimit.effectiveCapacity,
-        quotaResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
-        rateLimitResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
+        quotaResetsAt,
+        rateLimitResetsAt: quotaResetsAt,
+        lastStartedAt:
+          durableRun?.latestAttemptStartedAt.toISOString() ?? runtime.lastStartedAt,
+        lastFinishedAt:
+          durableRun?.runFinishedAt?.toISOString() ??
+          durableRun?.latestAttemptFinishedAt?.toISOString() ??
+          runtime.lastFinishedAt,
         itemsCatalog: null,
       };
     }
@@ -61,16 +83,32 @@ export class GetMarketSyncStatusUseCase {
       : null;
 
     if (runtime.running) {
+      const run = durableRun
+        ? buildMarketSyncRunStatusView(durableRun, {
+            validAssets: runtime.validAssets,
+            targetAssets: runtime.targetAssets,
+            windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
+            quotaLimit: rateLimit.effectiveCapacity,
+            quotaResetsAt,
+          })
+        : null;
       return {
         ...runtime,
+        run,
         publishedListings: lastPublished?.publishedListings ?? 0,
         publishedFloats: lastPublished?.publishedFloats ?? 0,
         lastPublished,
         quotaUnitsUsed: rateLimit.quotaUnitsUsed,
         rowsUsed: rateLimit.quotaUnitsUsed,
         quotaLimit: rateLimit.effectiveCapacity,
-        quotaResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
-        rateLimitResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
+        quotaResetsAt,
+        rateLimitResetsAt: quotaResetsAt,
+        lastStartedAt:
+          durableRun?.latestAttemptStartedAt.toISOString() ?? runtime.lastStartedAt,
+        lastFinishedAt:
+          durableRun?.runFinishedAt?.toISOString() ??
+          durableRun?.latestAttemptFinishedAt?.toISOString() ??
+          runtime.lastFinishedAt,
         lastSuccessfulAt:
           state?.lastSuccessfulAt?.toISOString() ?? runtime.lastSuccessfulAt,
         itemsCatalog: null,
@@ -78,10 +116,24 @@ export class GetMarketSyncStatusUseCase {
     }
 
     const hasCheckpoint = checkpoint.exists;
+    // Tras reiniciar el proceso no existe ejecución en memoria, pero puede
+    // quedar una corrida durable `running` si el crash ocurrió antes del primer
+    // checkpoint. Se expone como pausa recuperable para que el scheduler la
+    // reconcilie de inmediato; startAttempt cerrará la corrida vieja si no hay
+    // trabajo compatible y abrirá una nueva.
+    const interruptedDurableRun =
+      durableRun?.status === "running" && !runtime.running;
     const published = Boolean(
       file.exists &&
         state?.lastPublishedSnapshotHash &&
         state.lastPublishedSnapshotHash === file.version,
+    );
+    const publicationFinalizationPending = Boolean(
+      published &&
+        state?.currentPhase !== "syncing_bots" &&
+        state?.lastPublishedAt &&
+        (!state.lastSuccessfulAt ||
+          state.lastPublishedAt.getTime() > state.lastSuccessfulAt.getTime()),
     );
     const publicationPending = Boolean(
       file.exists &&
@@ -94,10 +146,22 @@ export class GetMarketSyncStatusUseCase {
     const legacyPublishedAssets = Boolean(
       published && state?.currentPhase === "syncing_bots",
     );
-    const error = legacyPublishedAssets ? null : state?.lastError ?? null;
-    const phase: MarketSyncPhase = error
-      ? "failed"
-      : hasCheckpoint || publicationPending
+    const error = legacyPublishedAssets
+      ? null
+      : durableRun?.lastError ?? state?.lastError ?? null;
+    const durablePaused = durableRun?.status === "paused";
+    const checkpointRecoverable =
+      hasCheckpoint &&
+      durableRun?.status !== "failed" &&
+      state?.currentPhase !== "failed";
+    const phase: MarketSyncPhase =
+      durablePaused || interruptedDurableRun || publicationFinalizationPending
+      ? "paused"
+      : durableRun?.status === "failed"
+        ? "failed"
+        : error
+          ? "failed"
+          : hasCheckpoint || publicationPending
         ? "paused"
         : published
           ? "completed"
@@ -133,10 +197,35 @@ export class GetMarketSyncStatusUseCase {
     const totalCandidates = hasCheckpoint
       ? checkpoint.totalCandidates
       : state?.totalCandidates ?? 0;
+    const runRecordForStatus =
+      durableRun && interruptedDurableRun
+        ? {
+            ...durableRun,
+            status: "paused" as const,
+            currentPhase: "paused",
+            latestAttemptFinishedAt:
+              durableRun.latestAttemptFinishedAt ?? durableRun.lastHeartbeatAt,
+          }
+        : durableRun;
+    const run = runRecordForStatus
+      ? buildMarketSyncRunStatusView(runRecordForStatus, {
+          validAssets,
+          targetAssets,
+          windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
+          quotaLimit: rateLimit.effectiveCapacity,
+          quotaResetsAt,
+        })
+      : null;
     return {
       ...runtime,
+      run,
       running: false,
-      resumable: hasCheckpoint || publicationPending,
+      resumable:
+        durablePaused ||
+        interruptedDurableRun ||
+        publicationFinalizationPending ||
+        checkpointRecoverable ||
+        publicationPending,
       phase,
       targetAssets,
       requestedAssets: targetAssets,
@@ -150,11 +239,13 @@ export class GetMarketSyncStatusUseCase {
       currentPage: candidatesVisited,
       currentCandidate: state?.currentCandidate ?? null,
       quotaUnitsUsed,
-      creditsUsed: hasCheckpoint ? checkpoint.creditsUsed : runtime.creditsUsed,
+      creditsUsed: hasCheckpoint
+        ? checkpoint.creditsUsed
+        : durableRun?.creditsUsed ?? runtime.creditsUsed,
       rowsUsed: quotaUnitsUsed,
       quotaLimit: rateLimit.effectiveCapacity,
-      quotaResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
-      rateLimitResetsAt: new Date(rateLimit.windowResetsAt).toISOString(),
+      quotaResetsAt,
+      rateLimitResetsAt: quotaResetsAt,
       listingsProcessed:
         state?.lastPublishedListingCount ?? state?.publishedListingCount ?? 0,
       totalListings:
@@ -171,8 +262,15 @@ export class GetMarketSyncStatusUseCase {
       snapshotFetchedAt: file.fetchedAt,
       completionReason: completionReason ?? null,
       itemsCatalog: null,
-      lastStartedAt: state?.lastStartedAt?.toISOString() ?? null,
-      lastFinishedAt: state?.lastFinishedAt?.toISOString() ?? null,
+      lastStartedAt:
+        durableRun?.latestAttemptStartedAt.toISOString() ??
+        state?.lastStartedAt?.toISOString() ??
+        null,
+      lastFinishedAt:
+        durableRun?.runFinishedAt?.toISOString() ??
+        durableRun?.latestAttemptFinishedAt?.toISOString() ??
+        state?.lastFinishedAt?.toISOString() ??
+        null,
       lastSuccessfulAt:
         state?.lastSuccessfulAt?.toISOString() ??
         (legacyPublishedAssets
@@ -180,8 +278,13 @@ export class GetMarketSyncStatusUseCase {
           : null),
       lastError: error,
       message: error
-        ? `La última sincronización falló: ${error}`
-        : hasCheckpoint
+        ? durablePaused || interruptedDurableRun || publicationFinalizationPending
+          ? `Sincronización pausada y recuperable: ${error}`
+          : `La última sincronización falló: ${error}`
+        : durablePaused ||
+            interruptedDurableRun ||
+            publicationFinalizationPending ||
+            hasCheckpoint
           ? `Sincronización pausada con ${validAssets.toLocaleString("es-AR")}/${targetAssets.toLocaleString("es-AR")} assets válidos.`
           : published
             ? `Snapshot publicado: ${validAssets.toLocaleString("es-AR")} assets.`

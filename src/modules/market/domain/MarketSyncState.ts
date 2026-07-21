@@ -36,6 +36,8 @@ export interface MarketSyncState {
   lastPublishedListingCount: number;
   lastPublishedFloatCount: number;
   lastSuccessfulAt: Date | null;
+  activeRunId: string | null;
+  lastRunId: string | null;
 
   createdAt: Date;
   updatedAt: Date;

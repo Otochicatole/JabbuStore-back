@@ -1,3 +1,5 @@
+import type { MarketSyncRunStatusView } from "../domain/MarketSyncRun";
+
 export type MarketSyncPhase =
   | "idle"
   | "refreshing_items_catalog"
@@ -66,6 +68,8 @@ export interface MarketSyncStatus {
   lastSuccessfulAt: string | null;
   lastError: string | null;
   message: string | null;
+  /** Telemetria durable de la corrida activa o de la ultima corrida terminal. */
+  run: MarketSyncRunStatusView | null;
   /** Alias temporales consumidos por clientes anteriores. */
   requestedAssets: number;
   rowsUsed: number;
@@ -110,6 +114,7 @@ class MarketSyncProgressService {
       lastSuccessfulAt: null,
       lastError: null,
       message: null,
+      run: null,
       requestedAssets: 0,
       rowsUsed: 0,
       rateLimitResetsAt: null,

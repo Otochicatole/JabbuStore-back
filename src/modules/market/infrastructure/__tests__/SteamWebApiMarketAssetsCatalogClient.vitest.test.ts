@@ -29,6 +29,7 @@ const candidate: MarketAssetsPriorityCandidate = {
   marketHashName: "AK-47 | Redline (Field-Tested)",
   queryMarketHashName: "AK-47 | Redline (Field-Tested)",
   priorityPrice: 300,
+  catalogImageUrl: "https://example.test/redline.png",
   phase: null,
   paintIndex: null,
   wear: "FT",
@@ -52,7 +53,6 @@ function response(status: number, body: unknown): Response {
 function createClient(): SteamWebApiMarketAssetsCatalogClient {
   return new SteamWebApiMarketAssetsCatalogClient(
     new SteamWebApiFloatAssetsClient("test-api-key"),
-    { maxAttempts: 1, retryBaseDelayMs: 0 },
   );
 }
 
@@ -97,6 +97,7 @@ describe("SteamWebApiMarketAssetsCatalogClient", () => {
     expect(requestUrl.searchParams.get("market_hash_name")).toBe(
       candidate.queryMarketHashName,
     );
+    expect(requestUrl.searchParams.get("with_items")).toBe("0");
     expect(rateLimiter.acquire).toHaveBeenCalledWith(
       7,
       expect.objectContaining({ priority: "sync" }),
@@ -111,7 +112,7 @@ describe("SteamWebApiMarketAssetsCatalogClient", () => {
     });
   });
 
-  it("combina market_hash_name con los filtros exactos de una fase Doppler", async () => {
+  it("filtra fases por paint_index sin enviar el phase incompatible", async () => {
     const fetchMock = vi.fn(async () =>
       response(200, {
         data: [],
@@ -145,9 +146,150 @@ describe("SteamWebApiMarketAssetsCatalogClient", () => {
       phaseCandidate.queryMarketHashName,
     );
     expect(requestUrl.searchParams.get("paint_index")).toBe("417");
-    expect(requestUrl.searchParams.get("phase")).toBe("black-pearl");
+    expect(requestUrl.searchParams.has("phase")).toBe(false);
     expect(requestUrl.searchParams.get("def_index")).toBe("515");
     expect(requestUrl.searchParams.get("wear")).toBe("FN");
+    expect(requestUrl.searchParams.get("is_stattrak")).toBe("0");
+    expect(requestUrl.searchParams.get("is_souvenir")).toBe("0");
+  });
+
+  it("consulta una fase Glock con nombre base, paint index, desgaste, def index y flags", async () => {
+    const fetchMock = vi.fn(async () =>
+      response(200, { data: [], total: 0, limit: 10, offset: 0 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const glock: MarketAssetsPriorityCandidate = {
+      ...candidate,
+      key: "glock-gamma-emerald-fn-stattrak",
+      marketHashName:
+        "StatTrak™ Glock-18 | Gamma Doppler | Emerald (Factory New)",
+      queryMarketHashName:
+        "StatTrak™ Glock-18 | Gamma Doppler (Factory New)",
+      phase: "Emerald",
+      paintIndex: 568,
+      defIndex: 4,
+      wear: "FN",
+      isStatTrak: true,
+    };
+
+    await createClient().fetchCandidatePage(glock, {
+      limit: 10,
+      offset: 0,
+      sort: "newest",
+    });
+
+    const requestUrl = new URL(String(fetchMock.mock.calls[0]![0]));
+    expect(requestUrl.searchParams.get("market_hash_name")).toBe(
+      glock.queryMarketHashName,
+    );
+    expect(requestUrl.searchParams.get("paint_index")).toBe("568");
+    expect(requestUrl.searchParams.get("wear")).toBe("FN");
+    expect(requestUrl.searchParams.get("def_index")).toBe("4");
+    expect(requestUrl.searchParams.get("is_stattrak")).toBe("1");
+    expect(requestUrl.searchParams.get("is_souvenir")).toBe("0");
+    expect(requestUrl.searchParams.has("phase")).toBe(false);
+  });
+
+  it("usa with_items sólo como fallback si el catálogo no aporta imagen", async () => {
+    const fetchMock = vi.fn(async () =>
+      response(200, { data: [], total: 0, limit: 10, offset: 0 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createClient().fetchCandidatePage(
+      { ...candidate, catalogImageUrl: null },
+      { limit: 10, offset: 0, sort: "newest" },
+    );
+
+    const requestUrl = new URL(String(fetchMock.mock.calls[0]![0]));
+    expect(requestUrl.searchParams.get("with_items")).toBe("1");
+  });
+
+  it("propaga un 5xx tras un único intento HTTP", async () => {
+    const fetchMock = vi.fn(async () =>
+      response(503, { error: "upstream unavailable" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createClient().fetchCandidatePage(candidate, {
+        limit: 10,
+        offset: 0,
+        sort: "newest",
+      }),
+    ).rejects.toMatchObject({
+      kind: "retryable",
+      status: 503,
+      httpAttempts: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("trata un JSON 200 truncado como transitorio y no reintenta internamente", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response('{"data":[', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createClient().fetchCandidatePage(candidate, {
+        limit: 10,
+        offset: 0,
+        sort: "newest",
+      }),
+    ).rejects.toMatchObject({
+      kind: "retryable",
+      status: 200,
+      failureKind: "http_transient",
+      httpAttempts: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("mantiene el timeout activo mientras el body permanece bloqueado", async () => {
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      return {
+        status: 200,
+        ok: true,
+        headers: new Headers({ "content-type": "application/json" }),
+        arrayBuffer: () =>
+          new Promise<ArrayBuffer>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("body aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new SteamWebApiFloatAssetsClient(
+      "test-api-key",
+    ).fetchPage({
+      source: "youpin",
+      marketHashName: candidate.marketHashName,
+      limit: 1,
+      offset: 0,
+      requestTimeoutMs: 10,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 0,
+      outcome: "timeout",
+      quotaUnitsUsed: 1,
+    });
+    expect(result.durationMs).toBeGreaterThanOrEqual(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it.each([401, 402, 403])(

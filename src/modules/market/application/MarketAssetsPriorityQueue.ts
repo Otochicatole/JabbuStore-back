@@ -71,6 +71,8 @@ export interface MarketAssetsPriorityCandidate {
   /** Nombre de catálogo usado para la consulta exacta cuando no hay fase. */
   queryMarketHashName: string;
   priorityPrice: number;
+  /** Imagen exacta del catálogo/variante usada sin `with_items`. */
+  catalogImageUrl: string | null;
   phase: string | null;
   paintIndex: number | null;
   wear: string | null;
@@ -123,6 +125,15 @@ function readPositivePrice(...values: unknown[]): number | null {
 function readPaintIndex(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function readImageUrl(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (/^https?:\/\//i.test(normalized)) return normalized;
+  }
+  return null;
 }
 
 function readBoolean(value: unknown): boolean | null {
@@ -235,6 +246,7 @@ function buildCandidate(
     marketHashName,
     queryMarketHashName: baseName,
     priorityPrice,
+    catalogImageUrl: readImageUrl(variant?.image, row.image),
     phase,
     paintIndex,
     wear,
@@ -315,8 +327,19 @@ export class MarketAssetsPriorityQueueBuilder {
     for (const row of snapshot.items) {
       for (const candidate of expandRow(row)) {
         const existing = byListingName.get(candidate.marketHashName);
-        if (!existing || candidate.priorityPrice > existing.priorityPrice) {
+        if (!existing) {
           byListingName.set(candidate.marketHashName, candidate);
+        } else if (candidate.priorityPrice > existing.priorityPrice) {
+          byListingName.set(candidate.marketHashName, {
+            ...candidate,
+            catalogImageUrl:
+              candidate.catalogImageUrl ?? existing.catalogImageUrl,
+          });
+        } else if (!existing.catalogImageUrl && candidate.catalogImageUrl) {
+          byListingName.set(candidate.marketHashName, {
+            ...existing,
+            catalogImageUrl: candidate.catalogImageUrl,
+          });
         }
       }
     }
@@ -338,6 +361,7 @@ export class MarketAssetsPriorityQueueBuilder {
       marketHashName: candidate.marketHashName,
       queryMarketHashName: candidate.queryMarketHashName,
       priorityPrice: candidate.priorityPrice,
+      catalogImageUrl: candidate.catalogImageUrl,
       phase: candidate.phase,
       paintIndex: candidate.paintIndex,
       wear: candidate.wear,

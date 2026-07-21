@@ -155,7 +155,8 @@ export function normalizeMarketAsset(
     asset.paintSeed,
   );
   const price = resolveAssetPrice(asset);
-  const iconUrl = resolveAssetImageUrl(asset);
+  const iconUrl =
+    resolveAssetImageUrl(asset) ?? expected?.catalogImageUrl ?? null;
 
   if (
     !assetId ||

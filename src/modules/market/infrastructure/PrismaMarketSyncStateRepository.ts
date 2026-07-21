@@ -8,6 +8,7 @@ import {
   MarketSyncStateProgress,
 } from "../domain/IMarketSyncStateRepository";
 import { MarketSyncState } from "../domain/MarketSyncState";
+import type { IMarketSyncRunRepository } from "../domain/MarketSyncRun";
 
 function stateCreateBase(key: string, queueVersion = "pending") {
   return { key, queueVersion };
@@ -16,6 +17,8 @@ function stateCreateBase(key: string, queueVersion = "pending") {
 export class PrismaMarketSyncStateRepository
   implements IMarketSyncStateRepository
 {
+  constructor(private readonly runRepository?: IMarketSyncRunRepository) {}
+
   async get(key: string): Promise<MarketSyncState | null> {
     const row = await prisma.marketSyncState.findUnique({ where: { key } });
     return row as MarketSyncState | null;
@@ -58,6 +61,11 @@ export class PrismaMarketSyncStateRepository
         ...(queueVersion == null ? {} : { queueVersion }),
         ...shared,
       },
+    });
+    await this.runRepository?.recordProgress(key, {
+      phase: currentPhase,
+      targetAssets: options.targetAssets,
+      assetsPerItem: options.assetsPerItem,
     });
   }
 
@@ -102,6 +110,17 @@ export class PrismaMarketSyncStateRepository
       where: { key },
       create: { ...stateCreateBase(key, queueVersion), ...data },
       update: data,
+    });
+    await this.runRepository?.recordProgress(key, {
+      phase: progress.phase ?? "collecting_assets",
+      targetAssets: progress.targetAssets,
+      assetsPerItem: progress.assetsPerItem,
+      totalCandidates: progress.totalCandidates,
+      candidatesVisited: progress.candidatesVisited,
+      rawAssetCount: progress.rawAssetCount,
+      validAssetCount: progress.validAssetCount,
+      skippedAssetCount: progress.skippedAssetCount,
+      telemetry: progress.telemetry,
     });
   }
 
@@ -151,6 +170,16 @@ export class PrismaMarketSyncStateRepository
       create: { ...stateCreateBase(key), ...data },
       update: data,
     });
+    await this.runRepository?.recordProgress(key, {
+      phase: update.phase ?? undefined,
+      totalCandidates: update.totalCandidates,
+      candidatesVisited: update.candidatesVisited,
+      rawAssetCount: update.rawAssetCount,
+      validAssetCount: update.validAssetCount,
+      skippedAssetCount: update.skippedAssetCount,
+      completionReason: update.completionReason,
+      telemetry: update.telemetry,
+    });
   }
 
   async markSnapshotSaved(
@@ -172,6 +201,14 @@ export class PrismaMarketSyncStateRepository
       where: { key },
       create: { ...stateCreateBase(key, counts.snapshotHash), ...data },
       update: data,
+    });
+    await this.runRepository?.recordProgress(key, {
+      phase: "publishing_database",
+      rawAssetCount: counts.rawAssetCount,
+      validAssetCount: counts.validAssetCount,
+      skippedAssetCount: counts.skippedAssetCount,
+      snapshotHash: counts.snapshotHash,
+      completionReason: counts.completionReason,
     });
   }
 
@@ -208,6 +245,16 @@ export class PrismaMarketSyncStateRepository
       create: { ...stateCreateBase(key, counts.snapshotHash), ...data },
       update: data,
     });
+    await this.runRepository?.recordProgress(key, {
+      phase: "publishing_database",
+      rawAssetCount: counts.rawAssetCount,
+      validAssetCount: counts.validAssetCount,
+      skippedAssetCount: counts.skippedAssetCount,
+      publishedListingCount: published.listings,
+      publishedFloatCount: published.floats,
+      snapshotHash: counts.snapshotHash,
+      completionReason: counts.completionReason,
+    });
   }
 
   async markFullSuccess(key: string): Promise<void> {
@@ -231,17 +278,17 @@ export class PrismaMarketSyncStateRepository
     });
   }
 
-  async markFailed(key: string, error: string): Promise<void> {
+  async markFailed(key: string, error: string, resumable = false): Promise<void> {
     await prisma.marketSyncState.upsert({
       where: { key },
       create: {
         ...stateCreateBase(key, "failed"),
-        currentPhase: "failed",
+        currentPhase: resumable ? "paused" : "failed",
         lastError: error,
         lastFinishedAt: new Date(),
       },
       update: {
-        currentPhase: "failed",
+        currentPhase: resumable ? "paused" : "failed",
         lastError: error,
         lastFinishedAt: new Date(),
       },

@@ -14,6 +14,8 @@ export interface FullCatalogSyncSchedulerStatus {
   resumable: boolean;
   snapshotHash: string | null;
   lastSuccessfulAt: string | null;
+  lastFinishedAt?: string | null;
+  phase?: string;
   quotaResetsAt?: string | null;
 }
 
@@ -58,9 +60,17 @@ export function createFullCatalogSyncScheduler(
 
   const delayFromStatus = async (): Promise<number> => {
     const status = await dependencies.getStatus();
-    if (status.resumable || !status.snapshotHash) return MIN_DELAY_MS;
-    const lastSuccessMs = status.lastSuccessfulAt
-      ? new Date(status.lastSuccessfulAt).getTime()
+    if (status.resumable) return MIN_DELAY_MS;
+    // Un fallo fatal conserva el checkpoint para intervención/manual, pero en
+    // startup debe contar el intervalo desde el intento fallido y no volver a
+    // disparar inmediatamente porque el último éxito ya estaba vencido.
+    const scheduleAnchor =
+      status.phase === "failed" && status.lastFinishedAt
+        ? status.lastFinishedAt
+        : status.lastSuccessfulAt;
+    if (!status.snapshotHash && !scheduleAnchor) return MIN_DELAY_MS;
+    const lastSuccessMs = scheduleAnchor
+      ? new Date(scheduleAnchor).getTime()
       : 0;
     if (!Number.isFinite(lastSuccessMs) || lastSuccessMs <= 0) {
       return MIN_DELAY_MS;

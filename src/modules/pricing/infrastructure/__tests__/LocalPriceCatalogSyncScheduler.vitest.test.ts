@@ -13,7 +13,7 @@ import {
   type LocalPriceCatalogSchedulerStatus,
 } from "../LocalPriceCatalogSyncScheduler";
 
-const INTERVAL_MINUTES = 720;
+const INTERVAL_MINUTES = 300;
 const INTERVAL_MS = INTERVAL_MINUTES * 60_000;
 const STARTED_AT = new Date("2026-07-20T12:00:00.000Z");
 
@@ -88,7 +88,7 @@ describe("LocalPriceCatalogSyncScheduler (catalog-only)", () => {
     harness.scheduler.stop();
   });
 
-  it("usa fetchedAt para esperar 720 minutos entre descargas", async () => {
+  it("usa fetchedAt para esperar 300 minutos entre descargas", async () => {
     const harness = createHarness({
       status: freshStatus(STARTED_AT.getTime()),
     });
@@ -110,7 +110,7 @@ describe("LocalPriceCatalogSyncScheduler (catalog-only)", () => {
     await vi.advanceTimersByTimeAsync(100 * 60_000);
     harness.setStatus(freshStatus(Date.now()));
 
-    await vi.advanceTimersByTimeAsync(620 * 60_000);
+    await vi.advanceTimersByTimeAsync(200 * 60_000);
     expect(harness.execute).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100 * 60_000 - 1);

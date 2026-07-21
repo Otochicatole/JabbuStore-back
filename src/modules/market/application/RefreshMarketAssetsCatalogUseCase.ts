@@ -48,24 +48,16 @@ function publishedSnapshotNeedsFinalization(
   state: MarketSyncState | null,
 ): boolean {
   if (state?.lastPublishedSnapshotHash !== snapshotVersion) return false;
-  if (
-    state.currentPhase === "publishing_database" ||
-    state.currentPhase === "syncing_bots"
-  ) {
-    return true;
-  }
-  if (
-    state.currentPhase !== "failed" ||
-    state.queueVersion !== snapshotVersion ||
-    !state.lastPublishedAt ||
-    !state.lastStartedAt
-  ) {
-    return false;
-  }
+  if (!state.lastPublishedAt) return false;
 
-  // Distingue un fallo posterior a markPublished de una corrida nueva que
-  // falló antes de descargar otro snapshot y todavía conserva queueVersion.
-  return state.lastPublishedAt.getTime() >= state.lastStartedAt.getTime();
+  // `startAttempt` actualiza phase/lastStartedAt antes de `recoverPending`.
+  // La publicación sólo necesita finalización si todavía no existe un éxito
+  // posterior (o simultáneo) para ese mismo snapshot. Esta comparación también
+  // normaliza el antiguo estado `syncing_bots` sin volver a consumir assets.
+  return (
+    !state.lastSuccessfulAt ||
+    state.lastPublishedAt.getTime() > state.lastSuccessfulAt.getTime()
+  );
 }
 
 export class RefreshMarketAssetsCatalogUseCase {
@@ -94,7 +86,9 @@ export class RefreshMarketAssetsCatalogUseCase {
         snapshot.version &&
         publishedSnapshotNeedsFinalization(snapshot.version, state),
     );
-    return checkpoint.exists || unpublished || publishedNeedsFinalization;
+    if (unpublished || publishedNeedsFinalization) return true;
+    if (!checkpoint.exists) return false;
+    return this.collector.hasCompatibleCheckpoint();
   }
 
   async recoverPending(): Promise<RefreshMarketAssetsResult | null> {
@@ -134,6 +128,10 @@ export class RefreshMarketAssetsCatalogUseCase {
       snapshot && state?.lastPublishedSnapshotHash !== snapshot.version,
     );
     if (snapshot && unpublished) {
+      await this.syncStateRepository.updateCurrentStatus?.(
+        MARKET_ASSETS_SYNC_STATE_KEY,
+        { phase: "validating_snapshot" },
+      );
       marketSyncProgressService.startSnapshotValidation(snapshot.rawAssetCount);
       marketSyncProgressService.snapshotValidated({
         validAssets: snapshot.validAssetCount,
@@ -142,6 +140,10 @@ export class RefreshMarketAssetsCatalogUseCase {
         fetchedAt: snapshot.fetchedAt,
         completionReason: snapshot.completionReason,
       });
+      await this.syncStateRepository.updateCurrentStatus?.(
+        MARKET_ASSETS_SYNC_STATE_KEY,
+        { phase: "saving_snapshot" },
+      );
       return this.publish(snapshot, true);
     }
 
@@ -168,6 +170,13 @@ export class RefreshMarketAssetsCatalogUseCase {
     try {
       const collected = await this.collector.execute(MARKET_ASSETS_SYNC_STATE_KEY);
       const snapshot = collected.snapshot;
+      await this.syncStateRepository.updateCurrentStatus?.(
+        MARKET_ASSETS_SYNC_STATE_KEY,
+        {
+          phase: "validating_snapshot",
+          rawAssetCount: snapshot.rawAssetCount,
+        },
+      );
       marketSyncProgressService.startSnapshotValidation(snapshot.rawAssetCount);
       marketSyncProgressService.snapshotValidated({
         validAssets: snapshot.validAssetCount,
@@ -176,6 +185,16 @@ export class RefreshMarketAssetsCatalogUseCase {
         fetchedAt: snapshot.fetchedAt,
         completionReason: collected.completionReason,
       });
+      await this.syncStateRepository.updateCurrentStatus?.(
+        MARKET_ASSETS_SYNC_STATE_KEY,
+        {
+          phase: "saving_snapshot",
+          rawAssetCount: snapshot.rawAssetCount,
+          validAssetCount: snapshot.validAssetCount,
+          skippedAssetCount: snapshot.skippedAssetCount,
+          completionReason: snapshot.completionReason,
+        },
+      );
       await this.store.writeCatalog(snapshot);
       await this.syncStateRepository.markSnapshotSaved(
         MARKET_ASSETS_SYNC_STATE_KEY,
@@ -195,6 +214,10 @@ export class RefreshMarketAssetsCatalogUseCase {
     snapshot: MarketAssetsCatalogSnapshot,
     recoveredSnapshot: boolean,
   ): Promise<RefreshMarketAssetsResult> {
+    await this.syncStateRepository.updateCurrentStatus?.(
+      MARKET_ASSETS_SYNC_STATE_KEY,
+      { phase: "publishing_database" },
+    );
     marketSyncProgressService.startDatabaseSave(
       new Set(snapshot.assets.map((asset) => asset.listingName)).size,
     );

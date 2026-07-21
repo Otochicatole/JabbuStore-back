@@ -7,6 +7,7 @@ import {
   type MarketAssetsPageRequest,
 } from "../IMarketAssetsCatalogClient";
 import type { MarketAssetsPriorityCandidate } from "../MarketAssetsPriorityQueue";
+import type { IMarketAssetCandidateHistoryRepository } from "../../domain/IMarketAssetCandidateHistoryRepository";
 import {
   MemoryMarketAssetsCatalogStore,
   priorityQueue,
@@ -27,6 +28,9 @@ function page(
     quotaUnitsUsed: request.limit,
     rowsUsed: request.limit,
     creditsUsed: request.limit / 10,
+    httpAttempts: 1,
+    durationMs: 5,
+    outcome: assets.length > 0 ? "success" : "success_empty",
   };
 }
 
@@ -200,7 +204,7 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
         store,
         syncStateRepository(),
         undefined,
-        { targetAssets: 10_000, assetsPerItem: 10, concurrency: 50 },
+        { targetAssets: 10_000, assetsPerItem: 10, concurrency: 3 },
       );
 
       const { snapshot } = await collector.execute("test-exact-10000");
@@ -462,7 +466,7 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     expect(store.checkpoint).toMatchObject({ quotaUnitsUsed: 40 });
   });
 
-  it("difiere un timeout aislado y continúa con las siguientes listings", async () => {
+  it("difiere un timeout aislado, continúa y recupera la prioridad antes de publicar", async () => {
     const catalog = [
       redline,
       {
@@ -477,8 +481,12 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       },
     ];
     const store = new MemoryMarketAssetsCatalogStore();
+    let redlineCalls = 0;
     const apiCall = vi.fn(async (candidate, request) => {
-      if (candidate.marketHashName.startsWith("AK-47")) {
+      if (
+        candidate.marketHashName.startsWith("AK-47") &&
+        redlineCalls++ === 0
+      ) {
         throw new MarketAssetsApiError(
           "timeout agotado",
           "retryable",
@@ -499,6 +507,7 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       syncStateRepository(),
       undefined,
       { targetAssets: 2, assetsPerItem: 1, concurrency: 2 },
+      { sleep: vi.fn(async () => undefined) },
     );
 
     const result = await collector.execute("test-deferred-timeout");
@@ -506,16 +515,17 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     expect(result.snapshot.validAssetCount).toBe(2);
     expect(result.snapshot.completionReason).toBe("target_reached");
     expect(result.snapshot.assets.map((asset) => asset.listingName)).toEqual([
+      catalog[0]!.markethashname,
       catalog[1]!.markethashname,
-      catalog[2]!.markethashname,
     ]);
-    const deferred = Object.values(
+    const recovered = Object.values(
       store.checkpoint?.candidateProgress ?? {},
-    ).find((progress) => progress.lastError === "timeout agotado");
-    expect(deferred).toMatchObject({
+    ).find((progress) => progress.validAssetCount === 1);
+    expect(recovered).toMatchObject({
       completed: true,
-      exhausted: true,
-      consecutiveFailures: 1,
+      consecutiveFailures: 0,
+      deferredRecoveryAttempts: 0,
+      lastError: null,
     });
   });
 
@@ -552,8 +562,8 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       kind: "retryable",
       status: 0,
     });
-    expect(apiCall).toHaveBeenCalledTimes(3);
-    expect(sleep).toHaveBeenCalledWith(1_000);
+    expect(apiCall).toHaveBeenCalledTimes(4);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
     expect(
       Object.values(store.checkpoint?.candidateProgress ?? {}).every(
         (progress) => !progress.completed,
@@ -561,8 +571,120 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     ).toBe(true);
   });
 
-  it("degrada 12→6→3→1 y continúa si el probe serial responde", async () => {
-    const catalog = Array.from({ length: 12 }, (_, index) => ({
+  it("no reduce AIMD por un timeout aislado en un lote de tres", async () => {
+    const catalog = [
+      redline,
+      {
+        markethashname: "AWP | Asiimov (Field-Tested)",
+        itemgroup: "sniper rifle",
+        pricereal: 200,
+      },
+      {
+        markethashname: "M4A4 | The Emperor (Factory New)",
+        itemgroup: "rifle",
+        pricereal: 100,
+      },
+      {
+        markethashname: "USP-S | Printstream (Factory New)",
+        itemgroup: "pistol",
+        pricereal: 50,
+      },
+    ];
+    let redlineCalls = 0;
+    const progressSpy = vi.fn(async () => undefined);
+    const state = syncStateRepository();
+    state.markCollectionProgress = progressSpy;
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(async (candidate, request) => {
+        if (
+          candidate.marketHashName === redline.markethashname &&
+          redlineCalls++ === 0
+        ) {
+          throw new MarketAssetsApiError(
+            "timeout aislado",
+            "retryable",
+            0,
+            request.limit,
+            0,
+            1,
+            25,
+            "timeout",
+          );
+        }
+        return page(
+          [rawMarketAsset(candidate.marketHashName, `ok-${candidate.key}`)],
+          request,
+          1,
+        );
+      }),
+      priorityQueue(catalog),
+      new MemoryMarketAssetsCatalogStore(),
+      state,
+      undefined,
+      { targetAssets: 3, assetsPerItem: 1, concurrency: 3 },
+      { sleep: vi.fn(async () => undefined) },
+    );
+
+    const result = await collector.execute("test-isolated-aimd");
+
+    expect(result.snapshot.validAssetCount).toBe(3);
+    expect(progressSpy.mock.calls[0]![2].telemetry).toMatchObject({
+      currentConcurrency: 3,
+      concurrencyReductionCount: 0,
+      timeoutCount: 1,
+    });
+  });
+
+  it("reduce AIMD cuando fallan por congestión los tres requests del lote", async () => {
+    const catalog = Array.from({ length: 3 }, (_, index) => ({
+      markethashname: `AK-47 | Congestion ${index} (Factory New)`,
+      itemgroup: "rifle",
+      pricereal: 100 - index,
+    }));
+    let calls = 0;
+    const progressSpy = vi.fn(async () => undefined);
+    const state = syncStateRepository();
+    state.markCollectionProgress = progressSpy;
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(async (candidate, request) => {
+        if (++calls <= 3) {
+          throw new MarketAssetsApiError(
+            "lote congestionado",
+            "retryable",
+            0,
+            request.limit,
+            0,
+            1,
+            30,
+            "timeout",
+          );
+        }
+        return page(
+          [rawMarketAsset(candidate.marketHashName, `ok-${candidate.key}`)],
+          request,
+          1,
+        );
+      }),
+      priorityQueue(catalog),
+      new MemoryMarketAssetsCatalogStore(),
+      state,
+      undefined,
+      { targetAssets: 3, assetsPerItem: 1, concurrency: 3 },
+      { sleep: vi.fn(async () => undefined) },
+    );
+
+    await expect(collector.execute("test-full-batch-aimd")).resolves.toMatchObject({
+      completionReason: "target_reached",
+    });
+    expect(progressSpy.mock.calls[0]![2].telemetry).toMatchObject({
+      currentConcurrency: 1,
+      concurrencyReductionCount: 1,
+      timeoutCount: 3,
+    });
+  });
+
+  it("degrada 3 a 1 y sube a 2 tras quince lotes sanos", async () => {
+    const catalog = Array.from({ length: 18 }, (_, index) => ({
       markethashname: `AK-47 | Adaptive ${String(index).padStart(2, "0")} (Factory New)`,
       itemgroup: "rifle",
       pricereal: 1_000 - index,
@@ -571,8 +693,9 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     let calls = 0;
     const apiCall = vi.fn(async (candidate, request) => {
       calls++;
-      // Lotes fallidos de 12, 6 y 3. Desde el probe serial la API se recupera.
-      if (calls <= 21) {
+      // El primer lote físico queda limitado a tres. Desde el probe serial la
+      // API se recupera y AIMD suma uno después de quince lotes saludables.
+      if (calls <= 3) {
         throw new MarketAssetsApiError(
           "concurrencia saturada",
           "retryable",
@@ -593,28 +716,27 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       store,
       syncStateRepository(),
       undefined,
-      { targetAssets: 12, assetsPerItem: 1, concurrency: 12 },
+      { targetAssets: 18, assetsPerItem: 1, concurrency: 3 },
       { sleep },
     );
 
     const result = await collector.execute("test-adaptive-concurrency");
 
     expect(result.snapshot).toMatchObject({
-      validAssetCount: 12,
+      validAssetCount: 18,
       completionReason: "target_reached",
     });
-    expect(apiCall).toHaveBeenCalledTimes(33);
-    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([
-      1_000, 2_000, 4_000,
-    ]);
+    expect(apiCall).toHaveBeenCalledTimes(21);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000]);
     expect(store.checkpoint).toMatchObject({
-      concurrency: 12,
-      quotaUnitsUsed: 75,
-      cursorIndex: 12,
+      concurrency: 3,
+      effectiveConcurrency: 2,
+      quotaUnitsUsed: 27,
+      cursorIndex: 18,
     });
   });
 
-  it("migra un checkpoint 12→3 y reabre listings prioritarias diferidas", async () => {
+  it("migra un checkpoint 12→3 sin descartar resultados exitosos", async () => {
     const catalog = [
       redline,
       {
@@ -631,12 +753,12 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     const store = new MemoryMarketAssetsCatalogStore();
     const oldCollector = new CollectMarketAssetsCatalogUseCase(
       client(async (candidate, request) => {
-        if (candidate.marketHashName === redline.markethashname) {
+        if (candidate.marketHashName.startsWith("AWP")) {
           throw new MarketAssetsApiError(
-            "timeout con concurrencia antigua",
-            "retryable",
-            0,
-            request.limit * 3,
+            "credenciales rechazadas durante el lote",
+            "fatal",
+            402,
+            request.limit,
           );
         }
         return page(
@@ -649,10 +771,12 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       store,
       syncStateRepository(),
       undefined,
-      { targetAssets: 2, assetsPerItem: 1, concurrency: 2 },
+      { targetAssets: 3, assetsPerItem: 1, concurrency: 3 },
     );
-    await oldCollector.execute("test-old-concurrency");
-    expect(store.checkpoint?.cursorIndex).toBe(3);
+    await expect(
+      oldCollector.execute("test-old-concurrency"),
+    ).rejects.toMatchObject({ status: 402, kind: "fatal" });
+    expect(store.checkpoint?.assets).toHaveLength(2);
     store.checkpoint!.concurrency = 12;
 
     const resumedCalls: string[] = [];
@@ -669,16 +793,17 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       store,
       syncStateRepository(),
       undefined,
-      { targetAssets: 2, assetsPerItem: 1, concurrency: 3 },
+      { targetAssets: 3, assetsPerItem: 1, concurrency: 3 },
     );
 
     const result = await resumedCollector.execute("test-new-concurrency");
 
     expect(result.resumedCheckpoint).toBe(true);
-    expect(resumedCalls).toEqual([redline.markethashname]);
+    expect(resumedCalls).toEqual([catalog[1]!.markethashname]);
     expect(result.snapshot.assets.map((asset) => asset.listingName)).toEqual([
       redline.markethashname,
       catalog[1]!.markethashname,
+      catalog[2]!.markethashname,
     ]);
     expect(store.checkpoint).toMatchObject({
       concurrency: 3,
@@ -687,7 +812,7 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     expect(store.deletedCheckpoints).toBe(0);
   });
 
-  it("no publica catálogo agotado si quedaron listings diferidas", async () => {
+  it("no publica catálogo agotado tras agotar dos rondas diferidas", async () => {
     const catalog = [
       redline,
       {
@@ -718,11 +843,12 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       syncStateRepository(),
       undefined,
       { targetAssets: 3, assetsPerItem: 1, concurrency: 2 },
+      { sleep: vi.fn(async () => undefined) },
     );
 
     await expect(
       collector.execute("test-deferred-exhaustion"),
-    ).rejects.toThrow("Quedaron 1 listings con errores transitorios");
+    ).rejects.toThrow("timeout pendiente");
     expect(store.checkpoint).toMatchObject({
       cursorIndex: 0,
       assets: [expect.objectContaining({ assetId: "asiimov-ok" })],
@@ -730,7 +856,158 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     const deferred = Object.values(
       store.checkpoint?.candidateProgress ?? {},
     ).find((progress) => progress.lastError === "timeout pendiente");
-    expect(deferred).toMatchObject({ completed: false, exhausted: false });
+    expect(deferred).toMatchObject({
+      completed: false,
+      exhausted: false,
+      deferredRecoveryAttempts: 2,
+      consecutiveFailures: 3,
+    });
+  });
+
+  it("publica el target fresco con warning durable si un diferido agotó sus rondas", async () => {
+    const catalog = [
+      redline,
+      {
+        markethashname: "AWP | Asiimov (Field-Tested)",
+        itemgroup: "sniper rifle",
+        pricereal: 200,
+      },
+      {
+        markethashname: "M4A4 | The Emperor (Factory New)",
+        itemgroup: "rifle",
+        pricereal: 100,
+      },
+    ];
+    const store = new MemoryMarketAssetsCatalogStore();
+    const progressSpy = vi.fn(async () => undefined);
+    const state = syncStateRepository();
+    state.markCollectionProgress = progressSpy;
+    const apiCall = vi.fn(async (candidate, request) => {
+      if (candidate.marketHashName === redline.markethashname) {
+        throw new MarketAssetsApiError(
+          "timeout diferido definitivo",
+          "retryable",
+          0,
+          request.limit,
+          0,
+          1,
+          50,
+          "timeout",
+        );
+      }
+      return page(
+        [rawMarketAsset(candidate.marketHashName, `fresh-${candidate.key}`)],
+        request,
+        1,
+      );
+    });
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(apiCall),
+      priorityQueue(catalog),
+      store,
+      state,
+      undefined,
+      { targetAssets: 2, assetsPerItem: 1, concurrency: 2 },
+      { sleep: vi.fn(async () => undefined) },
+    );
+
+    const result = await collector.execute("test-target-with-deferred-warning");
+
+    expect(result.snapshot).toMatchObject({
+      validAssetCount: 2,
+      completionReason: "target_reached",
+    });
+    expect(apiCall.mock.calls.filter(([candidate]) =>
+      candidate.marketHashName === redline.markethashname,
+    )).toHaveLength(3);
+    const deferred = Object.values(store.checkpoint!.candidateProgress).find(
+      (progress) => progress.lastError === "timeout diferido definitivo",
+    );
+    expect(deferred).toMatchObject({
+      completed: true,
+      exhausted: false,
+      consecutiveFailures: 3,
+      deferredRecoveryAttempts: 2,
+    });
+    expect(
+      progressSpy.mock.calls.at(-1)![2].telemetry.deferredCandidateCount,
+    ).toBe(1);
+  });
+
+  it("usa un hint exitoso sólo para el límite inicial y pagina si creció el total", async () => {
+    const store = new MemoryMarketAssetsCatalogStore();
+    const calls: Array<{ limit: number; offset: number }> = [];
+    const historyRepository: IMarketAssetCandidateHistoryRepository = {
+      async getByCandidateKeys(keys) {
+        return keys.map((candidateKey) => ({
+          candidateKey,
+          queueVersion: "previous",
+          marketHashName: redline.markethashname,
+          outcome: "available" as const,
+          providerTotal: 2,
+          rawAssetCount: 2,
+          validAssetCount: 2,
+          skippedAssetCount: 0,
+          pageRequests: 1,
+          httpAttempts: 1,
+          latencyMs: 5,
+          lastOffset: 2,
+          observedAt: new Date("2026-07-20T00:00:00.000Z"),
+          runId: null,
+          effectiveConcurrency: 1,
+          errorStatus: null,
+          errorMessage: null,
+        }));
+      },
+      recordObservations: vi.fn(async () => undefined),
+      prune: vi.fn(async () => 0),
+    };
+    const apiCall = vi.fn(async (candidate, request) => {
+      calls.push({ limit: request.limit, offset: request.offset });
+      return page(
+        Array.from({ length: request.limit }, (_, index) =>
+          rawMarketAsset(
+            candidate.marketHashName,
+            `history-${request.offset + index}`,
+          ),
+        ),
+        request,
+        5,
+      );
+    });
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(apiCall),
+      priorityQueue([redline]),
+      store,
+      syncStateRepository(),
+      undefined,
+      { targetAssets: 5, assetsPerItem: 5, concurrency: 1 },
+      {
+        sleep: vi.fn(async () => undefined),
+        historyRepository,
+      },
+    );
+
+    const result = await collector.execute("test-history-limit");
+
+    expect(calls).toEqual([
+      { limit: 2, offset: 0 },
+      { limit: 3, offset: 2 },
+    ]);
+    expect(result.snapshot.validAssetCount).toBe(5);
+    expect(historyRepository.prune).toHaveBeenCalledOnce();
+    expect(historyRepository.recordObservations).toHaveBeenCalledWith(
+      null,
+      [
+        expect.objectContaining({
+          outcome: "available",
+          providerTotal: 5,
+          validAssetCount: 5,
+          pageRequests: 2,
+          latencyMs: 10,
+        }),
+      ],
+    );
   });
 
   it("no dispara candidatos posteriores cuando el primero falla fatalmente", async () => {
@@ -768,5 +1045,54 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
       kind: "fatal",
     });
     expect(apiCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("valida un checkpoint de forma read-only contra hash y configuración", async () => {
+    const store = new MemoryMarketAssetsCatalogStore();
+    const options = { targetAssets: 1, assetsPerItem: 1, concurrency: 1 };
+    const stableCollector = new CollectMarketAssetsCatalogUseCase(
+      client(async (candidate, request) =>
+        page(
+          [rawMarketAsset(candidate.marketHashName, "probe-compatible")],
+          request,
+          1,
+        ),
+      ),
+      priorityQueue([redline]),
+      store,
+      syncStateRepository(),
+      undefined,
+      options,
+    );
+    await stableCollector.execute("test-compatible-probe");
+
+    await expect(stableCollector.hasCompatibleCheckpoint()).resolves.toBe(true);
+    const changedQueueCollector = new CollectMarketAssetsCatalogUseCase(
+      client(vi.fn()),
+      priorityQueue([{ ...redline, pricereal: 301 }]),
+      store,
+      syncStateRepository(),
+      undefined,
+      options,
+    );
+    await expect(
+      changedQueueCollector.hasCompatibleCheckpoint(),
+    ).resolves.toBe(false);
+    expect(store.deletedCheckpoints).toBe(0);
+    expect(store.checkpoint).not.toBeNull();
+  });
+
+  it("rechaza concurrencia configurada por encima del máximo físico de tres", () => {
+    expect(
+      () =>
+        new CollectMarketAssetsCatalogUseCase(
+          client(vi.fn()),
+          priorityQueue([redline]),
+          new MemoryMarketAssetsCatalogStore(),
+          syncStateRepository(),
+          undefined,
+          { targetAssets: 10, assetsPerItem: 10, concurrency: 4 },
+        ),
+    ).toThrow("MARKET_ASSETS_CONCURRENCY debe estar entre 1 y 3");
   });
 });

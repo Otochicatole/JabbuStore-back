@@ -20,6 +20,47 @@ function snapshot() {
 }
 
 describe("RefreshMarketAssetsCatalogUseCase recovery", () => {
+  it("no considera recuperable un checkpoint incompatible con la cola/config actual", async () => {
+    const store = {
+      getCheckpointStatus: vi.fn(async () => ({ exists: true })),
+      getStatus: vi.fn(async () => ({ exists: false, version: null })),
+    };
+    const collector = {
+      hasCompatibleCheckpoint: vi.fn(async () => false),
+    };
+    const useCase = new RefreshMarketAssetsCatalogUseCase(
+      collector as any,
+      store as any,
+      { publish: vi.fn() } as any,
+      { get: vi.fn(async () => null) } as any,
+    );
+
+    await expect(useCase.hasPendingRecovery()).resolves.toBe(false);
+    expect(collector.hasCompatibleCheckpoint).toHaveBeenCalledOnce();
+  });
+
+  it("propaga readiness al validar un checkpoint sin borrar ni reemplazarlo", async () => {
+    const readiness = new Error("items-catalog.json no está disponible");
+    const store = {
+      getCheckpointStatus: vi.fn(async () => ({ exists: true })),
+      getStatus: vi.fn(async () => ({ exists: false, version: null })),
+      deleteCheckpoint: vi.fn(),
+    };
+    const useCase = new RefreshMarketAssetsCatalogUseCase(
+      {
+        hasCompatibleCheckpoint: vi.fn(async () => {
+          throw readiness;
+        }),
+      } as any,
+      store as any,
+      { publish: vi.fn() } as any,
+      { get: vi.fn(async () => null) } as any,
+    );
+
+    await expect(useCase.hasPendingRecovery()).rejects.toBe(readiness);
+    expect(store.deleteCheckpoint).not.toHaveBeenCalled();
+  });
+
   it("publica un archivo descargado aunque el crash ocurrió antes de guardar su estado", async () => {
     const downloaded = snapshot();
     const store = {
@@ -85,6 +126,44 @@ describe("RefreshMarketAssetsCatalogUseCase recovery", () => {
     expect(store.deleteCheckpoint).toHaveBeenCalledOnce();
   });
 
+  it("finaliza una publicación aunque startAttempt ya haya cambiado la fase y lastStartedAt", async () => {
+    const store = {
+      getCheckpointStatus: vi.fn(async () => ({ exists: false })),
+      readCatalog: vi.fn(async () => snapshot()),
+      deleteCheckpoint: vi.fn(async () => undefined),
+    };
+    const state = {
+      get: vi.fn(async () => ({
+        currentPhase: "building_priority_queue",
+        lastStartedAt: new Date("2026-07-21T12:01:00.000Z"),
+        lastPublishedSnapshotHash: "a".repeat(64),
+        lastPublishedListingCount: 1,
+        lastPublishedFloatCount: 1,
+        lastPublishedRawAssetCount: 1,
+        lastPublishedValidAssetCount: 1,
+        lastPublishedSkippedAssetCount: 0,
+        lastPublishedAt: new Date("2026-07-21T12:00:30.000Z"),
+        lastSuccessfulAt: new Date("2026-07-20T12:00:00.000Z"),
+        completionReason: "catalog_exhausted",
+      })),
+    };
+    const publisher = { publish: vi.fn() };
+    const collector = { execute: vi.fn() };
+    const useCase = new RefreshMarketAssetsCatalogUseCase(
+      collector as any,
+      store as any,
+      publisher as any,
+      state as any,
+    );
+
+    const result = await useCase.recoverPending();
+
+    expect(result?.recoveredSnapshot).toBe(true);
+    expect(result?.floats).toBe(1);
+    expect(collector.execute).not.toHaveBeenCalled();
+    expect(publisher.publish).not.toHaveBeenCalled();
+  });
+
   it("no reutiliza el snapshot anterior después de una corrida ya completada", async () => {
     const store = {
       getCheckpointStatus: vi.fn(async () => ({ exists: false })),
@@ -95,6 +174,8 @@ describe("RefreshMarketAssetsCatalogUseCase recovery", () => {
         currentPhase: "completed",
         queueVersion: "a".repeat(64),
         lastPublishedSnapshotHash: "a".repeat(64),
+        lastPublishedAt: new Date("2026-01-01T00:00:00.000Z"),
+        lastSuccessfulAt: new Date("2026-01-01T00:00:00.000Z"),
       })),
     };
     const collector = { execute: vi.fn() };
@@ -121,6 +202,7 @@ describe("RefreshMarketAssetsCatalogUseCase recovery", () => {
         queueVersion: "a".repeat(64),
         lastPublishedSnapshotHash: "a".repeat(64),
         lastPublishedAt: new Date("2026-01-01T00:00:00.000Z"),
+        lastSuccessfulAt: new Date("2026-01-01T00:00:01.000Z"),
         lastStartedAt: new Date("2026-01-02T00:00:00.000Z"),
       })),
     };

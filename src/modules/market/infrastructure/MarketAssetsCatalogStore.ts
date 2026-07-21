@@ -121,6 +121,8 @@ function isCandidateCheckpoint(
 ): value is MarketAssetsCandidateCheckpoint {
   return (
     isRecord(value) &&
+    isNonNegativeInteger(value.initialLimit) &&
+    value.initialLimit <= 10 &&
     isNonNegativeInteger(value.offset) &&
     isNonNegativeInteger(value.validAssetCount) &&
     isNonNegativeInteger(value.rawAssetCount) &&
@@ -131,6 +133,10 @@ function isCandidateCheckpoint(
     value.creditsUsed >= 0 &&
     isNonNegativeInteger(value.providerTotal) &&
     isNonNegativeInteger(value.consecutiveFailures) &&
+    isNonNegativeInteger(value.pageRequests) &&
+    isNonNegativeInteger(value.httpAttempts) &&
+    value.httpAttempts >= value.pageRequests &&
+    isNonNegativeInteger(value.deferredRecoveryAttempts) &&
     typeof value.completed === "boolean" &&
     typeof value.exhausted === "boolean" &&
     (value.lastError === null || typeof value.lastError === "string") &&
@@ -139,18 +145,61 @@ function isCandidateCheckpoint(
   );
 }
 
+/** Migra checkpoints v2 sin perder assets ni offsets ya validados. */
+function migrateCheckpointV2(value: Record<string, any>): Record<string, any> {
+  if (value.schemaVersion !== 2) return value;
+  const candidateProgress = isRecord(value.candidateProgress)
+    ? Object.fromEntries(
+        Object.entries(value.candidateProgress).map(([key, rawProgress]) => {
+          const progress = isRecord(rawProgress) ? rawProgress : {};
+          return [
+            key,
+            {
+              ...progress,
+              initialLimit: 0,
+              pageRequests: 0,
+              httpAttempts: 0,
+              deferredRecoveryAttempts: 0,
+            },
+          ];
+        }),
+      )
+    : value.candidateProgress;
+  return {
+    ...value,
+    schemaVersion: MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION,
+    runId: null,
+    effectiveConcurrency: Math.max(
+      1,
+      Math.min(3, Math.trunc(Number(value.concurrency) || 1)),
+    ),
+    successfulBatchesSinceReduction: 0,
+    adaptiveFailureRounds: 0,
+    candidateProgress,
+  };
+}
+
 export function parseMarketAssetsCollectionCheckpoint(
   value: unknown,
 ): MarketAssetsCollectionCheckpoint | null {
   if (!isRecord(value)) return null;
+  value = migrateCheckpointV2(value);
+  // La reasignación pierde el narrowing de TypeScript aunque la migración
+  // siempre devuelva un record; mantener la validación explícita evita casts.
+  if (!isRecord(value)) return null;
   if (
     value.schemaVersion !== MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION ||
+    (value.runId !== null && typeof value.runId !== "string") ||
     !isHash(value.queueVersion) ||
     !isPositiveInteger(value.targetAssets) ||
     !isPositiveInteger(value.assetsPerItem) ||
     value.assetsPerItem > 10 ||
     !isSort(value.sort) ||
     !isPositiveInteger(value.concurrency) ||
+    !isPositiveInteger(value.effectiveConcurrency) ||
+    value.effectiveConcurrency > 3 ||
+    !isNonNegativeInteger(value.successfulBatchesSinceReduction) ||
+    !isNonNegativeInteger(value.adaptiveFailureRounds) ||
     !isNonNegativeInteger(value.cursorIndex) ||
     !isNonNegativeInteger(value.candidatesVisited) ||
     !isNonNegativeInteger(value.totalCandidates) ||
@@ -325,7 +374,8 @@ export class MarketAssetsCatalogStore implements IMarketAssetsCatalogStore {
       // la cola; un archivo corrupto de la versión actual sí detiene el proceso.
       if (
         isRecord(decoded) &&
-        decoded.schemaVersion !== MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION
+        decoded.schemaVersion !== MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION &&
+        decoded.schemaVersion !== 2
       ) {
         return null;
       }

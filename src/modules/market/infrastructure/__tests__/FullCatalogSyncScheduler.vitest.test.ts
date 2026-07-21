@@ -15,7 +15,7 @@ import {
 } from "../FullCatalogSyncScheduler";
 import { createLocalPriceCatalogSyncScheduler } from "../../../pricing/infrastructure/LocalPriceCatalogSyncScheduler";
 
-const INTERVAL_MINUTES = 720;
+const INTERVAL_MINUTES = 300;
 const INTERVAL_MS = INTERVAL_MINUTES * 60_000;
 const STARTED_AT = new Date("2026-07-20T12:00:00.000Z");
 
@@ -93,7 +93,7 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
     harness.scheduler.stop();
   });
 
-  it("agenda el ciclo siguiente 720 minutos después del último éxito", async () => {
+  it("agenda el ciclo siguiente 300 minutos después del último éxito", async () => {
     const harness = createHarness();
     harness.scheduler.start();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -116,9 +116,9 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
     await vi.advanceTimersByTimeAsync(100 * 60_000);
     harness.setStatus(publishedStatus(Date.now()));
 
-    // Llega el timer originalmente armado para t+720m, pero el nuevo éxito
-    // manual lo desplaza hasta t+820m.
-    await vi.advanceTimersByTimeAsync(620 * 60_000);
+    // Llega el timer originalmente armado para t+300m, pero el nuevo éxito
+    // manual lo desplaza hasta t+400m.
+    await vi.advanceTimersByTimeAsync(200 * 60_000);
     expect(harness.execute).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100 * 60_000 - 1);
@@ -339,6 +339,28 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(harness.execute).toHaveBeenCalledTimes(2);
+    harness.scheduler.stop();
+  });
+
+  it("tras reiniciar agenda un fallo fatal desde el fin del intento", async () => {
+    const failedAt = STARTED_AT.getTime() - 60_000;
+    const harness = createHarness({
+      status: {
+        resumable: false,
+        snapshotHash: null,
+        lastSuccessfulAt: new Date(STARTED_AT.getTime() - INTERVAL_MS).toISOString(),
+        lastFinishedAt: new Date(failedAt).toISOString(),
+        phase: "failed",
+        quotaResetsAt: null,
+      },
+    });
+
+    harness.scheduler.start();
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS - 60_001);
+    expect(harness.execute).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.execute).toHaveBeenCalledOnce();
     harness.scheduler.stop();
   });
 });

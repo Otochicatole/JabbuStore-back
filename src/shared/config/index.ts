@@ -118,8 +118,11 @@ export const config = {
       10,
       toPositiveInteger(process.env.MARKET_ASSETS_PER_ITEM, 10),
     ),
-    /** Requests float/assets simultáneos; 3 evita saturación observada con 12. */
-    concurrency: toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 3),
+    /** Requests simultáneos; 3 es un máximo de seguridad, no sólo el default. */
+    concurrency: Math.min(
+      3,
+      toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 3),
+    ),
     sort: (process.env.MARKET_ASSETS_SORT || 'newest') as
       | 'newest'
       | 'oldest'
