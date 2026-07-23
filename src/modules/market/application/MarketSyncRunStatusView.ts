@@ -1,4 +1,5 @@
 import type {
+  MarketSyncCircuitBreakerState,
   MarketSyncEtaConfidence,
   MarketSyncRunRecord,
   MarketSyncRunStatusView,
@@ -12,6 +13,22 @@ export interface MarketSyncRunStatusContext {
   windowQuotaUnitsUsed: number;
   quotaLimit: number;
   quotaResetsAt: string | null;
+  workers?: {
+    initial?: number | undefined;
+    max?: number | undefined;
+    effective?: number | undefined;
+    required?: number | undefined;
+    inFlight?: number | undefined;
+    queueDepth?: number | undefined;
+  };
+  circuitBreaker?: {
+    state: MarketSyncCircuitBreakerState;
+    openCount: number;
+    resumeAt: string | null;
+  };
+  targetDurationSeconds?: number;
+  targetDeadlineAt?: string | null;
+  tenMinuteTargetUnreachable?: boolean;
 }
 
 function duration(from: Date, to: Date): number {
@@ -134,6 +151,41 @@ export function buildMarketSyncRunStatusView(
           validAssetsPerMinute > 0
         ? Math.ceil((remaining / validAssetsPerMinute) * 60 - 1e-9)
         : null;
+  const targetDurationSeconds = Math.max(
+    1,
+    Math.trunc(context.targetDurationSeconds ?? 600),
+  );
+  const parsedDeadline = context.targetDeadlineAt
+    ? Date.parse(context.targetDeadlineAt)
+    : Number.NaN;
+  const targetDeadlineMs = Number.isFinite(parsedDeadline)
+    ? parsedDeadline
+    : run.runStartedAt.getTime() + targetDurationSeconds * 1_000;
+  const secondsUntilTarget = Math.max(
+    1,
+    Math.ceil((targetDeadlineMs - now.getTime()) / 1_000),
+  );
+  const requiredAssetsPerMinute =
+    remaining === 0
+      ? 0
+      : Math.round((remaining / secondsUntilTarget) * 600) / 10;
+  const projectedCompletionAt =
+    etaSeconds == null
+      ? null
+      : new Date(now.getTime() + etaSeconds * 1_000).toISOString();
+  const targetIsUnreachable =
+    Boolean(context.tenMinuteTargetUnreachable) ||
+    (remaining > 0 && now.getTime() >= targetDeadlineMs) ||
+    (projectedCompletionAt != null &&
+      Date.parse(projectedCompletionAt) > targetDeadlineMs);
+  const onTrack =
+    remaining === 0
+      ? true
+      : targetIsUnreachable
+        ? false
+        : projectedCompletionAt == null
+          ? null
+          : Date.parse(projectedCompletionAt) <= targetDeadlineMs;
   let etaConfidence: MarketSyncEtaConfidence = "unavailable";
   if (etaSeconds != null && remaining > 0) {
     const timeoutRatio = run.timeoutCount / Math.max(1, run.httpAttempts);
@@ -166,6 +218,59 @@ export function buildMarketSyncRunStatusView(
   ) {
     warnings.push("quota_window_near_limit");
   }
+  if (targetIsUnreachable) warnings.push("ten_minute_target_unreachable");
+
+  const maximumWorkers = Math.max(
+    0,
+    Math.trunc(context.workers?.max ?? run.configuredConcurrency),
+  );
+  const effectiveWorkers = Math.min(
+    maximumWorkers,
+    Math.max(
+      0,
+      Math.trunc(context.workers?.effective ?? run.currentConcurrency),
+    ),
+  );
+  const initialWorkers = Math.min(
+    maximumWorkers,
+    Math.max(
+      0,
+      Math.trunc(
+        context.workers?.initial ??
+          Math.min(6, maximumWorkers),
+      ),
+    ),
+  );
+  const inFlightWorkers = Math.min(
+    effectiveWorkers,
+    Math.max(0, Math.trunc(context.workers?.inFlight ?? 0)),
+  );
+  const estimatedRequiredWorkers =
+    remaining === 0
+      ? 0
+      : validAssetsPerMinute != null &&
+          validAssetsPerMinute > 0 &&
+          effectiveWorkers > 0
+        ? Math.ceil(
+            (requiredAssetsPerMinute /
+              (validAssetsPerMinute / effectiveWorkers)) *
+              1.15,
+          )
+        : initialWorkers;
+  const requiredWorkers = Math.min(
+    maximumWorkers,
+    Math.max(
+      remaining === 0 ? 0 : 1,
+      Math.trunc(context.workers?.required ?? estimatedRequiredWorkers),
+    ),
+  );
+  const queueDepth = Math.max(
+    0,
+    Math.trunc(
+      context.workers?.queueDepth ??
+        Math.max(0, run.totalCandidates - run.candidatesVisited),
+    ),
+  );
 
   return {
     id: run.id,
@@ -224,6 +329,27 @@ export function buildMarketSyncRunStatusView(
           : Math.round(validAssetsPerMinute * 10) / 10,
       etaSeconds,
       etaConfidence,
+      targetDurationSeconds,
+      requiredAssetsPerMinute,
+      onTrack,
+      projectedCompletionAt,
+    },
+    workers: {
+      initial: initialWorkers,
+      max: maximumWorkers,
+      effective: effectiveWorkers,
+      required: requiredWorkers,
+      inFlight: inFlightWorkers,
+      queueDepth,
+      utilization:
+        effectiveWorkers > 0
+          ? Math.round((inFlightWorkers / effectiveWorkers) * 1_000) / 1_000
+          : 0,
+    },
+    circuitBreaker: context.circuitBreaker ?? {
+      state: "closed",
+      openCount: 0,
+      resumeAt: null,
     },
     slowReason: slowReason({ run, activeMs, averageLatency, p95 }),
     recommendedPollAfterMs: pollingDelay(run, context.quotaResetsAt, now),

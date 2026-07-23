@@ -106,6 +106,8 @@ export class RunFullCatalogSyncUseCase {
         targetAssets: config.marketAssetsCatalog.target,
         assetsPerItem: config.marketAssetsCatalog.assetsPerItem,
         configuredConcurrency: config.marketAssetsCatalog.concurrency,
+        initialConcurrency:
+          config.marketAssetsCatalog.initialConcurrency,
         recoveryRequested,
         recoveryKind: recoveryRequested ? "pending" : "none",
       });

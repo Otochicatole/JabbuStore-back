@@ -8,6 +8,8 @@ const keys = [
   "ITEMS_CATALOG_SYNC_INTERVAL_MINUTES",
   "STORE_SYNC_INTERVAL_MINUTES",
   "MARKET_ASSETS_CONCURRENCY",
+  "MARKET_ASSETS_INITIAL_CONCURRENCY",
+  "MARKET_ASSETS_TARGET_DURATION_SECONDS",
 ] as const;
 
 const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -30,6 +32,8 @@ describe("sync scheduler config", () => {
     process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES = "45";
     process.env.STORE_SYNC_INTERVAL_MINUTES = "30";
     process.env.MARKET_ASSETS_CONCURRENCY = "5";
+    process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "9";
+    process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "120";
     vi.resetModules();
 
     const { config } = await import("../index");
@@ -39,7 +43,9 @@ describe("sync scheduler config", () => {
     expect(config.marketAssetsSync.intervalMinutes).toBe(90);
     expect(config.fullCatalogSync.intervalMinutes).toBe(90);
     expect(config.itemsCatalog.syncIntervalMinutes).toBe(45);
-    expect(config.marketAssetsCatalog.concurrency).toBe(3);
+    expect(config.marketAssetsCatalog.concurrency).toBe(5);
+    expect(config.marketAssetsCatalog.initialConcurrency).toBe(5);
+    expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(120);
   });
 
   it("acepta FULL_CATALOG como alias de assets y usa 300 ante intervalos inválidos", async () => {
@@ -48,6 +54,8 @@ describe("sync scheduler config", () => {
     process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES = "0";
     delete process.env.STORE_SYNC_INTERVAL_MINUTES;
     process.env.MARKET_ASSETS_CONCURRENCY = "";
+    process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "";
+    process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "";
     vi.resetModules();
 
     const { config } = await import("../index");
@@ -55,6 +63,19 @@ describe("sync scheduler config", () => {
     expect(config.marketAssetsSync.intervalMinutes).toBe(360);
     expect(config.fullCatalogSync.intervalMinutes).toBe(360);
     expect(config.itemsCatalog.syncIntervalMinutes).toBe(300);
-    expect(config.marketAssetsCatalog.concurrency).toBe(3);
+    expect(config.marketAssetsCatalog.concurrency).toBe(48);
+    expect(config.marketAssetsCatalog.initialConcurrency).toBe(6);
+    expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(600);
+  });
+
+  it("limita el pool a 48 workers aunque el entorno solicite más", async () => {
+    process.env.MARKET_ASSETS_CONCURRENCY = "500";
+    process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "200";
+    vi.resetModules();
+
+    const { config } = await import("../index");
+
+    expect(config.marketAssetsCatalog.concurrency).toBe(48);
+    expect(config.marketAssetsCatalog.initialConcurrency).toBe(48);
   });
 });

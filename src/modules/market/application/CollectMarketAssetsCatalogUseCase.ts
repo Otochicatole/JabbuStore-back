@@ -24,9 +24,17 @@ import {
   type MarketAssetsRequestOutcome,
 } from "./IMarketAssetsCatalogClient";
 import {
+  AdaptiveMarketAssetWorkerController,
+  MARKET_ASSET_CONCURRENCY_STAGES,
+  type MarketAssetRequestCompletion,
+  type MarketAssetRequestOutcome,
+} from "./AdaptiveMarketAssetWorkerController";
+import { floatRateLimiter } from "./FloatRateLimiter";
+import {
   MarketAssetsCatalogSnapshotBuilder,
   type NormalizedMarketAssetsBatch,
 } from "./MarketAssetsCatalogSnapshotBuilder";
+import { marketAssetsShutdownCoordinator } from "./MarketAssetsShutdownCoordinator";
 import {
   MarketAssetsPriorityQueueBuilder,
   type MarketAssetsPriorityCandidate,
@@ -37,7 +45,12 @@ import { marketSyncProgressService } from "./MarketSyncProgressService";
 export interface MarketAssetsCollectionOptions {
   targetAssets: number;
   assetsPerItem: number;
+  /** Workers con los que comienza una corrida nueva antes del slow-start. */
+  initialConcurrency: number;
+  /** Techo de workers HTTP en vuelo dentro del único proceso Node. */
   concurrency: number;
+  /** SLO de pared desde que comenzó la corrida hasta la publicación. */
+  targetDurationSeconds: number;
   sort: MarketAssetsCatalogSort;
 }
 
@@ -64,27 +77,49 @@ interface CandidateOutcome {
   notFound: boolean;
   quotaWaitCount: number;
   quotaWaitDurationMs: number;
+  requestSamples: MarketAssetRequestCompletion[];
+  dispatchedConcurrency: number;
+}
+
+interface InFlightCandidate {
+  candidate: MarketAssetsPriorityCandidate;
+  index: number;
+  recovery: boolean;
+  dispatchedConcurrency: number;
+  abortController: AbortController;
+  promise: Promise<CandidateOutcome>;
+}
+
+class MarketAssetsCollectionInterruptedError extends Error {
+  constructor() {
+    super(
+      "La recolección de assets fue pausada para apagar el proceso de forma segura.",
+    );
+    this.name = "MarketAssetsCollectionInterruptedError";
+  }
 }
 
 const DEFAULT_OPTIONS: MarketAssetsCollectionOptions = {
   targetAssets: 10_000,
   assetsPerItem: 10,
-  concurrency: 3,
+  initialConcurrency: 6,
+  concurrency: 48,
+  targetDurationSeconds: 600,
   sort: "newest",
 };
 
-const ADAPTIVE_RETRY_BASE_DELAY_MS = 1_000;
-const ADAPTIVE_RETRY_MAX_DELAY_MS = 30_000;
-const MAX_EFFECTIVE_CONCURRENCY = 3;
-const AIMD_SUCCESS_BATCHES_PER_INCREASE = 15;
+const MAX_EFFECTIVE_CONCURRENCY = 48;
 const MAX_DEFERRED_RECOVERY_ATTEMPTS = 2;
 const MAX_RATE_LIMIT_ATTEMPTS_PER_EXECUTION = 3;
+const CHECKPOINT_FLUSH_INTERVAL_MS = 1_000;
+const CHECKPOINT_FLUSH_OUTCOMES = 10;
 
 export interface MarketAssetsCollectorClock {
   sleep(ms: number): Promise<void>;
 }
 
 export interface MarketAssetsCollectorRuntime extends MarketAssetsCollectorClock {
+  now?(): number;
   random?(): number;
   historyRepository?: IMarketAssetCandidateHistoryRepository;
   runRepository?: Pick<
@@ -94,6 +129,7 @@ export interface MarketAssetsCollectorRuntime extends MarketAssetsCollectorClock
 }
 
 const systemRuntime: MarketAssetsCollectorRuntime = {
+  now: Date.now,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   random: Math.random,
 };
@@ -120,9 +156,17 @@ function optionsFromEnvironment(): MarketAssetsCollectionOptions {
       process.env.MARKET_ASSETS_PER_ITEM,
       DEFAULT_OPTIONS.assetsPerItem,
     ),
+    initialConcurrency: positiveInteger(
+      process.env.MARKET_ASSETS_INITIAL_CONCURRENCY,
+      DEFAULT_OPTIONS.initialConcurrency,
+    ),
     concurrency: positiveInteger(
       process.env.MARKET_ASSETS_CONCURRENCY,
       DEFAULT_OPTIONS.concurrency,
+    ),
+    targetDurationSeconds: positiveInteger(
+      process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS,
+      DEFAULT_OPTIONS.targetDurationSeconds,
     ),
     sort,
   };
@@ -148,7 +192,27 @@ function validateOptions(
     options.concurrency <= 0 ||
     options.concurrency > MAX_EFFECTIVE_CONCURRENCY
   ) {
-    throw new Error("MARKET_ASSETS_CONCURRENCY debe estar entre 1 y 3.");
+    throw new Error("MARKET_ASSETS_CONCURRENCY debe estar entre 1 y 48.");
+  }
+  options.initialConcurrency = Math.min(
+    options.concurrency,
+    options.initialConcurrency,
+  );
+  if (
+    !Number.isInteger(options.initialConcurrency) ||
+    options.initialConcurrency <= 0
+  ) {
+    throw new Error(
+      "MARKET_ASSETS_INITIAL_CONCURRENCY debe ser un entero positivo.",
+    );
+  }
+  if (
+    !Number.isInteger(options.targetDurationSeconds) ||
+    options.targetDurationSeconds <= 0
+  ) {
+    throw new Error(
+      "MARKET_ASSETS_TARGET_DURATION_SECONDS debe ser un entero positivo.",
+    );
   }
   return options;
 }
@@ -178,6 +242,10 @@ function createCheckpoint(
   options: MarketAssetsCollectionOptions,
 ): MarketAssetsCollectionCheckpoint {
   const now = new Date().toISOString();
+  const initialConcurrency = Math.min(
+    options.initialConcurrency,
+    options.concurrency,
+  );
   return {
     schemaVersion: MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION,
     runId: null,
@@ -186,10 +254,28 @@ function createCheckpoint(
     assetsPerItem: options.assetsPerItem,
     sort: options.sort,
     concurrency: options.concurrency,
-    effectiveConcurrency: Math.min(
-      MAX_EFFECTIVE_CONCURRENCY,
-      options.concurrency,
+    initialConcurrency,
+    effectiveConcurrency: initialConcurrency,
+    rampStage: Math.max(
+      0,
+      MARKET_ASSET_CONCURRENCY_STAGES.findIndex(
+        (value) => value >= initialConcurrency,
+      ),
     ),
+    latencyBaselineMs: null,
+    recentHealthSamples: [],
+    concurrencyCooldownUntil: null,
+    consecutiveCongestionFailures: 0,
+    circuitBreaker: {
+      state: "closed",
+      openCount: 0,
+      resumeAt: null,
+    },
+    targetDurationSeconds: options.targetDurationSeconds,
+    targetDeadlineAt: new Date(
+      Date.parse(now) + options.targetDurationSeconds * 1_000,
+    ).toISOString(),
+    tenMinuteTargetUnreachable: false,
     successfulBatchesSinceReduction: 0,
     adaptiveFailureRounds: 0,
     cursorIndex: 0,
@@ -230,18 +316,31 @@ function canResumeCheckpoint(
  * migra el checkpoint en lugar de descartarlo. Al reducirla también se reabren
  * listings que una corrida más agresiva había diferido por errores transitorios.
  */
-function migrateCheckpointConcurrency(
+function migrateCheckpointWorkerConfiguration(
   checkpoint: MarketAssetsCollectionCheckpoint,
   queue: MarketAssetsPriorityQueue,
-  concurrency: number,
+  options: MarketAssetsCollectionOptions,
 ): boolean {
-  if (checkpoint.concurrency === concurrency) return false;
+  const configurationChanged =
+    checkpoint.concurrency !== options.concurrency ||
+    checkpoint.initialConcurrency !==
+      Math.min(options.initialConcurrency, options.concurrency) ||
+    checkpoint.targetDurationSeconds !== options.targetDurationSeconds;
+  if (!configurationChanged) return false;
 
-  checkpoint.concurrency = concurrency;
-  checkpoint.effectiveConcurrency = Math.min(
-    MAX_EFFECTIVE_CONCURRENCY,
-    concurrency,
+  checkpoint.concurrency = options.concurrency;
+  checkpoint.initialConcurrency = Math.min(
+    options.initialConcurrency,
+    options.concurrency,
   );
+  checkpoint.effectiveConcurrency = Math.max(
+    1,
+    Math.min(checkpoint.effectiveConcurrency, options.concurrency),
+  );
+  checkpoint.targetDurationSeconds = options.targetDurationSeconds;
+  checkpoint.targetDeadlineAt = new Date(
+    Date.parse(checkpoint.startedAt) + options.targetDurationSeconds * 1_000,
+  ).toISOString();
   checkpoint.successfulBatchesSinceReduction = 0;
   checkpoint.adaptiveFailureRounds = 0;
   let firstReopenedIndex = checkpoint.cursorIndex;
@@ -348,14 +447,6 @@ function countDeferredCandidates(
   ).length;
 }
 
-function isCongestionError(error: MarketAssetsApiError | null): boolean {
-  return Boolean(
-    error &&
-      error.kind === "retryable" &&
-      error.status !== 429,
-  );
-}
-
 function requestOutcomeForPage(page: {
   outcome?: MarketAssetsRequestOutcome;
   notFound?: boolean;
@@ -369,6 +460,23 @@ function requestOutcomeForPage(page: {
         ? "success"
         : "success_empty")
   );
+}
+
+function rawAssetPageFingerprint(assets: readonly unknown[]): string {
+  return assets
+    .map((asset) => {
+      if (asset && typeof asset === "object") {
+        const record = asset as Record<string, unknown>;
+        const id = record.assetid ?? record.asset_id ?? record.id;
+        if (id != null) return String(id);
+      }
+      try {
+        return JSON.stringify(asset) ?? String(asset);
+      } catch {
+        return String(asset);
+      }
+    })
+    .join("\u001f");
 }
 
 export class CollectMarketAssetsCatalogUseCase {
@@ -421,10 +529,10 @@ export class CollectMarketAssetsCatalogUseCase {
     if (resumable) {
       checkpoint = storedCheckpoint;
       if (
-        migrateCheckpointConcurrency(
+        migrateCheckpointWorkerConfiguration(
           checkpoint,
           queue,
-          options.concurrency,
+          options,
         )
       ) {
         await this.store.writeCheckpoint(checkpoint);
@@ -440,15 +548,6 @@ export class CollectMarketAssetsCatalogUseCase {
         (checkpoint.assets.length > 0 || checkpoint.quotaUnitsUsed > 0),
     );
     const assetIds = new Set(checkpoint.assets.map((asset) => asset.assetId));
-    let effectiveConcurrency = Math.max(
-      1,
-      Math.min(
-        MAX_EFFECTIVE_CONCURRENCY,
-        options.concurrency,
-        checkpoint.effectiveConcurrency,
-      ),
-    );
-    checkpoint.effectiveConcurrency = effectiveConcurrency;
     const historyHints = new Map<
       string,
       MarketAssetCandidateHistoryRecord | null
@@ -456,10 +555,18 @@ export class CollectMarketAssetsCatalogUseCase {
     let runId: string | null = checkpoint.runId;
     try {
       const syncState = await this.syncStateRepository.get(stateKey);
+      const durableRun =
+        await this.runtime.runRepository?.getCurrentOrLast(stateKey);
       runId =
         syncState?.activeRunId ??
-        (await this.runtime.runRepository?.getCurrentOrLast(stateKey))?.id ??
+        durableRun?.id ??
         checkpoint.runId;
+      if (durableRun?.runStartedAt) {
+        checkpoint.targetDeadlineAt = new Date(
+          durableRun.runStartedAt.getTime() +
+            options.targetDurationSeconds * 1_000,
+        ).toISOString();
+      }
       if (checkpoint.runId !== runId) {
         checkpoint.runId = runId;
         await this.store.writeCheckpoint(checkpoint);
@@ -481,6 +588,27 @@ export class CollectMarketAssetsCatalogUseCase {
       );
     }
 
+    let controller: AdaptiveMarketAssetWorkerController;
+    try {
+      controller =
+        AdaptiveMarketAssetWorkerController.restoreFromCheckpoint(
+          checkpoint,
+          { maxConcurrency: options.concurrency },
+        );
+    } catch (error) {
+      console.error(
+        "[Market Assets Sync] El estado adaptativo no era recuperable; se reinicia de forma conservadora:",
+        error,
+      );
+      controller = new AdaptiveMarketAssetWorkerController({
+        initialConcurrency: Math.min(
+          options.initialConcurrency,
+          options.concurrency,
+        ),
+        maxConcurrency: options.concurrency,
+      });
+    }
+
     marketSyncProgressService.startCollection({
       targetAssets: options.targetAssets,
       assetsPerItem: options.assetsPerItem,
@@ -496,279 +624,142 @@ export class CollectMarketAssetsCatalogUseCase {
 
     const failedAttemptsThisExecution = new Map<string, number>();
     const latencyByCandidate = new Map<string, number>();
-
-    for (;;) {
-      advanceCursor(checkpoint, queue);
-      const prefixAssetCount = countAssetsInCompletedPrefix(
-        checkpoint,
-        rankByListing,
+    const lastRetryableErrors = new Map<string, MarketAssetsApiError>();
+    const inFlight = new Map<string, InFlightCandidate>();
+    const activeKeys = new Set<string>();
+    const shutdownAbortController = new AbortController();
+    let nextScanIndex = checkpoint.cursorIndex;
+    let logicalNow = this.runtime.now?.() ?? Date.now();
+    const now = () => {
+      logicalNow = Math.max(
+        logicalNow,
+        this.runtime.now?.() ?? Date.now(),
       );
-      const reachedTerminalBoundary =
-        prefixAssetCount >= options.targetAssets ||
-        checkpoint.cursorIndex >= queue.candidates.length;
-
-      if (reachedTerminalBoundary) {
-        // Antes de publicar se recupera, en orden de prioridad, cualquier
-        // timeout aislado que permitió avanzar un lote paralelo. La recuperación
-        // siempre es serial y cada candidato dispone de dos rondas adicionales.
-        const deferredIndex = queue.candidates.findIndex((candidate) => {
-          const progress = checkpoint.candidateProgress[candidate.key];
-          return Boolean(
-            progress?.completed &&
-              progress.lastError &&
-              progress.consecutiveFailures > 0 &&
-              (failedAttemptsThisExecution.get(candidate.key) ?? 0) < 3,
-          );
-        });
-        if (deferredIndex >= 0) {
-          const candidate = queue.candidates[deferredIndex]!;
-          const progress = checkpoint.candidateProgress[candidate.key]!;
-          progress.completed = false;
-          progress.exhausted = false;
-          progress.deferredRecoveryAttempts = Math.min(
-            MAX_DEFERRED_RECOVERY_ATTEMPTS,
-            progress.deferredRecoveryAttempts + 1,
-          );
-          checkpoint.cursorIndex = deferredIndex;
-          const previousConcurrency = effectiveConcurrency;
-          effectiveConcurrency = 1;
-          checkpoint.effectiveConcurrency = 1;
-          checkpoint.successfulBatchesSinceReduction = 0;
-          if (previousConcurrency > 1) checkpoint.adaptiveFailureRounds++;
-          recomputeCheckpointTotals(checkpoint);
-          await this.store.writeCheckpoint(checkpoint);
-          continue;
-        }
-        break;
-      }
-
-      const remaining = options.targetAssets - prefixAssetCount;
-      const candidatesNeeded = Math.max(
-        1,
-        Math.ceil(remaining / options.assetsPerItem),
+      return logicalNow;
+    };
+    const sleep = async (milliseconds: number) => {
+      const delay = Math.max(0, Math.trunc(milliseconds));
+      await this.runtime.sleep(delay);
+      logicalNow = Math.max(
+        logicalNow + delay,
+        this.runtime.now?.() ?? Date.now(),
       );
-      const batch: MarketAssetsPriorityCandidate[] = [];
-      for (
-        let index = checkpoint.cursorIndex;
-        index < queue.candidates.length &&
-        batch.length < Math.min(effectiveConcurrency, candidatesNeeded);
-        index++
+    };
+    const deadlineAt = () => {
+      const parsed = Date.parse(checkpoint.targetDeadlineAt);
+      return Number.isFinite(parsed)
+        ? parsed
+        : Date.parse(checkpoint.startedAt) +
+            options.targetDurationSeconds * 1_000;
+    };
+    const publishableAssetCount = () =>
+      countAssetsInCompletedPrefix(checkpoint, rankByListing);
+    const demand = () => ({
+      remainingAssets: Math.max(
+        0,
+        options.targetAssets - publishableAssetCount(),
+      ),
+      remainingMs: Math.max(0, deadlineAt() - now()),
+    });
+    let decision = controller.evaluate(demand(), now());
+    let blockingError: MarketAssetsApiError | null = null;
+    let currentCandidate: string | null = null;
+    let pendingOutcomes: CandidateOutcome[] = [];
+    let pendingBackoffMs = 0;
+    let pendingConcurrencyReductions = 0;
+    let pendingConcurrencyIncreases = 0;
+    let peakInFlightSinceFlush = 0;
+    let outcomesSinceFlush = 0;
+    let lastFlushAt = now();
+    let terminationRequested = false;
+    let notifyTerminationRequested!: () => void;
+    const terminationRequestedPromise = new Promise<void>((resolve) => {
+      notifyTerminationRequested = resolve;
+    });
+    let notifyShutdownCompleted!: () => void;
+    const shutdownCompletedPromise = new Promise<void>((resolve) => {
+      notifyShutdownCompleted = resolve;
+    });
+
+    const syncControllerCheckpoint = () => {
+      Object.assign(checkpoint, controller.toCheckpointState());
+      checkpoint.targetDurationSeconds = options.targetDurationSeconds;
+      checkpoint.tenMinuteTargetUnreachable =
+        checkpoint.tenMinuteTargetUnreachable ||
+        (now() >= deadlineAt() &&
+          publishableAssetCount() < options.targetAssets);
+    };
+    const phaseForDecision = (): "collecting_assets" | "waiting_rate_limit" | "paused" => {
+      if (blockingError) return "paused";
+      if (
+        decision.state === "breaker_open" &&
+        decision.circuitBreaker.reason === "rate_limited"
       ) {
-        const candidate = queue.candidates[index]!;
-        if (!checkpoint.candidateProgress[candidate.key]?.completed) {
-          batch.push(candidate);
-        }
+        return "waiting_rate_limit";
       }
-      if (batch.length === 0) {
-        throw new Error(
-          "El checkpoint no puede avanzar aunque quedan candidatos incompletos.",
-        );
-      }
-
-      await this.loadHistoryHints(batch, historyHints);
-      const attemptedConcurrency = batch.length;
-      const globalIdsAtBatchStart = new Set(assetIds);
-      const outcomes = await Promise.all(
-        batch.map((candidate) =>
-          this.collectCandidate(
-            candidate,
-            checkpoint,
-            globalIdsAtBatchStart,
-            options,
-            stateKey,
-            historyHints.get(candidate.key),
-            (failedAttemptsThisExecution.get(candidate.key) ?? 0) > 0,
-          ),
-        ),
-      );
-
-      for (const outcome of outcomes) {
-        latencyByCandidate.set(
-          outcome.candidate.key,
-          (latencyByCandidate.get(outcome.candidate.key) ?? 0) +
-            outcome.durationMs.reduce((total, duration) => total + duration, 0),
-        );
-      }
-
-      for (const outcome of outcomes) {
-        if (!outcome.error) {
-          failedAttemptsThisExecution.delete(outcome.candidate.key);
-          continue;
-        }
-        const previous = outcome.httpSucceeded > 0
-          ? 0
-          : (failedAttemptsThisExecution.get(outcome.candidate.key) ?? 0);
-        failedAttemptsThisExecution.set(outcome.candidate.key, previous + 1);
-      }
-
-      const fatalError = outcomes.find(
-        (outcome) => outcome.error?.kind === "fatal",
-      )?.error ?? null;
-      const batchHasProviderProgress = outcomes.some(
-        (outcome) => !outcome.error || outcome.httpSucceeded > 0,
-      );
-      const onlyCongestionFailures = outcomes.every(
-        (outcome) =>
-          outcome.assets.length === 0 && isCongestionError(outcome.error),
-      );
-      const hasCongestion = outcomes.some((outcome) =>
-        isCongestionError(outcome.error),
-      );
-      const congestionFailureCount = outcomes.filter((outcome) =>
-        isCongestionError(outcome.error),
+      return decision.state === "breaker_open" ? "paused" : "collecting_assets";
+    };
+    const queueDepth = () => {
+      const completed = Object.values(checkpoint.candidateProgress).filter(
+        (progress) => progress.completed,
       ).length;
-      const shouldReduceConcurrency =
-        onlyCongestionFailures ||
-        congestionFailureCount / outcomes.length >= 0.5;
+      return Math.max(0, queue.candidates.length - completed - inFlight.size);
+    };
+    const publishWorkerRuntime = () => {
+      marketSyncProgressService.updateWorkerRuntime({
+        initialConcurrency: checkpoint.initialConcurrency,
+        maxConcurrency: options.concurrency,
+        effectiveConcurrency: decision.effectiveConcurrency,
+        requiredConcurrency: decision.requiredConcurrency,
+        inFlight: inFlight.size,
+        queueDepth: queueDepth(),
+        circuitBreaker: {
+          state: decision.circuitBreaker.state,
+          openCount: decision.circuitBreaker.openedCount,
+          resumeAt:
+            decision.circuitBreaker.resumeAt == null
+              ? null
+              : new Date(decision.circuitBreaker.resumeAt).toISOString(),
+        },
+        targetDurationSeconds: options.targetDurationSeconds,
+        targetDeadlineAt: checkpoint.targetDeadlineAt,
+        tenMinuteTargetUnreachable:
+          checkpoint.tenMinuteTargetUnreachable,
+      });
+    };
 
-      let firstBlockingError: MarketAssetsApiError | null = fatalError;
-      let retryRateLimitedBatch = false;
-      let retryCongestedBatch = false;
-      let retrySerialCandidate = false;
-      let currentCandidate: string | null = null;
-
-      for (const outcome of outcomes) {
-        currentCandidate = outcome.candidate.marketHashName;
-        const progress = outcome.progress;
-
-        for (const item of outcome.assets) {
-          if (assetIds.has(item.assetId)) {
-            progress.validAssetCount--;
-            progress.skippedAssetCount++;
-            continue;
-          }
-          assetIds.add(item.assetId);
-          checkpoint.assets.push(item);
-        }
-
-        // Una colisión entre tareas paralelas deja el candidato incompleto; se
-        // retoma desde el siguiente offset en vez de aceptar menos del máximo.
-        if (
-          progress.completed &&
-          !progress.exhausted &&
-          progress.validAssetCount < options.assetsPerItem &&
-          !outcome.error
-        ) {
-          progress.completed = false;
-        }
-
-        const error = outcome.error;
-        if (error && error.kind !== "candidate" && !fatalError) {
-          const attempts =
-            failedAttemptsThisExecution.get(outcome.candidate.key) ?? 1;
-          if (error.status === 429) {
-            if (attempts < MAX_RATE_LIMIT_ATTEMPTS_PER_EXECUTION) {
-              retryRateLimitedBatch = true;
-            } else if (!firstBlockingError) {
-              firstBlockingError = error;
-            }
-          } else if (error.kind === "retryable") {
-            if (batch.length > 1 && batchHasProviderProgress) {
-              // Un fallo aislado se difiere, pero no se declara agotado. Se
-              // recuperará serialmente antes de construir el snapshot.
-              progress.completed = true;
-              progress.exhausted = true;
-            } else if (batch.length > 1 && onlyCongestionFailures) {
-              if (attempts < 3) retryCongestedBatch = true;
-              else if (!firstBlockingError) firstBlockingError = error;
-            } else if (attempts < 3) {
-              progress.deferredRecoveryAttempts = Math.min(
-                MAX_DEFERRED_RECOVERY_ATTEMPTS,
-                progress.deferredRecoveryAttempts + 1,
-              );
-              retrySerialCandidate = true;
-            } else if (checkpoint.assets.length >= options.targetAssets) {
-              // El objetivo global ya está fresco. Conservar la listing como
-              // diferida/advertida permite publicar los 10k sin confundir este
-              // timeout con `catalog_exhausted` ni perder toda la corrida.
-              progress.completed = true;
-              progress.exhausted = false;
-            } else if (!firstBlockingError) {
-              firstBlockingError = error;
-            }
-          }
-        }
-        checkpoint.candidateProgress[outcome.candidate.key] = progress;
+    const flushProgress = async (
+      force = false,
+      phase = phaseForDecision(),
+    ): Promise<void> => {
+      if (
+        !force &&
+        outcomesSinceFlush < CHECKPOINT_FLUSH_OUTCOMES &&
+        now() - lastFlushAt < CHECKPOINT_FLUSH_INTERVAL_MS
+      ) {
+        return;
       }
-
-      const previousConcurrency = effectiveConcurrency;
-      let concurrencyReductionCount = 0;
-      let concurrencyIncreaseCount = 0;
-      if (hasCongestion && !fatalError) {
-        checkpoint.successfulBatchesSinceReduction = 0;
-        checkpoint.adaptiveFailureRounds++;
-        if (shouldReduceConcurrency && effectiveConcurrency > 1) {
-          effectiveConcurrency = Math.max(
-            1,
-            Math.floor(effectiveConcurrency / 2),
-          );
-          concurrencyReductionCount = 1;
-        }
-      } else if (outcomes.every((outcome) => !outcome.error)) {
-        checkpoint.adaptiveFailureRounds = 0;
-        if (
-          effectiveConcurrency <
-          Math.min(MAX_EFFECTIVE_CONCURRENCY, options.concurrency)
-        ) {
-          checkpoint.successfulBatchesSinceReduction++;
-          if (
-            checkpoint.successfulBatchesSinceReduction >=
-            AIMD_SUCCESS_BATCHES_PER_INCREASE
-          ) {
-            effectiveConcurrency++;
-            concurrencyIncreaseCount = 1;
-            checkpoint.successfulBatchesSinceReduction = 0;
-          }
-        } else {
-          checkpoint.successfulBatchesSinceReduction = 0;
-        }
-      } else {
-        checkpoint.successfulBatchesSinceReduction = 0;
-      }
-
-      if (retryCongestedBatch) {
-        const earliest = outcomes.find((outcome) =>
-          isCongestionError(outcome.error),
-        );
-        if (earliest) {
-          earliest.progress.deferredRecoveryAttempts = Math.min(
-            MAX_DEFERRED_RECOVERY_ATTEMPTS,
-            earliest.progress.deferredRecoveryAttempts + 1,
-          );
-          checkpoint.candidateProgress[earliest.candidate.key] =
-            earliest.progress;
-        }
-      }
-      checkpoint.effectiveConcurrency = effectiveConcurrency;
-
-      const shouldBackoff =
-        hasCongestion &&
-        !fatalError &&
-        (retryCongestedBatch ||
-          retrySerialCandidate ||
-          (batch.length > 1 && batchHasProviderProgress));
-      const backoffMs = shouldBackoff
-        ? Math.min(
-            ADAPTIVE_RETRY_MAX_DELAY_MS,
-            Math.round(
-              ADAPTIVE_RETRY_BASE_DELAY_MS *
-                2 ** Math.max(0, checkpoint.adaptiveFailureRounds - 1) *
-                (0.5 + (this.runtime.random?.() ?? 0.5)),
-            ),
-          )
-        : 0;
 
       advanceCursor(checkpoint, queue);
       recomputeCheckpointTotals(checkpoint);
+      syncControllerCheckpoint();
       await this.store.writeCheckpoint(checkpoint);
-      await this.recordHistory(
-        runId,
-        queue.version,
-        outcomes,
-        attemptedConcurrency,
-        latencyByCandidate,
-      );
 
+      const outcomes = pendingOutcomes;
+      if (outcomes.length > 0) {
+        await this.recordHistory(
+          runId,
+          queue.version,
+          outcomes,
+          latencyByCandidate,
+        );
+      }
+      const minimumConcurrencyUsed =
+        outcomes.length > 0
+          ? Math.min(
+              ...outcomes.map((outcome) => outcome.dispatchedConcurrency),
+            )
+          : Math.max(1, decision.dispatchConcurrency);
       const telemetry: MarketSyncTelemetryDelta = {
         pageRequests: outcomes.reduce(
           (total, outcome) => total + outcome.pageRequests,
@@ -790,17 +781,27 @@ export class CollectMarketAssetsCatalogUseCase {
           (total, outcome) => total + outcome.retryCount,
           0,
         ),
-        timeoutCount: outcomes.filter(
-          (outcome) => outcome.error?.failureKind === "timeout",
-        ).length,
+        timeoutCount: outcomes.reduce(
+          (total, outcome) =>
+            total +
+            outcome.requestSamples.filter(
+              (sample) => sample.outcome === "timeout",
+            ).length,
+          0,
+        ),
         emptyResponseCount: outcomes.reduce(
           (total, outcome) => total + outcome.emptyResponses,
           0,
         ),
         notFoundCount: outcomes.filter((outcome) => outcome.notFound).length,
-        rateLimitedCount: outcomes.filter(
-          (outcome) => outcome.error?.failureKind === "rate_limited",
-        ).length,
+        rateLimitedCount: outcomes.reduce(
+          (total, outcome) =>
+            total +
+            outcome.requestSamples.filter(
+              (sample) => sample.outcome === "rate_limited",
+            ).length,
+          0,
+        ),
         quotaWaitCount: outcomes.reduce(
           (total, outcome) => total + outcome.quotaWaitCount,
           0,
@@ -809,7 +810,7 @@ export class CollectMarketAssetsCatalogUseCase {
           (total, outcome) => total + outcome.quotaWaitDurationMs,
           0,
         ),
-        retryBackoffDurationMs: backoffMs,
+        retryBackoffDurationMs: pendingBackoffMs,
         requestLatenciesMs: outcomes.flatMap((outcome) => outcome.durationMs),
         runQuotaUnitsUsed: outcomes.reduce(
           (total, outcome) => total + outcome.quotaUnitsUsed,
@@ -819,43 +820,46 @@ export class CollectMarketAssetsCatalogUseCase {
           (total, outcome) => total + outcome.creditsUsed,
           0,
         ),
-        currentConcurrency: effectiveConcurrency,
-        minimumConcurrencyUsed: Math.min(
-          attemptedConcurrency,
-          effectiveConcurrency,
+        currentConcurrency: decision.effectiveConcurrency,
+        minimumConcurrencyUsed,
+        peakInFlight: Math.max(
+          peakInFlightSinceFlush,
+          inFlight.size,
         ),
-        peakInFlight: attemptedConcurrency,
-        concurrencyReductionCount,
-        concurrencyIncreaseCount,
+        concurrencyReductionCount: pendingConcurrencyReductions,
+        concurrencyIncreaseCount: pendingConcurrencyIncreases,
         deferredCandidateCount: countDeferredCandidates(checkpoint),
       };
 
-      await this.syncStateRepository.markCollectionProgress(
-        stateKey,
-        queue.version,
-        {
-          cursorIndex: checkpoint.cursorIndex,
-          rowsUsed: checkpoint.quotaUnitsUsed,
-          quotaUnitsUsed: checkpoint.quotaUnitsUsed,
-          candidatesVisited: checkpoint.candidatesVisited,
-          totalCandidates: checkpoint.totalCandidates,
-          currentCandidate,
-          targetAssets: options.targetAssets,
-          assetsPerItem: options.assetsPerItem,
-          rawAssetCount: checkpoint.rawAssetCount,
-          validAssetCount: checkpoint.assets.length,
-          skippedAssetCount: checkpoint.skippedAssetCount,
-          phase:
-            firstBlockingError ||
-            retryRateLimitedBatch ||
-            retryCongestedBatch ||
-            retrySerialCandidate ||
-            previousConcurrency !== effectiveConcurrency
-              ? "paused"
-              : "collecting_assets",
-          telemetry,
-        },
-      );
+      try {
+        await this.syncStateRepository.markCollectionProgress(
+          stateKey,
+          queue.version,
+          {
+            cursorIndex: checkpoint.cursorIndex,
+            rowsUsed: checkpoint.quotaUnitsUsed,
+            quotaUnitsUsed: checkpoint.quotaUnitsUsed,
+            candidatesVisited: checkpoint.candidatesVisited,
+            totalCandidates: checkpoint.totalCandidates,
+            currentCandidate,
+            targetAssets: options.targetAssets,
+            assetsPerItem: options.assetsPerItem,
+            rawAssetCount: checkpoint.rawAssetCount,
+            validAssetCount: checkpoint.assets.length,
+            skippedAssetCount: checkpoint.skippedAssetCount,
+            phase,
+            telemetry,
+          },
+        );
+      } catch (error) {
+        // El checkpoint de archivos ya quedó durable. Una caída temporal de
+        // Prisma no debe abandonar requests activos ni perder sus assets; el
+        // estado se reconciliará en el próximo flush o en la publicación.
+        console.error(
+          "[Market Assets Sync] No se pudo actualizar la telemetría durable:",
+          error,
+        );
+      }
       marketSyncProgressService.updateCollection({
         currentCandidate,
         candidatesVisited: checkpoint.candidatesVisited,
@@ -866,9 +870,486 @@ export class CollectMarketAssetsCatalogUseCase {
         quotaUnitsUsed: checkpoint.quotaUnitsUsed,
         creditsUsed: checkpoint.creditsUsed,
       });
+      publishWorkerRuntime();
 
-      if (firstBlockingError) throw firstBlockingError;
-      if (backoffMs > 0) await this.runtime.sleep(backoffMs);
+      pendingOutcomes = [];
+      pendingBackoffMs = 0;
+      pendingConcurrencyReductions = 0;
+      pendingConcurrencyIncreases = 0;
+      peakInFlightSinceFlush = inFlight.size;
+      outcomesSinceFlush = 0;
+      lastFlushAt = now();
+    };
+
+    const integrateOutcome = async (
+      outcome: CandidateOutcome,
+      index: number,
+      recovery: boolean,
+      flushAfterIntegration = true,
+    ): Promise<void> => {
+      currentCandidate = outcome.candidate.marketHashName;
+      latencyByCandidate.set(
+        outcome.candidate.key,
+        (latencyByCandidate.get(outcome.candidate.key) ?? 0) +
+          outcome.durationMs.reduce(
+            (total, duration) => total + duration,
+            0,
+          ),
+      );
+
+      if (
+        !outcome.error ||
+        outcome.error.failureKind === "cancelled"
+      ) {
+        failedAttemptsThisExecution.delete(outcome.candidate.key);
+        lastRetryableErrors.delete(outcome.candidate.key);
+      } else {
+        const previous =
+          outcome.httpSucceeded > 0
+            ? 0
+            : failedAttemptsThisExecution.get(outcome.candidate.key) ?? 0;
+        failedAttemptsThisExecution.set(
+          outcome.candidate.key,
+          previous + 1,
+        );
+        if (outcome.error.kind === "retryable") {
+          lastRetryableErrors.set(
+            outcome.candidate.key,
+            outcome.error,
+          );
+        }
+      }
+
+      const progress = outcome.progress;
+      let duplicateAssets = 0;
+      for (const item of outcome.assets) {
+        if (assetIds.has(item.assetId)) {
+          progress.validAssetCount--;
+          progress.skippedAssetCount++;
+          duplicateAssets++;
+          continue;
+        }
+        assetIds.add(item.assetId);
+        checkpoint.assets.push(item);
+      }
+      if (duplicateAssets > 0) {
+        for (
+          let sampleIndex = outcome.requestSamples.length - 1;
+          sampleIndex >= 0 && duplicateAssets > 0;
+          sampleIndex--
+        ) {
+          const sample = outcome.requestSamples[sampleIndex]!;
+          const removable = Math.min(
+            duplicateAssets,
+            Math.trunc(sample.validAssets ?? 0),
+          );
+          sample.validAssets = Math.max(
+            0,
+            Math.trunc(sample.validAssets ?? 0) - removable,
+          );
+          duplicateAssets -= removable;
+        }
+      }
+
+      if (
+        progress.completed &&
+        !progress.exhausted &&
+        progress.validAssetCount < options.assetsPerItem &&
+        !outcome.error
+      ) {
+        progress.completed = false;
+        nextScanIndex = Math.min(nextScanIndex, index);
+      }
+
+      const error = outcome.error;
+      if (error && error.kind !== "candidate") {
+        const attempts =
+          failedAttemptsThisExecution.get(outcome.candidate.key) ?? 1;
+        if (error.failureKind === "cancelled") {
+          progress.completed = false;
+          progress.exhausted = false;
+        } else if (error.kind === "fatal") {
+          blockingError ??= error;
+          progress.completed = false;
+          progress.exhausted = false;
+          nextScanIndex = Math.min(nextScanIndex, index);
+        } else if (error.status === 429) {
+          progress.completed = false;
+          progress.exhausted = false;
+          nextScanIndex = Math.min(nextScanIndex, index);
+          if (attempts >= MAX_RATE_LIMIT_ATTEMPTS_PER_EXECUTION) {
+            blockingError ??= error;
+          }
+        } else if (recovery) {
+          if (
+            progress.deferredRecoveryAttempts >=
+              MAX_DEFERRED_RECOVERY_ATTEMPTS &&
+            checkpoint.assets.length < options.targetAssets
+          ) {
+            progress.completed = false;
+            progress.exhausted = false;
+            nextScanIndex = Math.min(nextScanIndex, index);
+            blockingError ??= error;
+          } else {
+            progress.completed = true;
+            progress.exhausted = true;
+          }
+        } else {
+          // La primera falla se difiere para mantener los slots productivos.
+          // Sólo se recupera al final si todavía faltan assets.
+          progress.completed = true;
+          progress.exhausted = true;
+        }
+      }
+      checkpoint.candidateProgress[outcome.candidate.key] = progress;
+
+      const previousEffective = decision.effectiveConcurrency;
+      for (const sample of outcome.requestSamples) {
+        decision = controller.observe(sample, demand());
+      }
+      if (decision.effectiveConcurrency < previousEffective) {
+        pendingConcurrencyReductions++;
+      } else if (decision.effectiveConcurrency > previousEffective) {
+        pendingConcurrencyIncreases++;
+      }
+      syncControllerCheckpoint();
+      advanceCursor(checkpoint, queue);
+      pendingOutcomes.push(outcome);
+      outcomesSinceFlush++;
+      publishWorkerRuntime();
+      const reachedTargetAfterOutcome =
+        countAssetsInCompletedPrefix(checkpoint, rankByListing) >=
+        options.targetAssets;
+      const mustFlush =
+        reachedTargetAfterOutcome ||
+        error?.status === 429 ||
+        error?.kind === "fatal" ||
+        decision.state === "breaker_open";
+      if (flushAfterIntegration) {
+        await flushProgress(mustFlush, phaseForDecision());
+      }
+    };
+
+    const nextCandidates = (
+      limit: number,
+    ): Array<{ candidate: MarketAssetsPriorityCandidate; index: number }> => {
+      const selected: Array<{
+        candidate: MarketAssetsPriorityCandidate;
+        index: number;
+      }> = [];
+      for (
+        let index = nextScanIndex;
+        index < queue.candidates.length && selected.length < limit;
+        index++
+      ) {
+        const candidate = queue.candidates[index]!;
+        if (
+          checkpoint.candidateProgress[candidate.key]?.completed ||
+          activeKeys.has(candidate.key)
+        ) {
+          continue;
+        }
+        selected.push({ candidate, index });
+        nextScanIndex = index + 1;
+      }
+      return selected;
+    };
+
+    const dispatchAvailable = async (): Promise<void> => {
+      decision = controller.evaluate(demand(), now());
+      const capacity = Math.max(
+        0,
+        decision.dispatchConcurrency - inFlight.size,
+      );
+      if (capacity <= 0 || blockingError) {
+        publishWorkerRuntime();
+        return;
+      }
+      const selected = nextCandidates(capacity);
+      if (selected.length === 0) {
+        publishWorkerRuntime();
+        return;
+      }
+      await this.loadHistoryHints(
+        selected.map(({ candidate }) => candidate),
+        historyHints,
+      );
+      for (const { candidate, index } of selected) {
+        const dispatchedConcurrency = decision.dispatchConcurrency;
+        const abortController = new AbortController();
+        const signal = AbortSignal.any([
+          abortController.signal,
+          shutdownAbortController.signal,
+        ]);
+        activeKeys.add(candidate.key);
+        const promise = this.collectCandidate(
+          candidate,
+          checkpoint,
+          new Set(assetIds),
+          options,
+          stateKey,
+          historyHints.get(candidate.key),
+          (failedAttemptsThisExecution.get(candidate.key) ?? 0) > 0,
+          signal,
+        ).then((outcome) => {
+          outcome.dispatchedConcurrency = dispatchedConcurrency;
+          return outcome;
+        });
+        inFlight.set(candidate.key, {
+          candidate,
+          index,
+          recovery: false,
+          dispatchedConcurrency,
+          abortController,
+          promise,
+        });
+      }
+      peakInFlightSinceFlush = Math.max(
+        peakInFlightSinceFlush,
+        inFlight.size,
+      );
+      publishWorkerRuntime();
+    };
+
+    const waitForCircuitBreaker = async (): Promise<void> => {
+      const current = now();
+      const resumeAt =
+        decision.circuitBreaker.resumeAt ?? current + 1_000;
+      const waitMs = Math.max(
+        1,
+        Math.min(30_000, resumeAt - current),
+      );
+      const phase = phaseForDecision();
+      if (phase === "waiting_rate_limit") {
+        marketSyncProgressService.waitForRateLimit(waitMs);
+      }
+      await flushProgress(true, phase);
+      await Promise.race([
+        sleep(waitMs),
+        terminationRequestedPromise,
+      ]);
+      if (terminationRequested) return;
+      pendingBackoffMs += waitMs;
+      decision = controller.evaluate(demand(), now());
+      syncControllerCheckpoint();
+      publishWorkerRuntime();
+    };
+
+    const takeNextOutcome = async (
+      flushAfterIntegration = true,
+    ): Promise<void> => {
+      const outcome = await Promise.race(
+        [...inFlight.values()].map(({ promise }) => promise),
+      );
+      const entry = inFlight.get(outcome.candidate.key);
+      if (!entry) {
+        throw new Error(
+          `El dispatcher perdió el worker de "${outcome.candidate.marketHashName}".`,
+        );
+      }
+      inFlight.delete(outcome.candidate.key);
+      activeKeys.delete(outcome.candidate.key);
+      await integrateOutcome(
+        outcome,
+        entry.index,
+        entry.recovery,
+        flushAfterIntegration,
+      );
+    };
+
+    const drainInFlight = async (): Promise<void> => {
+      const entries = [...inFlight.values()];
+      if (entries.length === 0) return;
+      for (const entry of entries) entry.abortController.abort();
+      const settled = await Promise.allSettled(
+        entries.map(({ promise }) => promise),
+      );
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]!;
+        const result = settled[index]!;
+        inFlight.delete(entry.candidate.key);
+        activeKeys.delete(entry.candidate.key);
+        if (result.status === "rejected") {
+          console.error(
+            `[Market Assets Sync] Worker "${entry.candidate.marketHashName}" falló mientras se drenaba:`,
+            result.reason,
+          );
+          continue;
+        }
+        try {
+          await integrateOutcome(
+            result.value,
+            entry.index,
+            entry.recovery,
+            false,
+          );
+        } catch (error) {
+          console.error(
+            `[Market Assets Sync] No se pudo integrar "${entry.candidate.marketHashName}" durante el drenaje:`,
+            error,
+          );
+        }
+      }
+    };
+
+    const unregisterShutdown =
+      marketAssetsShutdownCoordinator.register(async () => {
+        if (!terminationRequested) {
+          terminationRequested = true;
+          shutdownAbortController.abort();
+          notifyTerminationRequested();
+        }
+        await shutdownCompletedPromise;
+      });
+
+    try {
+      for (;;) {
+        advanceCursor(checkpoint, queue);
+        const prefixAssetCount = publishableAssetCount();
+
+        if (terminationRequested) {
+          if (inFlight.size === 0) {
+            throw new MarketAssetsCollectionInterruptedError();
+          }
+          await takeNextOutcome(false);
+          continue;
+        }
+
+        if (blockingError && inFlight.size === 0) {
+          throw blockingError;
+        }
+
+        const reachedTarget = prefixAssetCount >= options.targetAssets;
+        const exhaustedNormalQueue =
+          checkpoint.cursorIndex >= queue.candidates.length;
+        if (reachedTarget && inFlight.size > 0) {
+          // Ya existe un prefijo de prioridad suficiente. No se abren listings
+          // inferiores. Se cancelan únicamente los requests de menor prioridad;
+          // una respuesta que ganó la carrera antes del abort igualmente se
+          // integra antes del recorte final.
+          for (const entry of inFlight.values()) {
+            if (entry.index >= checkpoint.cursorIndex) {
+              entry.abortController.abort();
+            }
+          }
+          await takeNextOutcome();
+          continue;
+        }
+        if (inFlight.size === 0 && (reachedTarget || exhaustedNormalQueue)) {
+          if (reachedTarget) {
+            await flushProgress(true);
+            break;
+          }
+
+          decision = controller.evaluate(demand(), now());
+          if (decision.dispatchConcurrency === 0) {
+            await waitForCircuitBreaker();
+            continue;
+          }
+
+          const deferredIndex = queue.candidates.findIndex((candidate) => {
+            const progress = checkpoint.candidateProgress[candidate.key];
+            return Boolean(
+              progress?.completed &&
+                progress.lastError &&
+                progress.consecutiveFailures > 0 &&
+                progress.deferredRecoveryAttempts <
+                  MAX_DEFERRED_RECOVERY_ATTEMPTS,
+            );
+          });
+          if (deferredIndex >= 0) {
+            const candidate = queue.candidates[deferredIndex]!;
+            const progress = checkpoint.candidateProgress[candidate.key]!;
+            progress.completed = false;
+            progress.exhausted = false;
+            progress.deferredRecoveryAttempts++;
+            checkpoint.cursorIndex = Math.min(
+              checkpoint.cursorIndex,
+              deferredIndex,
+            );
+            nextScanIndex = Math.min(nextScanIndex, deferredIndex);
+            await this.loadHistoryHints([candidate], historyHints);
+            const outcome = await this.collectCandidate(
+              candidate,
+              checkpoint,
+              new Set(assetIds),
+              options,
+              stateKey,
+              historyHints.get(candidate.key),
+              true,
+              shutdownAbortController.signal,
+            );
+            outcome.dispatchedConcurrency = 1;
+            await integrateOutcome(outcome, deferredIndex, true);
+            await flushProgress(true);
+            continue;
+          }
+
+          const unresolvedIndex = queue.candidates.findIndex((candidate) => {
+            const progress = checkpoint.candidateProgress[candidate.key];
+            return Boolean(
+              progress?.lastError && progress.consecutiveFailures > 0,
+            );
+          });
+          if (unresolvedIndex >= 0) {
+            const candidate = queue.candidates[unresolvedIndex]!;
+            const progress = checkpoint.candidateProgress[candidate.key]!;
+            progress.completed = false;
+            progress.exhausted = false;
+            checkpoint.cursorIndex = Math.min(
+              checkpoint.cursorIndex,
+              unresolvedIndex,
+            );
+            nextScanIndex = Math.min(nextScanIndex, unresolvedIndex);
+            blockingError =
+              lastRetryableErrors.get(candidate.key) ??
+              new MarketAssetsApiError(
+                progress.lastError ??
+                  `No se pudo recuperar "${candidate.marketHashName}".`,
+                "retryable",
+                0,
+                0,
+              );
+            throw blockingError;
+          }
+
+          await flushProgress(true);
+          break;
+        }
+
+        decision = controller.evaluate(demand(), now());
+        if (
+          decision.dispatchConcurrency === 0 &&
+          inFlight.size === 0
+        ) {
+          await waitForCircuitBreaker();
+          continue;
+        }
+
+        await dispatchAvailable();
+        if (inFlight.size === 0) {
+          throw new Error(
+            "El checkpoint no puede avanzar aunque quedan candidatos incompletos.",
+          );
+        }
+
+        await takeNextOutcome();
+      }
+    } catch (error) {
+      shutdownAbortController.abort();
+      await drainInFlight();
+      try {
+        await flushProgress(true, "paused");
+      } catch (flushError) {
+        console.error(
+          "[Market Assets Sync] Falló el checkpoint final después de detener el dispatcher:",
+          flushError,
+        );
+      }
+      throw error;
+    } finally {
+      unregisterShutdown();
+      notifyShutdownCompleted();
     }
 
     const orderedAssets = [...checkpoint.assets].sort((left, right) => {
@@ -934,7 +1415,6 @@ export class CollectMarketAssetsCatalogUseCase {
     runId: string | null,
     queueVersion: string,
     outcomes: readonly CandidateOutcome[],
-    effectiveConcurrency: number,
     latencyByCandidate: ReadonlyMap<string, number>,
   ): Promise<void> {
     const repository = this.runtime.historyRepository;
@@ -965,7 +1445,7 @@ export class CollectMarketAssetsCatalogUseCase {
             Math.round(latencyByCandidate.get(outcome.candidate.key) ?? 0),
           ),
           lastOffset: progress.offset,
-          effectiveConcurrency,
+          effectiveConcurrency: outcome.dispatchedConcurrency,
           errorStatus: null,
           errorMessage: null,
           observedAt: new Date(),
@@ -991,6 +1471,7 @@ export class CollectMarketAssetsCatalogUseCase {
     stateKey: string,
     history: MarketAssetCandidateHistoryRecord | null | undefined,
     retried: boolean,
+    signal?: AbortSignal,
   ): Promise<CandidateOutcome> {
     const progress: MarketAssetsCandidateCheckpoint = {
       ...(checkpoint.candidateProgress[candidate.key] ??
@@ -1017,6 +1498,8 @@ export class CollectMarketAssetsCatalogUseCase {
     let notFound = false;
     let quotaWaitCount = 0;
     let quotaWaitDurationMs = 0;
+    const requestSamples: MarketAssetRequestCompletion[] = [];
+    let previousFullPageFingerprint: string | null = null;
 
     const result = (error: MarketAssetsApiError | null): CandidateOutcome => ({
       candidate,
@@ -1035,6 +1518,8 @@ export class CollectMarketAssetsCatalogUseCase {
       notFound,
       quotaWaitCount,
       quotaWaitDurationMs,
+      requestSamples,
+      dispatchedConcurrency: 1,
     });
 
     while (
@@ -1073,6 +1558,7 @@ export class CollectMarketAssetsCatalogUseCase {
           limit: pageLimit,
           offset: progress.offset,
           sort: options.sort,
+          ...(signal ? { signal } : {}),
           onRateLimitWait: (waitMs) => {
             quotaWaitCount++;
             quotaWaitDurationMs += Math.max(0, Math.trunc(waitMs));
@@ -1110,7 +1596,6 @@ export class CollectMarketAssetsCatalogUseCase {
         progress.quotaUnitsUsed += page.quotaUnitsUsed;
         progress.creditsUsed += page.creditsUsed;
         progress.consecutiveFailures = 0;
-        progress.deferredRecoveryAttempts = 0;
         progress.lastError = null;
         progress.providerTotal = Math.max(
           progress.providerTotal,
@@ -1121,6 +1606,7 @@ export class CollectMarketAssetsCatalogUseCase {
         const normalized: NormalizedMarketAssetsBatch =
           this.snapshotBuilder.normalizeMany(page.assets, candidate);
         progress.skippedAssetCount += normalized.skippedRows;
+        const validBeforePage = progress.validAssetCount;
         for (const item of normalized.assets) {
           if (progress.validAssetCount >= options.assetsPerItem) {
             progress.skippedAssetCount++;
@@ -1134,6 +1620,48 @@ export class CollectMarketAssetsCatalogUseCase {
           acceptedAssets.push(item);
           progress.validAssetCount++;
         }
+        const validAssetsOnPage = Math.max(
+          0,
+          progress.validAssetCount - validBeforePage,
+        );
+        const fullPageFingerprint =
+          page.assets.length >= pageLimit
+            ? rawAssetPageFingerprint(page.assets)
+            : null;
+        if (
+          validAssetsOnPage === 0 &&
+          fullPageFingerprint != null &&
+          fullPageFingerprint === previousFullPageFingerprint
+        ) {
+          const repeatedPageError = new MarketAssetsApiError(
+            `SteamWebAPI repitió la misma página para "${candidate.marketHashName}" sin permitir avanzar.`,
+            "retryable",
+            502,
+            0,
+            0,
+            0,
+            Math.max(0, Number(page.durationMs) || 0),
+            "http_transient",
+          );
+          httpSucceeded = Math.max(0, httpSucceeded - attempts);
+          httpFailed += attempts;
+          progress.lastError = repeatedPageError.message;
+          progress.consecutiveFailures++;
+          requestSamples.push({
+            outcome: "server_error",
+            completedAt: this.runtime.now?.() ?? Date.now(),
+            latencyMs: Math.max(0, Number(page.durationMs) || 0),
+            validAssets: 0,
+          });
+          return result(repeatedPageError);
+        }
+        previousFullPageFingerprint = fullPageFingerprint;
+        requestSamples.push({
+          outcome: "success",
+          completedAt: this.runtime.now?.() ?? Date.now(),
+          latencyMs: Math.max(0, Number(page.durationMs) || 0),
+          validAssets: validAssetsOnPage,
+        });
 
         progress.offset += pageLimit;
         const returnedAllAvailable =
@@ -1153,9 +1681,8 @@ export class CollectMarketAssetsCatalogUseCase {
                 0,
                 0,
               );
-        const attempts = Math.max(1, apiError.httpAttempts);
+        const attempts = Math.max(0, apiError.httpAttempts);
         httpAttempts += attempts;
-        httpFailed += attempts;
         progress.httpAttempts += attempts;
         if (Number.isFinite(apiError.durationMs) && apiError.durationMs >= 0) {
           durationMs.push(apiError.durationMs);
@@ -1166,6 +1693,46 @@ export class CollectMarketAssetsCatalogUseCase {
         progress.creditsUsed += apiError.creditsUsed;
         progress.lastError = apiError.message;
         progress.consecutiveFailures++;
+        if (apiError.failureKind === "cancelled") {
+          progress.lastError = null;
+          progress.consecutiveFailures = 0;
+          return result(apiError);
+        }
+        httpFailed += attempts;
+        const completedAt = this.runtime.now?.() ?? Date.now();
+        const failureOutcome: MarketAssetRequestOutcome =
+          apiError.kind === "candidate"
+            ? "candidate_error"
+            : apiError.status === 429
+              ? "rate_limited"
+              : apiError.kind === "fatal"
+                ? "fatal"
+                : apiError.failureKind === "timeout"
+                  ? "timeout"
+                  : apiError.failureKind === "http_transient" ||
+                      apiError.status >= 500
+                    ? "server_error"
+                    : "network_error";
+        if (failureOutcome === "rate_limited") {
+          const rateLimit = floatRateLimiter.getSnapshot();
+          requestSamples.push({
+            outcome: "rate_limited",
+            completedAt,
+            latencyMs: Math.max(0, apiError.durationMs),
+            validAssets: 0,
+            resumeAt: Math.max(
+              completedAt + 1_000,
+              rateLimit.cooldownUntil,
+            ),
+          });
+        } else {
+          requestSamples.push({
+            outcome: failureOutcome,
+            completedAt,
+            latencyMs: Math.max(0, apiError.durationMs),
+            validAssets: 0,
+          });
+        }
 
         if (apiError.kind === "candidate") {
           progress.completed = true;
@@ -1179,6 +1746,9 @@ export class CollectMarketAssetsCatalogUseCase {
 
     progress.completed =
       progress.exhausted || progress.validAssetCount >= options.assetsPerItem;
+    if (progress.completed) {
+      progress.deferredRecoveryAttempts = 0;
+    }
     return result(null);
   }
 }

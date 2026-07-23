@@ -4,6 +4,8 @@ import path from "node:path";
 import {
   MARKET_ASSETS_CATALOG_SCHEMA_VERSION,
   MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION,
+  MARKET_ASSETS_MAX_HEALTH_SAMPLES,
+  MARKET_ASSETS_MAX_WORKER_CONCURRENCY,
   type IMarketAssetsCatalogStore,
   type MarketAssetCatalogItem,
   type MarketAssetsCandidateCheckpoint,
@@ -11,6 +13,7 @@ import {
   type MarketAssetsCatalogSnapshot,
   type MarketAssetsCheckpointFileStatus,
   type MarketAssetsCollectionCheckpoint,
+  type MarketAssetsWorkerHealthSample,
 } from "../domain/MarketAssetsCatalog";
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -145,7 +148,49 @@ function isCandidateCheckpoint(
   );
 }
 
-/** Migra checkpoints v2 sin perder assets ni offsets ya validados. */
+function isWorkerHealthSample(
+  value: unknown,
+): value is MarketAssetsWorkerHealthSample {
+  return (
+    isRecord(value) &&
+    isIsoDate(value.recordedAt) &&
+    typeof value.latencyMs === "number" &&
+    Number.isFinite(value.latencyMs) &&
+    value.latencyMs >= 0 &&
+    isNonNegativeInteger(value.assetsCollected) &&
+    (value.outcome === "success" ||
+      value.outcome === "candidate_error" ||
+      value.outcome === "timeout" ||
+      value.outcome === "network_error" ||
+      value.outcome === "server_error" ||
+      value.outcome === "rate_limited")
+  );
+}
+
+function clampWorkerConcurrency(value: unknown, fallback: number): number {
+  const parsed = Math.trunc(Number(value));
+  return Math.max(
+    1,
+    Math.min(
+      MARKET_ASSETS_MAX_WORKER_CONCURRENCY,
+      Number.isFinite(parsed) && parsed > 0 ? parsed : fallback,
+    ),
+  );
+}
+
+function deadlineFromStartedAt(
+  startedAt: unknown,
+  targetDurationSeconds: number,
+): string {
+  const startedAtMs =
+    typeof startedAt === "string" ? Date.parse(startedAt) : Number.NaN;
+  return new Date(
+    (Number.isFinite(startedAtMs) ? startedAtMs : 0) +
+      targetDurationSeconds * 1_000,
+  ).toISOString();
+}
+
+/** Migra checkpoints v2 a la forma v3 intermedia sin perder progreso. */
 function migrateCheckpointV2(value: Record<string, any>): Record<string, any> {
   if (value.schemaVersion !== 2) return value;
   const candidateProgress = isRecord(value.candidateProgress)
@@ -167,7 +212,7 @@ function migrateCheckpointV2(value: Record<string, any>): Record<string, any> {
     : value.candidateProgress;
   return {
     ...value,
-    schemaVersion: MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION,
+    schemaVersion: 3,
     runId: null,
     effectiveConcurrency: Math.max(
       1,
@@ -179,11 +224,56 @@ function migrateCheckpointV2(value: Record<string, any>): Record<string, any> {
   };
 }
 
+/** Migra checkpoints v3 al controlador durable v4 sin perder assets/offsets/runId. */
+function migrateCheckpointV3(value: Record<string, any>): Record<string, any> {
+  if (value.schemaVersion !== 3) return value;
+  const concurrency = clampWorkerConcurrency(value.concurrency, 48);
+  const initialConcurrency = Math.min(6, concurrency);
+  const effectiveConcurrency = Math.min(
+    concurrency,
+    clampWorkerConcurrency(value.effectiveConcurrency, initialConcurrency),
+  );
+  const targetDurationSeconds = 600;
+  const targetDeadlineAt = deadlineFromStartedAt(
+    value.startedAt,
+    targetDurationSeconds,
+  );
+  const updatedAtMs =
+    typeof value.updatedAt === "string"
+      ? Date.parse(value.updatedAt)
+      : Number.NaN;
+
+  return {
+    ...value,
+    schemaVersion: MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION,
+    concurrency,
+    initialConcurrency,
+    effectiveConcurrency,
+    rampStage: 0,
+    latencyBaselineMs: null,
+    recentHealthSamples: [],
+    concurrencyCooldownUntil: null,
+    consecutiveCongestionFailures: 0,
+    circuitBreaker: {
+      state: "closed",
+      openCount: 0,
+      resumeAt: null,
+    },
+    targetDurationSeconds,
+    targetDeadlineAt,
+    tenMinuteTargetUnreachable:
+      Number.isFinite(updatedAtMs) &&
+      updatedAtMs > Date.parse(targetDeadlineAt),
+  };
+}
+
 export function parseMarketAssetsCollectionCheckpoint(
   value: unknown,
 ): MarketAssetsCollectionCheckpoint | null {
   if (!isRecord(value)) return null;
   value = migrateCheckpointV2(value);
+  if (!isRecord(value)) return null;
+  value = migrateCheckpointV3(value);
   // La reasignación pierde el narrowing de TypeScript aunque la migración
   // siempre devuelva un record; mantener la validación explícita evita casts.
   if (!isRecord(value)) return null;
@@ -196,8 +286,36 @@ export function parseMarketAssetsCollectionCheckpoint(
     value.assetsPerItem > 10 ||
     !isSort(value.sort) ||
     !isPositiveInteger(value.concurrency) ||
+    value.concurrency > MARKET_ASSETS_MAX_WORKER_CONCURRENCY ||
+    !isPositiveInteger(value.initialConcurrency) ||
+    value.initialConcurrency > value.concurrency ||
     !isPositiveInteger(value.effectiveConcurrency) ||
-    value.effectiveConcurrency > 3 ||
+    value.effectiveConcurrency > value.concurrency ||
+    value.effectiveConcurrency > MARKET_ASSETS_MAX_WORKER_CONCURRENCY ||
+    !isNonNegativeInteger(value.rampStage) ||
+    value.rampStage > 5 ||
+    (value.latencyBaselineMs !== null &&
+      (typeof value.latencyBaselineMs !== "number" ||
+        !Number.isFinite(value.latencyBaselineMs) ||
+        value.latencyBaselineMs < 0)) ||
+    !Array.isArray(value.recentHealthSamples) ||
+    value.recentHealthSamples.length > MARKET_ASSETS_MAX_HEALTH_SAMPLES ||
+    !value.recentHealthSamples.every(isWorkerHealthSample) ||
+    (value.concurrencyCooldownUntil !== null &&
+      !isIsoDate(value.concurrencyCooldownUntil)) ||
+    !isNonNegativeInteger(value.consecutiveCongestionFailures) ||
+    !isRecord(value.circuitBreaker) ||
+    (value.circuitBreaker.state !== "closed" &&
+      value.circuitBreaker.state !== "open" &&
+      value.circuitBreaker.state !== "half_open") ||
+    !isNonNegativeInteger(value.circuitBreaker.openCount) ||
+    (value.circuitBreaker.resumeAt !== null &&
+      !isIsoDate(value.circuitBreaker.resumeAt)) ||
+    (value.circuitBreaker.state === "open" &&
+      value.circuitBreaker.resumeAt === null) ||
+    !isPositiveInteger(value.targetDurationSeconds) ||
+    !isIsoDate(value.targetDeadlineAt) ||
+    typeof value.tenMinuteTargetUnreachable !== "boolean" ||
     !isNonNegativeInteger(value.successfulBatchesSinceReduction) ||
     !isNonNegativeInteger(value.adaptiveFailureRounds) ||
     !isNonNegativeInteger(value.cursorIndex) ||
@@ -375,7 +493,8 @@ export class MarketAssetsCatalogStore implements IMarketAssetsCatalogStore {
       if (
         isRecord(decoded) &&
         decoded.schemaVersion !== MARKET_ASSETS_CHECKPOINT_SCHEMA_VERSION &&
-        decoded.schemaVersion !== 2
+        decoded.schemaVersion !== 2 &&
+        decoded.schemaVersion !== 3
       ) {
         return null;
       }
@@ -437,6 +556,18 @@ export class MarketAssetsCatalogStore implements IMarketAssetsCatalogStore {
       exists: Boolean(checkpoint),
       path: this.absoluteCheckpointPath,
       queueVersion: checkpoint?.queueVersion ?? null,
+      ...(checkpoint
+        ? {
+            concurrency: checkpoint.concurrency,
+            initialConcurrency: checkpoint.initialConcurrency,
+            effectiveConcurrency: checkpoint.effectiveConcurrency,
+            circuitBreaker: cloneJson(checkpoint.circuitBreaker),
+            targetDurationSeconds: checkpoint.targetDurationSeconds,
+            targetDeadlineAt: checkpoint.targetDeadlineAt,
+            tenMinuteTargetUnreachable:
+              checkpoint.tenMinuteTargetUnreachable,
+          }
+        : {}),
       targetAssets: checkpoint?.targetAssets ?? this.defaultTarget,
       validAssetCount: checkpoint?.assets.length ?? 0,
       rawAssetCount: checkpoint?.rawAssetCount ?? 0,

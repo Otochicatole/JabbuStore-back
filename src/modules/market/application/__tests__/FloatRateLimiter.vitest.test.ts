@@ -1,10 +1,11 @@
 import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FileFloatRateLimitStateStore,
   FloatRateLimiter,
+  FloatRateLimitAcquireCancelledError,
   FloatRateLimitWaitTimeoutError,
   type FloatRateLimiterClock,
 } from "../FloatRateLimiter";
@@ -20,6 +21,20 @@ class ManualClock implements FloatRateLimiterClock {
   async sleep(ms: number): Promise<void> {
     this.sleeps.push(ms);
     this.nowMs += ms;
+  }
+}
+
+class BlockingClock implements FloatRateLimiterClock {
+  nowMs = 1_000;
+  sleeps: number[] = [];
+
+  now(): number {
+    return this.nowMs;
+  }
+
+  sleep(ms: number): Promise<void> {
+    this.sleeps.push(ms);
+    return new Promise(() => undefined);
   }
 }
 
@@ -90,6 +105,36 @@ describe("FloatRateLimiter", () => {
       limiter.acquire(1, { maxWaitMs: 1_000 }),
     ).rejects.toBeInstanceOf(FloatRateLimitWaitTimeoutError);
     expect(clock.sleeps).toEqual([]);
+  });
+
+  it("cancela un waiter sin reservar cuota adicional", async () => {
+    const clock = new BlockingClock();
+    const limiter = new FloatRateLimiter(10, 60_000, clock);
+    await limiter.acquire(9);
+    const controller = new AbortController();
+
+    const waiting = limiter.acquire(2, { signal: controller.signal });
+    await vi.waitFor(() => expect(clock.sleeps).toEqual([5_000]));
+    controller.abort();
+
+    await expect(waiting).rejects.toBeInstanceOf(
+      FloatRateLimitAcquireCancelledError,
+    );
+    expect(limiter.getSnapshot()).toMatchObject({
+      quotaUnitsUsed: 9,
+      availableTokens: 1,
+    });
+  });
+
+  it("un 429 posterior nunca acorta un cooldown ya observado", async () => {
+    const clock = new ManualClock();
+    const limiter = new FloatRateLimiter(100, 60_000, clock);
+
+    await limiter.penalize({ retryAfter: "10" });
+    expect(limiter.getSnapshot().cooldownUntil).toBe(11_000);
+
+    await limiter.penalize({ retryAfter: "2" });
+    expect(limiter.getSnapshot().cooldownUntil).toBe(11_000);
   });
 
   it("recupera la ventana durable después de reiniciar el proceso", async () => {

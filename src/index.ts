@@ -27,6 +27,7 @@ import reviewRoutes from './modules/reviews/infrastructure/ReviewRoutes';
 import sponsorRoutes from './modules/sponsors/infrastructure/SponsorRoutes';
 import currencyConversionRoutes from './modules/currency-conversion/infrastructure/CurrencyConversionRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
+import { marketAssetsShutdownCoordinator } from './modules/market/application/MarketAssetsShutdownCoordinator';
 
 
 dotenv.config();
@@ -34,6 +35,57 @@ dotenv.config();
 const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3001;
+const SHUTDOWN_TIMEOUT_MS = 35_000;
+let shutdownStarted = false;
+
+function closeHttpServer(): Promise<void> {
+  if (!httpServer.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    httpServer.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  console.log(`[Shutdown] ${signal}: pausando servicios y guardando progreso...`);
+
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    const gracefulWork = Promise.allSettled([
+      closeHttpServer(),
+      marketAssetsShutdownCoordinator.prepareForShutdown(),
+    ]);
+    await Promise.race([
+      gracefulWork,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `El apagado superó ${SHUTDOWN_TIMEOUT_MS / 1_000} segundos.`,
+              ),
+            ),
+          SHUTDOWN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (error) {
+    console.error("[Shutdown] El apagado graceful no terminó a tiempo:", error);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await prisma.$disconnect().catch((error) =>
+      console.error("[Shutdown] No se pudo cerrar Prisma:", error),
+    );
+    process.exit(0);
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required in production');

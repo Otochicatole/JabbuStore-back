@@ -28,6 +28,7 @@ export interface FloatRateLimitAcquireOptions {
   maxWaitMs?: number;
   priority?: FloatRateLimitPriority;
   onWait?: (waitMs: number) => void;
+  signal?: AbortSignal;
 }
 
 export interface FloatRateLimiterClock {
@@ -304,9 +305,15 @@ export class FloatRateLimiter {
 
     try {
       for (;;) {
+        if (options.signal?.aborted) {
+          throw new FloatRateLimitAcquireCancelledError();
+        }
         const decision = await this.runExclusive(async () => {
           await this.hydrate();
           this.refreshWindow();
+          if (options.signal?.aborted) {
+            throw new FloatRateLimitAcquireCancelledError();
+          }
           const now = this.clock.now();
           const checkoutHasPriority =
             priority === "sync" && this.checkoutWaiters > 0;
@@ -346,10 +353,39 @@ export class FloatRateLimiter {
         }
 
         if (waitMs >= 1_000) options.onWait?.(waitMs);
-        await this.clock.sleep(Math.min(waitMs, 5_000));
+        await this.sleepUntilRetry(
+          Math.min(waitMs, 5_000),
+          options.signal,
+        );
       }
     } finally {
       if (priority === "checkout") this.checkoutWaiters--;
+    }
+  }
+
+  private async sleepUntilRetry(
+    waitMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!signal) {
+      await this.clock.sleep(waitMs);
+      return;
+    }
+    if (signal.aborted) {
+      throw new FloatRateLimitAcquireCancelledError();
+    }
+
+    let removeAbortListener: () => void = () => undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      const onAbort = () => reject(new FloatRateLimitAcquireCancelledError());
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () =>
+        signal.removeEventListener("abort", onAbort);
+    });
+    try {
+      await Promise.race([this.clock.sleep(waitMs), cancelled]);
+    } finally {
+      removeAbortListener();
     }
   }
 
@@ -413,10 +449,21 @@ export class FloatRateLimiter {
       const now = this.clock.now();
       const retryAt = parseResetAt(headers.retryAfter, now);
       const resetAt = parseResetAt(headers.reset, now);
-      const cooldownUntil = retryAt ?? resetAt ?? now + this.windowMs;
+      const providerCooldownUntil = Math.max(
+        retryAt ?? 0,
+        resetAt ?? 0,
+      );
+      const cooldownUntil =
+        providerCooldownUntil > now
+          ? providerCooldownUntil
+          : now + this.windowMs;
 
       this.quotaUnitsUsed = this.effectiveCapacity;
-      this.cooldownUntil = Math.max(now + 1_000, cooldownUntil);
+      this.cooldownUntil = Math.max(
+        this.cooldownUntil,
+        now + 1_000,
+        cooldownUntil,
+      );
       this.windowResetsAt = Math.max(
         this.windowResetsAt,
         this.cooldownUntil,
@@ -454,6 +501,13 @@ export class FloatRateLimitWaitTimeoutError extends Error {
   constructor(readonly retryAfterSeconds: number) {
     super("La cuota de validación de SteamWebAPI está ocupada.");
     this.name = "FloatRateLimitWaitTimeoutError";
+  }
+}
+
+export class FloatRateLimitAcquireCancelledError extends Error {
+  constructor() {
+    super("La espera de cuota de SteamWebAPI fue cancelada.");
+    this.name = "FloatRateLimitAcquireCancelledError";
   }
 }
 

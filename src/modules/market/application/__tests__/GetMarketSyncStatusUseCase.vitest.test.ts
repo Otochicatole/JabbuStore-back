@@ -252,4 +252,70 @@ describe("GetMarketSyncStatusUseCase (assets-only)", () => {
       slowReason: "paused",
     });
   });
+
+  it("recupera workers, breaker y SLO desde el checkpoint v4", async () => {
+    const checkpointStore = store();
+    checkpointStore.getCheckpointStatus.mockResolvedValue({
+      exists: true,
+      targetAssets: 10_000,
+      validAssetCount: 1_000,
+      rawAssetCount: 1_000,
+      skippedAssetCount: 0,
+      candidatesVisited: 200,
+      totalCandidates: 2_000,
+      creditsUsed: 0,
+      concurrency: 48,
+      initialConcurrency: 6,
+      effectiveConcurrency: 21,
+      circuitBreaker: {
+        state: "open",
+        openCount: 2,
+        resumeAt: "2026-07-21T12:08:45.000Z",
+      },
+      targetDurationSeconds: 600,
+      targetDeadlineAt: "2026-07-21T12:10:00.000Z",
+      tenMinuteTargetUnreachable: true,
+    } as any);
+    const useCase = new GetMarketSyncStatusUseCase(
+      checkpointStore as any,
+      {
+        get: vi.fn(async () =>
+          publishedState({
+            currentPhase: "paused",
+            targetAssets: 10_000,
+          }),
+        ),
+      } as any,
+      {
+        getCurrentOrLast: vi.fn(async () => ({
+          ...interruptedRun(),
+          status: "paused",
+          currentPhase: "paused",
+          configuredConcurrency: 48,
+          currentConcurrency: 21,
+          totalCandidates: 2_000,
+          candidatesVisited: 200,
+          validAssetCount: 1_000,
+          latestAttemptFinishedAt: new Date("2026-07-21T12:08:00.000Z"),
+        })),
+      } as any,
+    );
+
+    const status = await useCase.execute();
+
+    expect(status.run?.workers).toMatchObject({
+      initial: 6,
+      max: 48,
+      effective: 21,
+      inFlight: 0,
+      queueDepth: 1_800,
+    });
+    expect(status.run?.circuitBreaker).toEqual({
+      state: "open",
+      openCount: 2,
+      resumeAt: "2026-07-21T12:08:45.000Z",
+    });
+    expect(status.run?.throughput.targetDurationSeconds).toBe(600);
+    expect(status.run?.warnings).toContain("ten_minute_target_unreachable");
+  });
 });

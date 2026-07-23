@@ -66,6 +66,7 @@ export class SteamWebApiMarketAssetsCatalogClient
       isStatTrak: candidate.isStatTrak,
       isSouvenir: candidate.isSouvenir,
       rateLimitPriority: "sync",
+      ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onRateLimitWait
         ? { onRateLimitWait: options.onRateLimitWait }
         : {}),
@@ -84,7 +85,7 @@ export class SteamWebApiMarketAssetsCatalogClient
         quotaUnitsUsed,
         rowsUsed: quotaUnitsUsed,
         creditsUsed,
-        httpAttempts: 1,
+        httpAttempts: result.httpAttempts,
         notFound: false,
         durationMs: result.durationMs,
         outcome:
@@ -102,7 +103,7 @@ export class SteamWebApiMarketAssetsCatalogClient
         quotaUnitsUsed,
         rowsUsed: quotaUnitsUsed,
         creditsUsed,
-        httpAttempts: 1,
+        httpAttempts: result.httpAttempts,
         notFound: true,
         durationMs: result.durationMs,
         outcome: "not_found",
@@ -116,7 +117,7 @@ export class SteamWebApiMarketAssetsCatalogClient
         429,
         quotaUnitsUsed,
         creditsUsed,
-        1,
+        result.httpAttempts,
         result.durationMs,
         "rate_limited",
       );
@@ -134,7 +135,7 @@ export class SteamWebApiMarketAssetsCatalogClient
         result.status,
         quotaUnitsUsed,
         creditsUsed,
-        1,
+        result.httpAttempts,
         result.durationMs,
         "fatal",
       );
@@ -143,6 +144,7 @@ export class SteamWebApiMarketAssetsCatalogClient
     const retryable =
       result.rateLimited ||
       result.outcome === "timeout" ||
+      result.outcome === "cancelled" ||
       result.outcome === "network" ||
       result.outcome === "http_transient" ||
       result.status === 0 ||
@@ -156,7 +158,7 @@ export class SteamWebApiMarketAssetsCatalogClient
         result.status,
         quotaUnitsUsed,
         creditsUsed,
-        1,
+        result.httpAttempts,
         result.durationMs,
         "fatal",
       );
@@ -168,10 +170,12 @@ export class SteamWebApiMarketAssetsCatalogClient
       result.status,
       quotaUnitsUsed,
       creditsUsed,
-      1,
+      result.httpAttempts,
       result.durationMs,
       result.outcome === "timeout"
         ? "timeout"
+        : result.outcome === "cancelled"
+          ? "cancelled"
         : result.outcome === "network"
           ? "network"
           : "http_transient",

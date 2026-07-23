@@ -18,6 +18,12 @@ const rateLimiter = vi.hoisted(() => ({
 
 vi.mock("../../application/FloatRateLimiter", () => ({
   floatRateLimiter: rateLimiter,
+  FloatRateLimitAcquireCancelledError: class extends Error {
+    constructor() {
+      super("cancelled");
+      this.name = "FloatRateLimitAcquireCancelledError";
+    }
+  },
 }));
 
 import type { MarketAssetsPriorityCandidate } from "../../application/MarketAssetsPriorityQueue";
@@ -290,6 +296,96 @@ describe("SteamWebApiMarketAssetsCatalogClient", () => {
     });
     expect(result.durationMs).toBeGreaterThanOrEqual(1);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("clasifica un AbortSignal externo como cancelación, no como timeout", async () => {
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal;
+      return {
+        status: 200,
+        ok: true,
+        headers: new Headers({ "content-type": "application/json" }),
+        arrayBuffer: () =>
+          new Promise<ArrayBuffer>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("request cancelled");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const request = createClient().fetchCandidatePage(candidate, {
+      limit: 10,
+      offset: 0,
+      sort: "newest",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({
+      name: "MarketAssetsApiError",
+      kind: "retryable",
+      status: 0,
+      quotaUnitsUsed: 10,
+      httpAttempts: 1,
+      failureKind: "cancelled",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(rateLimiter.penalize).not.toHaveBeenCalled();
+  });
+
+  it("cancela durante la espera de cuota sin inventar una request HTTP", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    rateLimiter.acquire.mockImplementationOnce(
+      async (...args: any[]) =>
+        new Promise<void>((_resolve, reject) => {
+          const options = args[1] as { signal?: AbortSignal };
+          options.signal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("cancelled while waiting");
+              error.name = "FloatRateLimitAcquireCancelledError";
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    const request = createClient().fetchCandidatePage(candidate, {
+      limit: 10,
+      offset: 0,
+      sort: "newest",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() =>
+      expect(rateLimiter.acquire).toHaveBeenCalledWith(
+        10,
+        expect.objectContaining({ signal: controller.signal }),
+      ),
+    );
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({
+      name: "MarketAssetsApiError",
+      kind: "retryable",
+      status: 0,
+      quotaUnitsUsed: 0,
+      httpAttempts: 0,
+      failureKind: "cancelled",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it.each([401, 402, 403])(

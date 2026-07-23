@@ -1,4 +1,24 @@
-import type { MarketSyncRunStatusView } from "../domain/MarketSyncRun";
+import type {
+  MarketSyncCircuitBreakerState,
+  MarketSyncRunStatusView,
+} from "../domain/MarketSyncRun";
+
+export interface MarketSyncWorkerRuntimeStatus {
+  initialConcurrency?: number;
+  maxConcurrency?: number;
+  effectiveConcurrency?: number;
+  requiredConcurrency?: number;
+  inFlight?: number;
+  queueDepth?: number;
+  circuitBreaker?: {
+    state: MarketSyncCircuitBreakerState;
+    openCount: number;
+    resumeAt: string | null;
+  };
+  targetDurationSeconds?: number;
+  targetDeadlineAt?: string | null;
+  tenMinuteTargetUnreachable?: boolean;
+}
 
 export type MarketSyncPhase =
   | "idle"
@@ -80,6 +100,7 @@ export interface MarketSyncStatus {
 
 class MarketSyncProgressService {
   private status: MarketSyncStatus = this.createIdleStatus();
+  private workerRuntime: MarketSyncWorkerRuntimeStatus | null = null;
 
   private createIdleStatus(): MarketSyncStatus {
     return {
@@ -132,11 +153,42 @@ class MarketSyncProgressService {
     };
   }
 
+  getWorkerRuntime(): MarketSyncWorkerRuntimeStatus | null {
+    if (!this.workerRuntime) return null;
+    return this.workerRuntime.circuitBreaker
+      ? {
+          ...this.workerRuntime,
+          circuitBreaker: { ...this.workerRuntime.circuitBreaker },
+        }
+      : { ...this.workerRuntime };
+  }
+
+  /**
+   * Publica la telemetría efímera del dispatcher sin acoplar el contrato HTTP
+   * al recolector. Los campos omitidos conservan el último valor del proceso.
+   */
+  updateWorkerRuntime(input: MarketSyncWorkerRuntimeStatus): void {
+    const next = {
+      ...this.workerRuntime,
+      ...input,
+    };
+    const circuitBreaker =
+      input.circuitBreaker ?? this.workerRuntime?.circuitBreaker;
+    this.workerRuntime = circuitBreaker
+      ? { ...next, circuitBreaker }
+      : next;
+  }
+
+  clearWorkerRuntime(): void {
+    this.workerRuntime = null;
+  }
+
   startSync(
     targetAssets: number,
     assetsPerItemOrTriggeredBy: number | string = "unknown",
     maybeTriggeredBy?: string,
   ): void {
+    this.clearWorkerRuntime();
     const assetsPerItem =
       typeof assetsPerItemOrTriggeredBy === "number"
         ? assetsPerItemOrTriggeredBy

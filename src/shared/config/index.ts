@@ -24,6 +24,17 @@ const marketAssetsSyncIntervalMinutes = toPositiveInteger(
     process.env.FULL_CATALOG_SYNC_INTERVAL_MINUTES,
   300,
 );
+const marketAssetsMaxConcurrency = Math.min(
+  48,
+  toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 48),
+);
+const marketAssetsInitialConcurrency = Math.min(
+  marketAssetsMaxConcurrency,
+  Math.min(
+    48,
+    toPositiveInteger(process.env.MARKET_ASSETS_INITIAL_CONCURRENCY, 6),
+  ),
+);
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -118,10 +129,14 @@ export const config = {
       10,
       toPositiveInteger(process.env.MARKET_ASSETS_PER_ITEM, 10),
     ),
-    /** Requests simultáneos; 3 es un máximo de seguridad, no sólo el default. */
-    concurrency: Math.min(
-      3,
-      toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 3),
+    /** Techo adaptativo de requests simultáneos. */
+    concurrency: marketAssetsMaxConcurrency,
+    /** Workers iniciales antes de medir latencia y salud del proveedor. */
+    initialConcurrency: marketAssetsInitialConcurrency,
+    /** Objetivo SLO; no habilita publicación parcial al vencer. */
+    targetDurationSeconds: toPositiveInteger(
+      process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS,
+      600,
     ),
     sort: (process.env.MARKET_ASSETS_SORT || 'newest') as
       | 'newest'

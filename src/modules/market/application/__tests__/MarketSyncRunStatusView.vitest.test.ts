@@ -128,12 +128,73 @@ describe("buildMarketSyncRunStatusView", () => {
       },
     );
 
-    expect(status.throughput).toEqual({
+    expect(status.throughput).toMatchObject({
       validAssetsPerMinute: 120,
       etaSeconds: 250,
       etaConfidence: "high",
+      targetDurationSeconds: 600,
+      onTrack: true,
+      projectedCompletionAt: "2026-07-21T12:05:10.000Z",
     });
+    expect(status.throughput.requiredAssetsPerMinute).toBe(55.6);
     expect(status.recommendedPollAfterMs).toBe(5_000);
+  });
+
+  it("expone workers, breaker y advierte cuando el objetivo de diez minutos no es viable", () => {
+    const status = buildMarketSyncRunStatusView(
+      run({
+        configuredConcurrency: 48,
+        currentConcurrency: 21,
+        recentValidAssetsPerMinute: 120,
+        targetAssets: 10_000,
+        validAssetCount: 1_000,
+        totalCandidates: 2_000,
+        candidatesVisited: 200,
+      }),
+      {
+        now: new Date("2026-07-21T12:08:00.000Z"),
+        validAssets: 1_000,
+        targetAssets: 10_000,
+        windowQuotaUnitsUsed: 100,
+        quotaLimit: 10_000,
+        quotaResetsAt: null,
+        workers: {
+          initial: 6,
+          max: 48,
+          effective: 21,
+          inFlight: 20,
+          queueDepth: 1_780,
+        },
+        circuitBreaker: {
+          state: "open",
+          openCount: 2,
+          resumeAt: "2026-07-21T12:08:45.000Z",
+        },
+        targetDurationSeconds: 600,
+        targetDeadlineAt: "2026-07-21T12:10:00.000Z",
+      },
+    );
+
+    expect(status.workers).toEqual({
+      initial: 6,
+      max: 48,
+      effective: 21,
+      required: 48,
+      inFlight: 20,
+      queueDepth: 1_780,
+      utilization: 0.952,
+    });
+    expect(status.circuitBreaker).toEqual({
+      state: "open",
+      openCount: 2,
+      resumeAt: "2026-07-21T12:08:45.000Z",
+    });
+    expect(status.throughput).toMatchObject({
+      targetDurationSeconds: 600,
+      requiredAssetsPerMinute: 4_500,
+      onTrack: false,
+    });
+    expect(status.warnings).toContain("ten_minute_target_unreachable");
   });
 
   it("muestra la pausa viva desde el ultimo intento", () => {

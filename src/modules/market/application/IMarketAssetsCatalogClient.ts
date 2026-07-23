@@ -8,6 +8,7 @@ export type MarketAssetsRequestOutcome =
   | "timeout"
   | "network"
   | "http_transient"
+  | "cancelled"
   | "fatal"
   | "rate_limited";
 
@@ -35,6 +36,7 @@ export interface MarketAssetsPageRequest {
   limit: number;
   offset: number;
   sort: MarketAssetsCatalogSort;
+  signal?: AbortSignal;
   onRateLimitWait?: (waitMs: number) => void;
 }
 

@@ -40,7 +40,11 @@ const collector = new CollectMarketAssetsCatalogUseCase(
   {
     targetAssets: config.marketAssetsCatalog.target,
     assetsPerItem: config.marketAssetsCatalog.assetsPerItem,
+    initialConcurrency:
+      config.marketAssetsCatalog.initialConcurrency,
     concurrency: config.marketAssetsCatalog.concurrency,
+    targetDurationSeconds:
+      config.marketAssetsCatalog.targetDurationSeconds,
     sort: config.marketAssetsCatalog.sort,
   },
   {

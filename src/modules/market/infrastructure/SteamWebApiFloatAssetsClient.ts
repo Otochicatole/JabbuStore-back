@@ -1,6 +1,7 @@
 import { config } from "../../../shared/config";
 import type { MarketAssetsRequestOutcome } from "../application/IMarketAssetsCatalogClient";
 import {
+  FloatRateLimitAcquireCancelledError,
   floatRateLimiter,
   type FloatRateLimitPriority,
   type FloatRateLimitSnapshot,
@@ -35,6 +36,7 @@ export interface FloatAssetsQuery {
   maxRateLimitWaitMs?: number;
   onRateLimitWait?: (waitMs: number) => void;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface FloatAssetsPage {
@@ -53,6 +55,8 @@ export interface FloatAssetsPage {
   rateLimit: FloatRateLimitSnapshot;
   durationMs: number;
   outcome: MarketAssetsRequestOutcome;
+  /** Requests que llegaron a invocar `fetch`; una cancelación en cuota vale 0. */
+  httpAttempts: number;
 }
 
 export function parseFloatAssetsResponse(parsed: any): {
@@ -124,6 +128,7 @@ function emptyPage(input: {
   quotaUnitsUsed: number;
   durationMs?: number;
   outcome?: MarketAssetsRequestOutcome;
+  httpAttempts?: number;
 }): FloatAssetsPage {
   return {
     assets: [],
@@ -140,6 +145,7 @@ function emptyPage(input: {
     creditsUsed: 0,
     rateLimit: floatRateLimiter.getSnapshot(),
     durationMs: input.durationMs ?? 0,
+    httpAttempts: input.httpAttempts ?? 1,
     outcome:
       input.outcome ??
       (input.status === 404
@@ -173,6 +179,7 @@ export class SteamWebApiFloatAssetsClient {
         status: 0,
         error: "STEAMWEBAPI_API_KEY no configurado",
         quotaUnitsUsed: 0,
+        httpAttempts: 0,
       });
     }
 
@@ -205,17 +212,40 @@ export class SteamWebApiFloatAssetsClient {
       params.set("is_souvenir", query.isSouvenir ? "1" : "0");
     }
 
-    await floatRateLimiter.acquire(limit, {
-      priority: query.rateLimitPriority ?? "normal",
-      ...(query.maxRateLimitWaitMs != null
-        ? { maxWaitMs: query.maxRateLimitWaitMs }
-        : {}),
-      ...(query.onRateLimitWait
-        ? { onWait: query.onRateLimitWait }
-        : {}),
-    });
+    try {
+      await floatRateLimiter.acquire(limit, {
+        priority: query.rateLimitPriority ?? "normal",
+        ...(query.maxRateLimitWaitMs != null
+          ? { maxWaitMs: query.maxRateLimitWaitMs }
+          : {}),
+        ...(query.onRateLimitWait
+          ? { onWait: query.onRateLimitWait }
+          : {}),
+        ...(query.signal ? { signal: query.signal } : {}),
+      });
+    } catch (error) {
+      if (
+        error instanceof FloatRateLimitAcquireCancelledError ||
+        query.signal?.aborted
+      ) {
+        return emptyPage({
+          limit,
+          offset,
+          sort,
+          status: 0,
+          error: "Consulta float/assets cancelada durante la espera de cuota",
+          quotaUnitsUsed: 0,
+          outcome: "cancelled",
+          httpAttempts: 0,
+        });
+      }
+      throw error;
+    }
 
     const controller = new AbortController();
+    const requestSignal = query.signal
+      ? AbortSignal.any([controller.signal, query.signal])
+      : controller.signal;
     const timeout = setTimeout(
       () => controller.abort(),
       query.requestTimeoutMs ?? defaultTimeoutMs(),
@@ -225,7 +255,7 @@ export class SteamWebApiFloatAssetsClient {
       const res = await fetch(
         `${STEAM_FLOAT_ASSETS_URL}?${params.toString()}`,
         {
-          signal: controller.signal,
+          signal: requestSignal,
           headers: { accept: "application/json" },
         },
       );
@@ -314,24 +344,35 @@ export class SteamWebApiFloatAssetsClient {
         rateLimit: floatRateLimiter.getSnapshot(),
         durationMs: Date.now() - requestStartedAt,
         outcome: page.assets.length > 0 ? "success" : "success_empty",
+        httpAttempts: 1,
       };
     } catch (error) {
+      const externallyCancelled = Boolean(
+        query.signal?.aborted && !controller.signal.aborted,
+      );
       const timedOut =
-        controller.signal.aborted ||
-        (error instanceof Error && error.name === "AbortError");
+        !externallyCancelled &&
+        (controller.signal.aborted ||
+          (error instanceof Error && error.name === "AbortError"));
       return emptyPage({
         limit,
         offset,
         sort,
         status: 0,
-        error: timedOut
+        error: externallyCancelled
+          ? "Consulta float/assets cancelada porque el objetivo ya fue alcanzado"
+          : timedOut
           ? "SteamWebAPI float/assets agotó el tiempo de espera"
           : error instanceof Error
             ? error.message
             : String(error),
         quotaUnitsUsed: limit,
         durationMs: Date.now() - requestStartedAt,
-        outcome: timedOut ? "timeout" : "network",
+        outcome: externallyCancelled
+          ? "cancelled"
+          : timedOut
+            ? "timeout"
+            : "network",
       });
     } finally {
       clearTimeout(timeout);

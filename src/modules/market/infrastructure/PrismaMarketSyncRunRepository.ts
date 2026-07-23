@@ -256,6 +256,13 @@ export class PrismaMarketSyncRunRepository
   ): Promise<MarketSyncRunRecord> {
     return this.serialize(async () => {
       const now = new Date();
+      const initialConcurrency = Math.max(
+        1,
+        Math.min(
+          input.configuredConcurrency,
+          input.initialConcurrency ?? input.configuredConcurrency,
+        ),
+      );
       const row = await prisma.$transaction(async (tx) => {
         const state = await tx.marketSyncState.findUnique({
           where: { key: input.stateKey },
@@ -307,14 +314,14 @@ export class PrismaMarketSyncRunRepository
               targetAssets: input.targetAssets,
               assetsPerItem: input.assetsPerItem,
               configuredConcurrency: input.configuredConcurrency,
-              currentConcurrency: input.configuredConcurrency,
+              currentConcurrency: initialConcurrency,
               minimumConcurrencyUsed:
                 active.minimumConcurrencyUsed > 0
                   ? Math.min(
                       active.minimumConcurrencyUsed,
-                      input.configuredConcurrency,
+                      initialConcurrency,
                     )
-                  : input.configuredConcurrency,
+                  : initialConcurrency,
               throughputWindowStartedAt: now,
               throughputWindowStartValidAssets: active.validAssetCount,
               recentValidAssetsPerMinute: null,
@@ -370,8 +377,8 @@ export class PrismaMarketSyncRunRepository
             targetAssets: input.targetAssets,
             assetsPerItem: input.assetsPerItem,
             configuredConcurrency: input.configuredConcurrency,
-            currentConcurrency: input.configuredConcurrency,
-            minimumConcurrencyUsed: input.configuredConcurrency,
+            currentConcurrency: initialConcurrency,
+            minimumConcurrencyUsed: initialConcurrency,
             throughputWindowStartedAt: now,
             throughputWindowStartValidAssets: 0,
             phases: {

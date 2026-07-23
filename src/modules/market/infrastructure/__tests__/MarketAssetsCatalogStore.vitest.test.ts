@@ -56,8 +56,22 @@ describe("MarketAssetsCatalogStore", () => {
       targetAssets: 10_000,
       assetsPerItem: 10,
       sort: "newest",
-      concurrency: 12,
+      concurrency: 48,
+      initialConcurrency: 6,
       effectiveConcurrency: 3,
+      rampStage: 0,
+      latencyBaselineMs: null,
+      recentHealthSamples: [],
+      concurrencyCooldownUntil: null,
+      consecutiveCongestionFailures: 0,
+      circuitBreaker: {
+        state: "closed",
+        openCount: 0,
+        resumeAt: null,
+      },
+      targetDurationSeconds: 600,
+      targetDeadlineAt: "2026-07-20T00:10:00.000Z",
+      tenMinuteTargetUnreachable: false,
       successfulBatchesSinceReduction: 4,
       adaptiveFailureRounds: 0,
       cursorIndex: 1,
@@ -139,6 +153,20 @@ describe("MarketAssetsCatalogStore", () => {
     const store = new MarketAssetsCatalogStore(catalogPath, checkpointPath);
     const valid = checkpoint();
     await store.writeCheckpoint(valid);
+    expect(await store.getCheckpointStatus()).toMatchObject({
+      exists: true,
+      concurrency: 48,
+      initialConcurrency: 6,
+      effectiveConcurrency: 3,
+      circuitBreaker: {
+        state: "closed",
+        openCount: 0,
+        resumeAt: null,
+      },
+      targetDurationSeconds: 600,
+      targetDeadlineAt: "2026-07-20T00:10:00.000Z",
+      tenMinuteTargetUnreachable: false,
+    });
 
     const invalid: MarketAssetsCollectionCheckpoint = {
       ...valid,
@@ -164,11 +192,21 @@ describe("MarketAssetsCatalogStore", () => {
     });
   });
 
-  it("migra checkpoints v2 a v3 sin perder assets ni offsets", async () => {
+  it("migra checkpoints v2 a v4 sin perder assets ni offsets", async () => {
     const legacy: any = structuredClone(checkpoint());
     legacy.schemaVersion = 2;
     delete legacy.runId;
+    delete legacy.initialConcurrency;
     delete legacy.effectiveConcurrency;
+    delete legacy.rampStage;
+    delete legacy.latencyBaselineMs;
+    delete legacy.recentHealthSamples;
+    delete legacy.concurrencyCooldownUntil;
+    delete legacy.consecutiveCongestionFailures;
+    delete legacy.circuitBreaker;
+    delete legacy.targetDurationSeconds;
+    delete legacy.targetDeadlineAt;
+    delete legacy.tenMinuteTargetUnreachable;
     delete legacy.successfulBatchesSinceReduction;
     delete legacy.adaptiveFailureRounds;
     for (const progress of Object.values<any>(legacy.candidateProgress)) {
@@ -185,9 +223,17 @@ describe("MarketAssetsCatalogStore", () => {
     ).readCheckpoint();
 
     expect(migrated).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       runId: null,
+      initialConcurrency: 6,
       effectiveConcurrency: 3,
+      rampStage: 0,
+      recentHealthSamples: [],
+      circuitBreaker: {
+        state: "closed",
+        openCount: 0,
+        resumeAt: null,
+      },
       cursorIndex: 1,
       assets: [expect.objectContaining({ assetId: "checkpoint-asset" })],
     });
@@ -199,6 +245,67 @@ describe("MarketAssetsCatalogStore", () => {
       deferredRecoveryAttempts: 0,
       validAssetCount: 1,
     });
+  });
+
+  it("migra checkpoints v3 a v4 preservando runId, assets y offsets", async () => {
+    const legacy: any = structuredClone(checkpoint());
+    legacy.schemaVersion = 3;
+    legacy.concurrency = 12;
+    legacy.effectiveConcurrency = 2;
+    delete legacy.initialConcurrency;
+    delete legacy.rampStage;
+    delete legacy.latencyBaselineMs;
+    delete legacy.recentHealthSamples;
+    delete legacy.concurrencyCooldownUntil;
+    delete legacy.consecutiveCongestionFailures;
+    delete legacy.circuitBreaker;
+    delete legacy.targetDurationSeconds;
+    delete legacy.targetDeadlineAt;
+    delete legacy.tenMinuteTargetUnreachable;
+    await fs.writeFile(checkpointPath, JSON.stringify(legacy), "utf8");
+
+    const migrated = await new MarketAssetsCatalogStore(
+      catalogPath,
+      checkpointPath,
+    ).readCheckpoint();
+
+    expect(migrated).toMatchObject({
+      schemaVersion: 4,
+      runId: "run-checkpoint",
+      concurrency: 12,
+      initialConcurrency: 6,
+      effectiveConcurrency: 2,
+      targetDurationSeconds: 600,
+      targetDeadlineAt: "2026-07-20T00:10:00.000Z",
+      cursorIndex: 1,
+      assets: [expect.objectContaining({ assetId: "checkpoint-asset" })],
+    });
+    expect(Object.values(migrated!.candidateProgress)[0]).toMatchObject({
+      offset: 10,
+      validAssetCount: 1,
+    });
+  });
+
+  it("rechaza checkpoints que exceden 48 workers o la ventana de salud", async () => {
+    const store = new MarketAssetsCatalogStore(catalogPath, checkpointPath);
+    const tooManyWorkers = { ...checkpoint(), concurrency: 49 };
+    await expect(
+      store.writeCheckpoint(tooManyWorkers as MarketAssetsCollectionCheckpoint),
+    ).rejects.toThrow("checkpoint de assets inválido");
+
+    const oversizedHealthWindow = checkpoint();
+    oversizedHealthWindow.recentHealthSamples = Array.from(
+      { length: 101 },
+      () => ({
+        recordedAt: "2026-07-20T00:01:00.000Z",
+        latencyMs: 100,
+        assetsCollected: 10,
+        outcome: "success" as const,
+      }),
+    );
+    await expect(
+      store.writeCheckpoint(oversizedHealthWindow),
+    ).rejects.toThrow("checkpoint de assets inválido");
   });
 
   it("recupera snapshot y checkpoint si Windows dejó sólo el backup", async () => {

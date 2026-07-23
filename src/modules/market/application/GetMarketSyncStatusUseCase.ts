@@ -7,7 +7,11 @@ import {
   type MarketSyncStatus,
 } from "./MarketSyncProgressService";
 import { floatRateLimiter } from "./FloatRateLimiter";
-import type { IMarketSyncRunRepository } from "../domain/MarketSyncRun";
+import type {
+  IMarketSyncRunRepository,
+  MarketSyncRunRecord,
+  MarketSyncRunStatusView,
+} from "../domain/MarketSyncRun";
 import { buildMarketSyncRunStatusView } from "./MarketSyncRunStatusView";
 
 export const MARKET_ASSETS_SYNC_STATE_KEY = "youpin-assets-snapshot";
@@ -32,16 +36,60 @@ export class GetMarketSyncStatusUseCase {
         Promise.resolve(null),
     ]);
     const quotaResetsAt = new Date(rateLimit.windowResetsAt).toISOString();
+    const workerRuntime = marketSyncProgressService.getWorkerRuntime();
+    const workerCheckpoint = checkpoint;
+    const buildRunView = (
+      runRecord: MarketSyncRunRecord,
+      validAssets: number,
+      targetAssets: number,
+    ): MarketSyncRunStatusView =>
+      buildMarketSyncRunStatusView(runRecord, {
+        validAssets,
+        targetAssets,
+        windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
+        quotaLimit: rateLimit.effectiveCapacity,
+        quotaResetsAt,
+        workers: {
+          initial:
+            workerRuntime?.initialConcurrency ??
+            workerCheckpoint.initialConcurrency ??
+            Math.min(6, runRecord.configuredConcurrency),
+          max:
+            workerRuntime?.maxConcurrency ??
+            workerCheckpoint.concurrency ??
+            runRecord.configuredConcurrency,
+          effective:
+            workerRuntime?.effectiveConcurrency ??
+            workerCheckpoint.effectiveConcurrency ??
+            runRecord.currentConcurrency,
+          required: workerRuntime?.requiredConcurrency,
+          inFlight: workerRuntime?.inFlight ?? 0,
+          queueDepth: workerRuntime?.queueDepth,
+        },
+        circuitBreaker:
+          workerRuntime?.circuitBreaker ??
+          workerCheckpoint.circuitBreaker ?? {
+            state: "closed",
+            openCount: 0,
+            resumeAt: null,
+          },
+        targetDurationSeconds:
+          workerRuntime?.targetDurationSeconds ??
+          workerCheckpoint.targetDurationSeconds ??
+          600,
+        targetDeadlineAt:
+          workerRuntime?.targetDeadlineAt ??
+          workerCheckpoint.targetDeadlineAt ??
+          null,
+        tenMinuteTargetUnreachable:
+          workerRuntime?.tenMinuteTargetUnreachable ??
+          workerCheckpoint.tenMinuteTargetUnreachable ??
+          false,
+      });
 
     if (!file.exists && !checkpoint.exists && !state) {
       const run = durableRun
-        ? buildMarketSyncRunStatusView(durableRun, {
-            validAssets: runtime.validAssets,
-            targetAssets: runtime.targetAssets,
-            windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
-            quotaLimit: rateLimit.effectiveCapacity,
-            quotaResetsAt,
-          })
+        ? buildRunView(durableRun, runtime.validAssets, runtime.targetAssets)
         : null;
       return {
         ...runtime,
@@ -84,13 +132,7 @@ export class GetMarketSyncStatusUseCase {
 
     if (runtime.running) {
       const run = durableRun
-        ? buildMarketSyncRunStatusView(durableRun, {
-            validAssets: runtime.validAssets,
-            targetAssets: runtime.targetAssets,
-            windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
-            quotaLimit: rateLimit.effectiveCapacity,
-            quotaResetsAt,
-          })
+        ? buildRunView(durableRun, runtime.validAssets, runtime.targetAssets)
         : null;
       return {
         ...runtime,
@@ -208,13 +250,7 @@ export class GetMarketSyncStatusUseCase {
           }
         : durableRun;
     const run = runRecordForStatus
-      ? buildMarketSyncRunStatusView(runRecordForStatus, {
-          validAssets,
-          targetAssets,
-          windowQuotaUnitsUsed: rateLimit.quotaUnitsUsed,
-          quotaLimit: rateLimit.effectiveCapacity,
-          quotaResetsAt,
-        })
+      ? buildRunView(runRecordForStatus, validAssets, targetAssets)
       : null;
     return {
       ...runtime,
