@@ -84,6 +84,45 @@ export class MarketController {
     }
   }
 
+  /** POST /market/sync/cancel — detiene de forma cooperativa la recolección activa. */
+  async cancelSync(_req: Request, res: Response): Promise<void> {
+    try {
+      const cancellation = this.runFullCatalogSyncUseCase.tryCancel();
+      if (!cancellation.accepted) {
+        const message =
+          cancellation.blockingReason === 'not_cancellable'
+            ? 'La sincronización ya está validando o publicando y no puede cancelarse de forma segura.'
+            : 'No hay una sincronización de assets activa para cancelar.';
+        res.status(409).json({
+          cancelRequested: false,
+          error: message,
+          message,
+          blockingReason: cancellation.blockingReason,
+          status: await this.getMarketSyncStatusUseCase.execute(),
+        });
+        return;
+      }
+
+      res.status(202).json({
+        cancelRequested: true,
+        alreadyRequested: cancellation.alreadyRequested,
+        message: cancellation.alreadyRequested
+          ? 'La cancelación ya estaba en curso.'
+          : 'Cancelación solicitada; guardando el checkpoint.',
+        statusUrl: '/api/market/sync/status',
+      });
+
+      void cancellation.completion.catch((error) => {
+        console.error('[Market Assets Cancellation] Error:', error);
+      });
+    } catch (error: any) {
+      console.error('[Market Controller] Error al cancelar sincronización:', error);
+      res.status(500).json({
+        error: error.message || 'Error al cancelar la sincronización.',
+      });
+    }
+  }
+
   /** GET /market/listings/:id/floats — devuelve floats para un resale item con displayPrice */
   async getFloats(req: Request, res: Response): Promise<void> {
     try {

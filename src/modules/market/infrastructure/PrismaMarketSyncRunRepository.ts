@@ -215,9 +215,31 @@ export class PrismaMarketSyncRunRepository
     run: any,
     validAssetCount: number | undefined,
     now: Date,
+    phase?: string,
   ) {
-    if (validAssetCount == null) return {};
-    const nextValid = nonNegativeInteger(validAssetCount);
+    if (
+      validAssetCount == null &&
+      (!phase || phase === "collecting_assets")
+    ) {
+      return {};
+    }
+    const nextValid = nonNegativeInteger(
+      validAssetCount ?? run.validAssetCount,
+    );
+    if (phase && phase !== "collecting_assets") {
+      return {
+        throughputWindowStartedAt: null,
+        throughputWindowStartValidAssets: nextValid,
+        recentValidAssetsPerMinute: null,
+      };
+    }
+    if (phase === "collecting_assets" && run.currentPhase !== "collecting_assets") {
+      return {
+        throughputWindowStartedAt: now,
+        throughputWindowStartValidAssets: nextValid,
+        recentValidAssetsPerMinute: null,
+      };
+    }
     const startedAt: Date | null = run.throughputWindowStartedAt;
     if (
       !startedAt ||
@@ -454,7 +476,12 @@ export class PrismaMarketSyncRunRepository
 
         await this.enterPhase(tx, run, progress.phase, now);
         const data: any = {
-          ...this.throughputUpdate(run, progress.validAssetCount, now),
+          ...this.throughputUpdate(
+            run,
+            progress.validAssetCount,
+            now,
+            progress.phase,
+          ),
           ...(progress.targetAssets == null
             ? {}
             : { targetAssets: nonNegativeInteger(progress.targetAssets) }),
@@ -643,12 +670,64 @@ export class PrismaMarketSyncRunRepository
     });
   }
 
+  async cancel(stateKey: string, message: string): Promise<boolean> {
+    return this.serialize(async () => {
+      const now = new Date();
+      const cancelled = await prisma.$transaction(async (tx) => {
+        const state = await tx.marketSyncState.findUnique({
+          where: { key: stateKey },
+        });
+        if (!state?.activeRunId) return false;
+        const run = await tx.marketSyncRun.findUnique({
+          where: { id: state.activeRunId },
+        });
+        if (!run) return false;
+
+        await this.enterPhase(tx, run, "cancelled", now);
+        await tx.marketSyncRun.update({
+          where: { id: run.id },
+          data: {
+            status: "cancelled",
+            currentPhase: "cancelled",
+            latestAttemptFinishedAt: now,
+            runFinishedAt: now,
+            lastHeartbeatAt: now,
+            metricsFlushedAt: now,
+            lastError: message,
+          },
+        });
+        await tx.marketSyncState.update({
+          where: { key: stateKey },
+          data: {
+            activeRunId: null,
+            lastRunId: run.id,
+            currentPhase: "cancelled",
+            currentCandidate: null,
+            quotaResetsAt: null,
+            lastError: null,
+            lastFinishedAt: now,
+          },
+        });
+        return true;
+      });
+      if (cancelled) {
+        await this.prune(stateKey).catch((error) => {
+          console.error(
+            "[Market Assets Sync] No se pudieron depurar corridas canceladas antiguas:",
+            error,
+          );
+        });
+      }
+      return cancelled;
+    });
+  }
+
   async prune(stateKey: string, retainRuns = 100): Promise<number> {
     const keep = Math.max(1, Math.trunc(retainRuns));
     const stale = await prisma.marketSyncRun.findMany({
       where: {
         stateKey,
-        status: { in: ["completed", "failed"] },
+        status: { in: ["completed", "failed", "cancelled"] },
       },
       orderBy: { runStartedAt: "desc" },
       skip: keep,

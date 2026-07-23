@@ -8,7 +8,10 @@ import type {
   MarketAssetsCatalogSnapshot,
   MarketAssetsCompletionReason,
 } from "../domain/MarketAssetsCatalog";
-import { CollectMarketAssetsCatalogUseCase } from "./CollectMarketAssetsCatalogUseCase";
+import {
+  CollectMarketAssetsCatalogUseCase,
+  MarketAssetsSyncCancelledError,
+} from "./CollectMarketAssetsCatalogUseCase";
 import {
   MarketAssetsCatalogPublisher,
   type MarketCatalogPublicationResult,
@@ -202,6 +205,7 @@ export class RefreshMarketAssetsCatalogUseCase {
       );
       return await this.publish(snapshot, collected.resumedCheckpoint);
     } catch (error) {
+      if (error instanceof MarketAssetsSyncCancelledError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       await this.syncStateRepository
         .markFailed(MARKET_ASSETS_SYNC_STATE_KEY, message)

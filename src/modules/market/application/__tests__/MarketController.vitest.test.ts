@@ -95,3 +95,65 @@ describe("MarketController.triggerSync", () => {
     expect(status.execute).not.toHaveBeenCalled();
   });
 });
+
+describe("MarketController.cancelSync", () => {
+  it("responde 202 cuando la recolección acepta la cancelación", async () => {
+    const run = {
+      tryCancel: vi.fn(() => ({
+        accepted: true,
+        alreadyRequested: false,
+        completion: Promise.resolve(),
+        blockingReason: null,
+      })),
+    };
+    const status = { execute: vi.fn() };
+    const controller = new MarketController(
+      {} as any,
+      run as any,
+      status as any,
+      {} as any,
+    );
+    const res = responseDouble();
+
+    await controller.cancelSync({} as any, res);
+
+    expect(res.statusCode).toBe(202);
+    expect(res.body).toMatchObject({
+      cancelRequested: true,
+      alreadyRequested: false,
+      statusUrl: "/api/market/sync/status",
+    });
+  });
+
+  it("responde 409 si no hay una fase cancelable y adjunta el estado", async () => {
+    const run = {
+      tryCancel: vi.fn(() => ({
+        accepted: false,
+        alreadyRequested: false,
+        completion: null,
+        blockingReason: "not_cancellable",
+      })),
+    };
+    const current = {
+      running: true,
+      phase: "publishing_database",
+    };
+    const status = { execute: vi.fn(async () => current) };
+    const controller = new MarketController(
+      {} as any,
+      run as any,
+      status as any,
+      {} as any,
+    );
+    const res = responseDouble();
+
+    await controller.cancelSync({} as any, res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({
+      cancelRequested: false,
+      blockingReason: "not_cancellable",
+      status: current,
+    });
+  });
+});

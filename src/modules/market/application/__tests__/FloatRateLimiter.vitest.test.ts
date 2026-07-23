@@ -126,6 +126,49 @@ describe("FloatRateLimiter", () => {
     });
   });
 
+  it("revalida la ventana después del pacer y no duplica cuota con checkout", async () => {
+    const clock = new ManualClock();
+    const limiter = new FloatRateLimiter(10, 60_000, clock);
+    let releaseAdmission!: () => void;
+    const admissionGate = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const beforeReserve = vi.fn(async () => admissionGate);
+
+    const delayedSync = limiter.acquire(10, {
+      priority: "sync",
+      beforeReserve,
+    });
+    await vi.waitFor(() => expect(beforeReserve).toHaveBeenCalledOnce());
+    expect(limiter.getSnapshot().quotaUnitsUsed).toBe(0);
+
+    // Checkout consume la ventana que el sync sólo había inspeccionado.
+    await limiter.acquire(10, { priority: "checkout" });
+    expect(limiter.getSnapshot().quotaUnitsUsed).toBe(10);
+
+    // Checkout también consume la ventana siguiente antes de liberar el pacer.
+    clock.nowMs = 61_000;
+    await limiter.acquire(10, { priority: "checkout" });
+    expect(limiter.getSnapshot()).toMatchObject({
+      quotaUnitsUsed: 10,
+      windowStartedAt: 61_000,
+      windowResetsAt: 121_000,
+    });
+
+    releaseAdmission();
+    await delayedSync;
+
+    // El sync no suma 10 sobre la ventana ya llena: espera y reserva recién
+    // en la tercera ventana, justo antes de que su caller pueda hacer fetch.
+    expect(clock.nowMs).toBe(121_000);
+    expect(beforeReserve).toHaveBeenCalledTimes(2);
+    expect(limiter.getSnapshot()).toMatchObject({
+      quotaUnitsUsed: 10,
+      windowStartedAt: 121_000,
+      windowResetsAt: 181_000,
+    });
+  });
+
   it("un 429 posterior nunca acorta un cooldown ya observado", async () => {
     const clock = new ManualClock();
     const limiter = new FloatRateLimiter(100, 60_000, clock);

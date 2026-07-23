@@ -1,4 +1,14 @@
-type MarketAssetsShutdownHandler = () => Promise<void>;
+export type MarketAssetsStopReason = "shutdown" | "user_cancelled";
+
+type MarketAssetsShutdownHandler = (
+  reason: MarketAssetsStopReason,
+) => Promise<void>;
+
+export interface MarketAssetsStopRequest {
+  accepted: boolean;
+  alreadyRequested: boolean;
+  completion: Promise<void> | null;
+}
 
 /**
  * Puente mínimo entre el bootstrap HTTP y la recolección activa.
@@ -10,6 +20,7 @@ type MarketAssetsShutdownHandler = () => Promise<void>;
  */
 export class MarketAssetsShutdownCoordinator {
   private activeHandler: MarketAssetsShutdownHandler | null = null;
+  private activeStop: Promise<void> | null = null;
 
   register(handler: MarketAssetsShutdownHandler): () => void {
     if (this.activeHandler) {
@@ -18,17 +29,52 @@ export class MarketAssetsShutdownCoordinator {
       );
     }
     this.activeHandler = handler;
+    this.activeStop = null;
     return () => {
-      if (this.activeHandler === handler) this.activeHandler = null;
+      if (this.activeHandler === handler) {
+        this.activeHandler = null;
+        this.activeStop = null;
+      }
     };
   }
 
   async prepareForShutdown(): Promise<void> {
-    await this.activeHandler?.();
+    const request = this.requestStop("shutdown");
+    await request.completion;
+  }
+
+  requestCancellation(): MarketAssetsStopRequest {
+    return this.requestStop("user_cancelled");
   }
 
   hasActiveCollection(): boolean {
     return this.activeHandler !== null;
+  }
+
+  private requestStop(reason: MarketAssetsStopReason): MarketAssetsStopRequest {
+    if (!this.activeHandler) {
+      return {
+        accepted: false,
+        alreadyRequested: false,
+        completion: null,
+      };
+    }
+    if (this.activeStop) {
+      return {
+        accepted: true,
+        alreadyRequested: true,
+        completion: this.activeStop,
+      };
+    }
+
+    // El handler cambia su estado antes del primer await, por lo que desde este
+    // punto no se despachan requests nuevos aunque la API responda 202 enseguida.
+    this.activeStop = this.activeHandler(reason);
+    return {
+      accepted: true,
+      alreadyRequested: false,
+      completion: this.activeStop,
+    };
   }
 }
 

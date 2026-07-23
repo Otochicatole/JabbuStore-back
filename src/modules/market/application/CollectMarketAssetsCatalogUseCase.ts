@@ -34,7 +34,10 @@ import {
   MarketAssetsCatalogSnapshotBuilder,
   type NormalizedMarketAssetsBatch,
 } from "./MarketAssetsCatalogSnapshotBuilder";
-import { marketAssetsShutdownCoordinator } from "./MarketAssetsShutdownCoordinator";
+import {
+  marketAssetsShutdownCoordinator,
+  type MarketAssetsStopReason,
+} from "./MarketAssetsShutdownCoordinator";
 import {
   MarketAssetsPriorityQueueBuilder,
   type MarketAssetsPriorityCandidate,
@@ -92,12 +95,21 @@ interface InFlightCandidate {
   promise: Promise<CandidateOutcome>;
 }
 
-class MarketAssetsCollectionInterruptedError extends Error {
+export class MarketAssetsCollectionInterruptedError extends Error {
   constructor() {
     super(
       "La recolección de assets fue pausada para apagar el proceso de forma segura.",
     );
     this.name = "MarketAssetsCollectionInterruptedError";
+  }
+}
+
+export class MarketAssetsSyncCancelledError extends Error {
+  constructor() {
+    super(
+      "Sincronización cancelada por un administrador. El progreso quedó guardado y no se publicó un snapshot parcial.",
+    );
+    this.name = "MarketAssetsSyncCancelledError";
   }
 }
 
@@ -547,6 +559,7 @@ export class CollectMarketAssetsCatalogUseCase {
     overrides: Partial<MarketAssetsCollectionOptions> = {},
   ): Promise<MarketAssetsCollectionResult> {
     const options = validateOptions(this.defaultOptions, overrides);
+    this.client.resetRequestPacing?.();
     const queue = await this.priorityQueue.build();
     const rankByListing = new Map(
       queue.candidates.map((candidate, index) => [
@@ -721,6 +734,9 @@ export class CollectMarketAssetsCatalogUseCase {
     let outcomesSinceFlush = 0;
     let lastFlushAt = now();
     let terminationRequested = false;
+    const stopRequest: { reason: MarketAssetsStopReason } = {
+      reason: "shutdown",
+    };
     let notifyTerminationRequested!: () => void;
     const terminationRequestedPromise = new Promise<void>((resolve) => {
       notifyTerminationRequested = resolve;
@@ -755,6 +771,7 @@ export class CollectMarketAssetsCatalogUseCase {
       return Math.max(0, queue.candidates.length - completed - inFlight.size);
     };
     const publishWorkerRuntime = () => {
+      const requestPacer = this.client.getRequestPacerSnapshot?.() ?? null;
       marketSyncProgressService.updateWorkerRuntime({
         initialConcurrency: checkpoint.initialConcurrency,
         maxConcurrency: options.concurrency,
@@ -770,6 +787,23 @@ export class CollectMarketAssetsCatalogUseCase {
               ? null
               : new Date(decision.circuitBreaker.resumeAt).toISOString(),
         },
+        requestPacer: requestPacer
+          ? {
+              initialStartsPerSecond:
+                requestPacer.initialStartsPerSecond,
+              maximumStartsPerSecond:
+                requestPacer.maximumStartsPerSecond,
+              currentStartsPerSecond:
+                requestPacer.currentStartsPerSecond,
+              queued: requestPacer.queued,
+              gateState: requestPacer.gate.state,
+              gateReason: requestPacer.gate.reason,
+              gateResumeAt:
+                requestPacer.gate.resumeAt == null
+                  ? null
+                  : new Date(requestPacer.gate.resumeAt).toISOString(),
+            }
+          : null,
         targetDurationSeconds: options.targetDurationSeconds,
         targetDeadlineAt: checkpoint.targetDeadlineAt,
         tenMinuteTargetUnreachable:
@@ -1270,9 +1304,10 @@ export class CollectMarketAssetsCatalogUseCase {
     };
 
     const unregisterShutdown =
-      marketAssetsShutdownCoordinator.register(async () => {
+      marketAssetsShutdownCoordinator.register(async (reason) => {
         if (!terminationRequested) {
           terminationRequested = true;
+          stopRequest.reason = reason;
           shutdownAbortController.abort();
           notifyTerminationRequested();
         }
@@ -1286,7 +1321,9 @@ export class CollectMarketAssetsCatalogUseCase {
 
         if (terminationRequested) {
           if (inFlight.size === 0) {
-            throw new MarketAssetsCollectionInterruptedError();
+            throw stopRequest.reason === "user_cancelled"
+              ? new MarketAssetsSyncCancelledError()
+              : new MarketAssetsCollectionInterruptedError();
           }
           await takeNextOutcome(false);
           continue;
@@ -1607,8 +1644,9 @@ export class CollectMarketAssetsCatalogUseCase {
           sort: options.sort,
           ...(signal ? { signal } : {}),
           onRateLimitWait: (waitMs) => {
-            quotaWaitCount++;
-            quotaWaitDurationMs += Math.max(0, Math.trunc(waitMs));
+            // La duración global se deriva de MarketSyncPhaseMetric. Sumar
+            // este callback por cada worker multiplicaba una sola espera por
+            // hasta 48 y producía horas ficticias en la telemetría.
             marketSyncProgressService.waitForRateLimit(waitMs);
             void this.syncStateRepository
               .updateCurrentStatus(stateKey, {

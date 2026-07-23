@@ -10,6 +10,8 @@ const keys = [
   "MARKET_ASSETS_CONCURRENCY",
   "MARKET_ASSETS_INITIAL_CONCURRENCY",
   "MARKET_ASSETS_FORCE_MAX_CONCURRENCY",
+  "MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND",
+  "MARKET_ASSETS_MAX_REQUESTS_PER_SECOND",
   "MARKET_ASSETS_TARGET_DURATION_SECONDS",
 ] as const;
 
@@ -35,6 +37,8 @@ describe("sync scheduler config", () => {
     process.env.MARKET_ASSETS_CONCURRENCY = "5";
     process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "9";
     process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY = "false";
+    process.env.MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND = "3";
+    process.env.MARKET_ASSETS_MAX_REQUESTS_PER_SECOND = "12";
     process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "120";
     vi.resetModules();
 
@@ -48,6 +52,8 @@ describe("sync scheduler config", () => {
     expect(config.marketAssetsCatalog.concurrency).toBe(5);
     expect(config.marketAssetsCatalog.initialConcurrency).toBe(5);
     expect(config.marketAssetsCatalog.forceMaxConcurrency).toBe(false);
+    expect(config.marketAssetsCatalog.initialRequestsPerSecond).toBe(3);
+    expect(config.marketAssetsCatalog.maxRequestsPerSecond).toBe(12);
     expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(120);
   });
 
@@ -59,6 +65,8 @@ describe("sync scheduler config", () => {
     process.env.MARKET_ASSETS_CONCURRENCY = "";
     process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "";
     process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY = "";
+    process.env.MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND = "";
+    process.env.MARKET_ASSETS_MAX_REQUESTS_PER_SECOND = "";
     process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "";
     vi.resetModules();
 
@@ -70,17 +78,23 @@ describe("sync scheduler config", () => {
     expect(config.marketAssetsCatalog.concurrency).toBe(48);
     expect(config.marketAssetsCatalog.initialConcurrency).toBe(6);
     expect(config.marketAssetsCatalog.forceMaxConcurrency).toBe(true);
+    expect(config.marketAssetsCatalog.initialRequestsPerSecond).toBe(4);
+    expect(config.marketAssetsCatalog.maxRequestsPerSecond).toBe(16);
     expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(600);
   });
 
   it("limita el pool a 48 workers aunque el entorno solicite más", async () => {
     process.env.MARKET_ASSETS_CONCURRENCY = "500";
     process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "200";
+    process.env.MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND = "50";
+    process.env.MARKET_ASSETS_MAX_REQUESTS_PER_SECOND = "500";
     vi.resetModules();
 
     const { config } = await import("../index");
 
     expect(config.marketAssetsCatalog.concurrency).toBe(48);
     expect(config.marketAssetsCatalog.initialConcurrency).toBe(48);
+    expect(config.marketAssetsCatalog.initialRequestsPerSecond).toBe(16);
+    expect(config.marketAssetsCatalog.maxRequestsPerSecond).toBe(16);
   });
 });

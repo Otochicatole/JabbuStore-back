@@ -26,6 +26,15 @@ export interface MarketSyncRunStatusContext {
     openCount: number;
     resumeAt: string | null;
   };
+  requestPacer?: {
+    initialStartsPerSecond: number;
+    maximumStartsPerSecond: number;
+    currentStartsPerSecond: number;
+    queued: number;
+    gateState: "closed" | "open";
+    gateReason: "congestion" | "rate_limited" | null;
+    gateResumeAt: string | null;
+  } | null;
   targetDurationSeconds?: number;
   targetDeadlineAt?: string | null;
   tenMinuteTargetUnreachable?: boolean;
@@ -75,16 +84,17 @@ function pollingDelay(
 function slowReason(input: {
   run: MarketSyncRunRecord;
   activeMs: number;
+  quotaWaitMs: number;
   averageLatency: number | null;
   p95: number | null;
 }): MarketSyncSlowReason {
-  const { run, activeMs, averageLatency, p95 } = input;
+  const { run, activeMs, quotaWaitMs, averageLatency, p95 } = input;
   const attempts = Math.max(1, run.httpAttempts);
   if (run.status === "paused") return "paused";
   if (run.currentPhase === "publishing_database") return "publishing_database";
   if (
     run.currentPhase === "waiting_rate_limit" ||
-    (activeMs > 0 && run.quotaWaitDurationMs / activeMs >= 0.25)
+    (activeMs > 0 && quotaWaitMs / activeMs >= 0.25)
   ) {
     return "quota_wait";
   }
@@ -133,10 +143,15 @@ export function buildMarketSyncRunStatusView(
   }));
   const collectingMs =
     phases.find((phase) => phase.phase === "collecting_assets")?.durationMs ?? 0;
+  const quotaWaitPhase = phases.find(
+    (phase) => phase.phase === "waiting_rate_limit",
+  );
+  const quotaWaitMs = quotaWaitPhase?.durationMs ?? 0;
   const validAssets = Math.max(context.validAssets, run.validAssetCount);
   const targetAssets = Math.max(context.targetAssets, run.targetAssets);
   const validAssetsPerMinute =
     run.httpAttempts >= 5 &&
+    run.httpSucceeded / Math.max(1, run.httpAttempts) >= 0.5 &&
     run.recentValidAssetsPerMinute != null &&
     run.recentValidAssetsPerMinute >= 0
       ? run.recentValidAssetsPerMinute
@@ -284,7 +299,7 @@ export function buildMarketSyncRunStatusView(
       wallMs,
       activeMs,
       pausedMs,
-      quotaWaitMs: run.quotaWaitDurationMs,
+      quotaWaitMs,
       retryBackoffMs: run.retryBackoffDurationMs,
     },
     phases,
@@ -312,7 +327,7 @@ export function buildMarketSyncRunStatusView(
       windowUnitsUsed: context.windowQuotaUnitsUsed,
       limit: context.quotaLimit,
       resetsAt: context.quotaResetsAt,
-      waitCount: run.quotaWaitCount,
+      waitCount: quotaWaitPhase?.entryCount ?? 0,
     },
     concurrency: {
       configured: run.configuredConcurrency,
@@ -350,7 +365,14 @@ export function buildMarketSyncRunStatusView(
       openCount: 0,
       resumeAt: null,
     },
-    slowReason: slowReason({ run, activeMs, averageLatency, p95 }),
+    requestPacer: context.requestPacer ?? null,
+    slowReason: slowReason({
+      run,
+      activeMs,
+      quotaWaitMs,
+      averageLatency,
+      p95,
+    }),
     recommendedPollAfterMs: pollingDelay(run, context.quotaResetsAt, now),
     deferredCandidateCount: run.deferredCandidateCount,
     warnings,

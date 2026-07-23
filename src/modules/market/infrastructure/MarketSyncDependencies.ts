@@ -13,6 +13,7 @@ import { SteamWebApiFloatAssetsClient } from "./SteamWebApiFloatAssetsClient";
 import { SteamWebApiMarketAssetsCatalogClient } from "./SteamWebApiMarketAssetsCatalogClient";
 import { PrismaMarketSyncRunRepository } from "./PrismaMarketSyncRunRepository";
 import { PrismaMarketAssetCandidateHistoryRepository } from "./PrismaMarketAssetCandidateHistoryRepository";
+import { MarketAssetRequestPacer } from "../application/MarketAssetRequestPacer";
 
 export const marketRepository = new PrismaMarketRepository();
 export const marketSyncRunRepository = new PrismaMarketSyncRunRepository();
@@ -30,6 +31,12 @@ const itemsCatalogStore = new SteamWebApiItemsCatalogStore();
 const queueBuilder = new MarketAssetsPriorityQueueBuilder(itemsCatalogStore);
 const assetsClient = new SteamWebApiMarketAssetsCatalogClient(
   new SteamWebApiFloatAssetsClient(),
+  new MarketAssetRequestPacer({
+    initialStartsPerSecond:
+      config.marketAssetsCatalog.initialRequestsPerSecond,
+    maxStartsPerSecond:
+      config.marketAssetsCatalog.maxRequestsPerSecond,
+  }),
 );
 const collector = new CollectMarketAssetsCatalogUseCase(
   assetsClient,

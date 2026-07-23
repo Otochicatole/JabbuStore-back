@@ -7,6 +7,11 @@ import {
 import type { MarketAssetsPriorityCandidate } from "../application/MarketAssetsPriorityQueue";
 import type { MarketAssetsCatalogSort } from "../domain/MarketAssetsCatalog";
 import {
+  MarketAssetRequestPacer,
+  type MarketAssetRequestPacerOutcome,
+  type MarketAssetRequestPacerSnapshot,
+} from "../application/MarketAssetRequestPacer";
+import {
   STEAM_FLOAT_ASSETS_URL,
   SteamWebApiFloatAssetsClient,
 } from "./SteamWebApiFloatAssetsClient";
@@ -17,7 +22,16 @@ export class SteamWebApiMarketAssetsCatalogClient
 {
   constructor(
     private readonly floatClient = new SteamWebApiFloatAssetsClient(),
+    private readonly requestPacer: MarketAssetRequestPacer | null = null,
   ) {}
+
+  resetRequestPacing(): void {
+    this.requestPacer?.reset();
+  }
+
+  getRequestPacerSnapshot(): MarketAssetRequestPacerSnapshot | null {
+    return this.requestPacer?.getSnapshot() ?? null;
+  }
 
   getSafeSourceUrl(options: {
     limit: number;
@@ -66,11 +80,18 @@ export class SteamWebApiMarketAssetsCatalogClient
       isStatTrak: candidate.isStatTrak,
       isSouvenir: candidate.isSouvenir,
       rateLimitPriority: "sync",
+      ...(this.requestPacer
+        ? {
+            beforePhysicalRequest: () =>
+              this.requestPacer!.acquire(options.signal),
+          }
+        : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onRateLimitWait
         ? { onRateLimitWait: options.onRateLimitWait }
         : {}),
     });
+    this.observeRequestPacer(result);
 
     const quotaUnitsUsed = result.quotaUnitsUsed;
     const creditsUsed = result.creditsUsed;
@@ -180,5 +201,49 @@ export class SteamWebApiMarketAssetsCatalogClient
           ? "network"
           : "http_transient",
     );
+  }
+
+  private observeRequestPacer(
+    result: Awaited<ReturnType<SteamWebApiFloatAssetsClient["fetchPage"]>>,
+  ): void {
+    if (!this.requestPacer || result.outcome === "cancelled") return;
+    const completedAt = Date.now();
+    let outcome: MarketAssetRequestPacerOutcome;
+    let resumeAt: number | undefined;
+    if (result.status === 429 || result.rateLimited) {
+      outcome = "rate_limited";
+      resumeAt = Math.max(
+        completedAt + 1_000,
+        result.rateLimit.cooldownUntil,
+        result.rateLimit.windowResetsAt,
+      );
+    } else if (result.ok || result.status === 404) {
+      outcome = "success";
+    } else if (
+      result.status === 401 ||
+      result.status === 402 ||
+      result.status === 403 ||
+      result.outcome === "fatal"
+    ) {
+      outcome = "fatal";
+    } else if (result.outcome === "timeout") {
+      outcome = "timeout";
+    } else if (result.outcome === "network" || result.status === 0) {
+      outcome = "network_error";
+    } else if (
+      result.outcome === "http_transient" ||
+      result.status >= 500
+    ) {
+      outcome = "server_error";
+    } else {
+      outcome = "candidate_error";
+    }
+
+    this.requestPacer.observe({
+      outcome,
+      validAssets: result.ok ? result.assets.length : 0,
+      completedAt,
+      ...(resumeAt == null ? {} : { resumeAt }),
+    });
   }
 }

@@ -15,6 +15,15 @@ export interface MarketSyncWorkerRuntimeStatus {
     openCount: number;
     resumeAt: string | null;
   };
+  requestPacer?: {
+    initialStartsPerSecond: number;
+    maximumStartsPerSecond: number;
+    currentStartsPerSecond: number;
+    queued: number;
+    gateState: "closed" | "open";
+    gateReason: "congestion" | "rate_limited" | null;
+    gateResumeAt: string | null;
+  } | null;
   targetDurationSeconds?: number;
   targetDeadlineAt?: string | null;
   tenMinuteTargetUnreachable?: boolean;
@@ -31,6 +40,7 @@ export type MarketSyncPhase =
   | "publishing_database"
   | "syncing_bots"
   | "paused"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -155,12 +165,15 @@ class MarketSyncProgressService {
 
   getWorkerRuntime(): MarketSyncWorkerRuntimeStatus | null {
     if (!this.workerRuntime) return null;
-    return this.workerRuntime.circuitBreaker
-      ? {
-          ...this.workerRuntime,
-          circuitBreaker: { ...this.workerRuntime.circuitBreaker },
-        }
-      : { ...this.workerRuntime };
+    return {
+      ...this.workerRuntime,
+      ...(this.workerRuntime.circuitBreaker
+        ? { circuitBreaker: { ...this.workerRuntime.circuitBreaker } }
+        : {}),
+      ...(this.workerRuntime.requestPacer
+        ? { requestPacer: { ...this.workerRuntime.requestPacer } }
+        : {}),
+    };
   }
 
   /**
@@ -378,6 +391,7 @@ class MarketSyncProgressService {
     completionReason: MarketSyncCompletionReason =
       this.status.completionReason ?? "target_reached",
   ): void {
+    this.clearWorkerRuntime();
     this.status.running = false;
     this.status.resumable = false;
     this.status.phase = "completed";
@@ -394,12 +408,25 @@ class MarketSyncProgressService {
   }
 
   failSync(error: string, resumable = false): void {
+    this.clearWorkerRuntime();
     this.status.running = false;
     this.status.resumable = resumable;
     this.status.phase = resumable ? "paused" : "failed";
     this.status.lastError = error;
     this.status.lastFinishedAt = new Date().toISOString();
     this.status.message = `Error en sincronización: ${error}`;
+  }
+
+  cancelSync(message: string): void {
+    this.clearWorkerRuntime();
+    this.status.running = false;
+    this.status.resumable = false;
+    this.status.phase = "cancelled";
+    this.status.lastError = null;
+    this.status.lastFinishedAt = new Date().toISOString();
+    this.status.quotaResetsAt = null;
+    this.status.rateLimitResetsAt = null;
+    this.status.message = message;
   }
 }
 

@@ -345,4 +345,51 @@ describe("PrismaMarketSyncRunRepository durable SQLite lifecycle", () => {
     });
     expect(run!.creditsUsed).toBeCloseTo(mutationCount * 0.1, 8);
   });
+
+  it("cierra una cancelación como terminal y permite una reanudación manual posterior", async () => {
+    const started = await repository.startAttempt(startInput());
+    await repository.recordProgress(stateKey, {
+      phase: "collecting_assets",
+      totalCandidates: 16_566,
+      candidatesVisited: 2_189,
+      rawAssetCount: 3_800,
+      validAssetCount: 3_797,
+      skippedAssetCount: 3,
+    });
+
+    await expect(
+      repository.cancel(
+        stateKey,
+        "Sincronización cancelada por un administrador.",
+      ),
+    ).resolves.toBe(true);
+
+    const cancelled = await repository.getCurrentOrLast(stateKey);
+    expect(cancelled).toMatchObject({
+      id: started.id,
+      status: "cancelled",
+      currentPhase: "cancelled",
+      runFinishedAt: expect.any(Date),
+      lastError: "Sincronización cancelada por un administrador.",
+    });
+    const cancelledState = await prisma.marketSyncState.findUniqueOrThrow({
+      where: { key: stateKey },
+    });
+    expect(cancelledState).toMatchObject({
+      activeRunId: null,
+      lastRunId: started.id,
+      currentPhase: "cancelled",
+    });
+    await expect(
+      repository.cancel(stateKey, "cancelación repetida"),
+    ).resolves.toBe(false);
+
+    const resumed = await repository.startAttempt(startInput(true));
+    expect(resumed.id).not.toBe(started.id);
+    expect(resumed).toMatchObject({
+      status: "running",
+      resumedFromRecovery: true,
+      recoveryKind: "checkpoint",
+    });
+  });
 });

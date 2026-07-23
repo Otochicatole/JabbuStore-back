@@ -35,6 +35,12 @@ export interface FloatAssetsQuery {
   rateLimitPriority?: FloatRateLimitPriority;
   maxRateLimitWaitMs?: number;
   onRateLimitWait?: (waitMs: number) => void;
+  /**
+   * Admission hook ejecutado cuando la ventana parece disponible. Al volver,
+   * el limitador revalida y reserva cuota en la ventana vigente justo antes
+   * del HTTP, evitando liberar decenas de requests al mismo tiempo.
+   */
+  beforePhysicalRequest?: () => Promise<void>;
   requestTimeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -220,6 +226,9 @@ export class SteamWebApiFloatAssetsClient {
           : {}),
         ...(query.onRateLimitWait
           ? { onWait: query.onRateLimitWait }
+          : {}),
+        ...(query.beforePhysicalRequest
+          ? { beforeReserve: query.beforePhysicalRequest }
           : {}),
         ...(query.signal ? { signal: query.signal } : {}),
       });

@@ -1,6 +1,7 @@
 export type MarketSyncRunStatus =
   | "running"
   | "paused"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -166,6 +167,8 @@ export interface IMarketSyncRunRepository {
   heartbeat(stateKey: string): Promise<void>;
   complete(stateKey: string, input?: FinishMarketSyncRunInput): Promise<void>;
   finishAttempt(stateKey: string, input: FinishMarketSyncRunInput): Promise<void>;
+  /** Retorna false si ya no existía una corrida activa para cerrar. */
+  cancel(stateKey: string, message: string): Promise<boolean>;
   prune(stateKey: string, retainRuns?: number): Promise<number>;
 }
 
@@ -247,6 +250,15 @@ export interface MarketSyncRunStatusView {
     openCount: number;
     resumeAt: string | null;
   };
+  requestPacer: {
+    initialStartsPerSecond: number;
+    maximumStartsPerSecond: number;
+    currentStartsPerSecond: number;
+    queued: number;
+    gateState: "closed" | "open";
+    gateReason: "congestion" | "rate_limited" | null;
+    gateResumeAt: string | null;
+  } | null;
   slowReason: MarketSyncSlowReason;
   recommendedPollAfterMs: number;
   deferredCandidateCount: number;

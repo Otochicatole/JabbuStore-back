@@ -253,6 +253,55 @@ describe("GetMarketSyncStatusUseCase (assets-only)", () => {
     });
   });
 
+  it("expone una cancelación durable como terminal sin descartar el checkpoint", async () => {
+    const checkpointStore = store();
+    checkpointStore.getCheckpointStatus.mockResolvedValue({
+      exists: true,
+      targetAssets: 10_000,
+      validAssetCount: 3_797,
+      rawAssetCount: 3_800,
+      skippedAssetCount: 3,
+      candidatesVisited: 2_189,
+      totalCandidates: 16_566,
+      creditsUsed: 0,
+    } as any);
+    const cancelledAt = new Date("2026-07-21T12:08:00.000Z");
+    const useCase = new GetMarketSyncStatusUseCase(
+      checkpointStore as any,
+      {
+        get: vi.fn(async () =>
+          publishedState({
+            currentPhase: "cancelled",
+            lastFinishedAt: cancelledAt,
+            lastError: null,
+          }),
+        ),
+      } as any,
+      {
+        getCurrentOrLast: vi.fn(async () => ({
+          ...interruptedRun(),
+          status: "cancelled",
+          currentPhase: "cancelled",
+          latestAttemptFinishedAt: cancelledAt,
+          runFinishedAt: cancelledAt,
+          lastError: "Sincronización cancelada por un administrador.",
+        })),
+      } as any,
+    );
+
+    const status = await useCase.execute();
+
+    expect(status).toMatchObject({
+      running: false,
+      resumable: false,
+      phase: "cancelled",
+      validAssets: 3_797,
+      lastError: null,
+    });
+    expect(status.run?.status).toBe("cancelled");
+    expect(status.message).toContain("progreso quedó guardado");
+  });
+
   it("recupera workers, breaker y SLO desde el checkpoint v4", async () => {
     const checkpointStore = store();
     checkpointStore.getCheckpointStatus.mockResolvedValue({

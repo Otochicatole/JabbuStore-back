@@ -39,6 +39,20 @@ const marketAssetsForceMaxConcurrency = toBoolean(
   process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY,
   true,
 );
+const marketAssetsMaximumRequestsPerSecond = Math.min(
+  16,
+  toPositiveInteger(
+    process.env.MARKET_ASSETS_MAX_REQUESTS_PER_SECOND,
+    16,
+  ),
+);
+const marketAssetsInitialRequestsPerSecond = Math.min(
+  marketAssetsMaximumRequestsPerSecond,
+  toPositiveInteger(
+    process.env.MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND,
+    4,
+  ),
+);
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -140,6 +154,12 @@ export const config = {
      * duración posible. En `false`, vuelve a habilitar el escalado adaptativo.
      */
     forceMaxConcurrency: marketAssetsForceMaxConcurrency,
+    /**
+     * Ritmo físico de inicio. Evita que respuestas 5xx rápidas reciclen los
+     * 48 workers y generen una tormenta aunque todavía quede cuota por minuto.
+     */
+    initialRequestsPerSecond: marketAssetsInitialRequestsPerSecond,
+    maxRequestsPerSecond: marketAssetsMaximumRequestsPerSecond,
     /** Workers iniciales antes de medir latencia y salud del proveedor. */
     initialConcurrency: marketAssetsInitialConcurrency,
     /** Objetivo SLO; no habilita publicación parcial al vencer. */

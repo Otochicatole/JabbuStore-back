@@ -1424,6 +1424,70 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     });
   });
 
+  it("cancela por pedido del administrador, drena workers y conserva el checkpoint", async () => {
+    const catalog = Array.from({ length: 4 }, (_, index) => ({
+      markethashname: `AK-47 | Cancel ${index} (Factory New)`,
+      itemgroup: "rifle",
+      pricereal: 400 - index,
+    }));
+    const never = deferred<void>();
+    const started: string[] = [];
+    let activeWorkers = 0;
+    const store = new MemoryMarketAssetsCatalogStore();
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(async (candidate, request) => {
+        started.push(candidate.marketHashName);
+        activeWorkers++;
+        try {
+          await waitForGateOrCancellation(never.promise, request);
+          return page([], request, 0);
+        } finally {
+          activeWorkers--;
+        }
+      }),
+      priorityQueue(catalog),
+      store,
+      syncStateRepository(),
+      undefined,
+      {
+        targetAssets: 4,
+        assetsPerItem: 1,
+        initialConcurrency: 4,
+        concurrency: 4,
+      },
+    );
+
+    const execution = collector.execute("test-user-cancel");
+    await waitUntil(
+      () => started.length === 4,
+      "El pool no inició antes de solicitar la cancelación.",
+    );
+    const first = marketAssetsShutdownCoordinator.requestCancellation();
+    const second = marketAssetsShutdownCoordinator.requestCancellation();
+
+    expect(first).toMatchObject({
+      accepted: true,
+      alreadyRequested: false,
+    });
+    expect(second).toMatchObject({
+      accepted: true,
+      alreadyRequested: true,
+    });
+    expect(second.completion).toBe(first.completion);
+    await expect(execution).rejects.toMatchObject({
+      name: "MarketAssetsSyncCancelledError",
+    });
+    await first.completion;
+
+    expect(activeWorkers).toBe(0);
+    expect(store.snapshot).toBeNull();
+    expect(store.checkpoint).toMatchObject({
+      schemaVersion: 4,
+      assets: [],
+    });
+    expect(marketAssetsShutdownCoordinator.hasActiveCollection()).toBe(false);
+  });
+
   it("si writeCheckpoint falla con el pool activo, drena todos los workers y el flush final conserva los éxitos integrados", async () => {
     class FailOnceCheckpointStore extends MemoryMarketAssetsCatalogStore {
       writeAttempts = 0;

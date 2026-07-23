@@ -1,7 +1,10 @@
 import { config } from "../../../shared/config";
 import { MarketAssetsApiError } from "../application/IMarketAssetsCatalogClient";
 import { MarketAssetsPriorityQueueError } from "../application/MarketAssetsPriorityQueue";
-import { SyncExecutionBusyError } from "../application/RunFullCatalogSyncUseCase";
+import {
+  MarketAssetsCancellationPersistenceError,
+  SyncExecutionBusyError,
+} from "../application/RunFullCatalogSyncUseCase";
 import {
   getMarketSyncStatusUseCase,
   runFullCatalogSyncUseCase,
@@ -65,7 +68,8 @@ export function createFullCatalogSyncScheduler(
     // startup debe contar el intervalo desde el intento fallido y no volver a
     // disparar inmediatamente porque el último éxito ya estaba vencido.
     const scheduleAnchor =
-      status.phase === "failed" && status.lastFinishedAt
+      (status.phase === "failed" || status.phase === "cancelled") &&
+      status.lastFinishedAt
         ? status.lastFinishedAt
         : status.lastSuccessfulAt;
     if (!status.snapshotHash && !scheduleAnchor) return MIN_DELAY_MS;
@@ -131,6 +135,13 @@ export function createFullCatalogSyncScheduler(
           `[Market Assets Scheduler] Catálogo local no listo (${error.kind}); se volverá a comprobar en 60 segundos.`,
         );
         schedule(BUSY_RETRY_MS);
+      } else if (error instanceof MarketAssetsCancellationPersistenceError) {
+        // La intención del administrador prevalece en este proceso. Si Prisma
+        // no pudo guardar ninguna marca terminal, conservar el checkpoint pero
+        // no reanudar automáticamente al minuto.
+        logger.error(
+          "[Market Assets Scheduler] La cancelación no pudo persistirse; no se reanudará hasta el próximo ciclo normal.",
+        );
       } else if (
         error instanceof MarketAssetsApiError &&
         error.kind === "fatal"

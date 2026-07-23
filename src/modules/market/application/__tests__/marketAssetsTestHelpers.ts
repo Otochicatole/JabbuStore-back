@@ -116,6 +116,7 @@ export function syncStateRepository(): IMarketSyncStateRepository {
     async markPublished() {},
     async markFullSuccess() {},
     async markFailed() {},
+    async markCancelled() {},
     async markFinished() {},
   };
 }

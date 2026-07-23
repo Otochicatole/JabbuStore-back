@@ -7,7 +7,10 @@ vi.mock("../MarketSyncDependencies", () => ({
 
 import { MarketAssetsApiError } from "../../application/IMarketAssetsCatalogClient";
 import { MarketAssetsPriorityQueueError } from "../../application/MarketAssetsPriorityQueue";
-import { SyncExecutionBusyError } from "../../application/RunFullCatalogSyncUseCase";
+import {
+  MarketAssetsCancellationPersistenceError,
+  SyncExecutionBusyError,
+} from "../../application/RunFullCatalogSyncUseCase";
 import {
   createFullCatalogSyncScheduler,
   type FullCatalogSyncSchedulerResult,
@@ -342,7 +345,36 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
     harness.scheduler.stop();
   });
 
-  it("tras reiniciar agenda un fallo fatal desde el fin del intento", async () => {
+  it("no reanuda al minuto si no pudo persistir la cancelación administrativa", async () => {
+    let harness!: ReturnType<typeof createHarness>;
+    harness = createHarness({
+      execute: async () => {
+        harness.setStatus({
+          resumable: true,
+          snapshotHash: null,
+          lastSuccessfulAt: null,
+          quotaResetsAt: new Date(Date.now() + 30_000).toISOString(),
+        });
+        throw new MarketAssetsCancellationPersistenceError([
+          new Error("sqlite locked"),
+        ]);
+      },
+    });
+    harness.scheduler.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.execute).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS - 1);
+    expect(harness.execute).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.execute).toHaveBeenCalledTimes(2);
+    harness.scheduler.stop();
+  });
+
+  it.each(["failed", "cancelled"])(
+    "tras reiniciar agenda un estado %s desde el fin del intento",
+    async (phase) => {
     const failedAt = STARTED_AT.getTime() - 60_000;
     const harness = createHarness({
       status: {
@@ -350,7 +382,7 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
         snapshotHash: null,
         lastSuccessfulAt: new Date(STARTED_AT.getTime() - INTERVAL_MS).toISOString(),
         lastFinishedAt: new Date(failedAt).toISOString(),
-        phase: "failed",
+        phase,
         quotaResetsAt: null,
       },
     });
@@ -362,5 +394,6 @@ describe("FullCatalogSyncScheduler (assets-only)", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(harness.execute).toHaveBeenCalledOnce();
     harness.scheduler.stop();
-  });
+    },
+  );
 });

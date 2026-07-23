@@ -170,6 +170,15 @@ describe("buildMarketSyncRunStatusView", () => {
           openCount: 2,
           resumeAt: "2026-07-21T12:08:45.000Z",
         },
+        requestPacer: {
+          initialStartsPerSecond: 4,
+          maximumStartsPerSecond: 16,
+          currentStartsPerSecond: 2,
+          queued: 27,
+          gateState: "open",
+          gateReason: "congestion",
+          gateResumeAt: "2026-07-21T12:08:10.000Z",
+        },
         targetDurationSeconds: 600,
         targetDeadlineAt: "2026-07-21T12:10:00.000Z",
       },
@@ -188,6 +197,15 @@ describe("buildMarketSyncRunStatusView", () => {
       state: "open",
       openCount: 2,
       resumeAt: "2026-07-21T12:08:45.000Z",
+    });
+    expect(status.requestPacer).toEqual({
+      initialStartsPerSecond: 4,
+      maximumStartsPerSecond: 16,
+      currentStartsPerSecond: 2,
+      queued: 27,
+      gateState: "open",
+      gateReason: "congestion",
+      gateResumeAt: "2026-07-21T12:08:10.000Z",
     });
     expect(status.throughput).toMatchObject({
       targetDurationSeconds: 600,
@@ -242,5 +260,67 @@ describe("buildMarketSyncRunStatusView", () => {
 
     expect(status.slowReason).toBe("provider_latency");
     expect(status.concurrency.reductions).toBe(21);
+  });
+
+  it("deriva la espera de cuota de la fase global y no de callbacks multiplicados por worker", () => {
+    const status = buildMarketSyncRunStatusView(
+      run({
+        quotaWaitDurationMs: 3_600_000,
+        quotaWaitCount: 48,
+        phases: [
+          {
+            phase: "collecting_assets",
+            durationMs: 60_000,
+            entryCount: 1,
+            lastEnteredAt: new Date("2026-07-21T12:00:00.000Z"),
+          },
+          {
+            phase: "waiting_rate_limit",
+            durationMs: 93_000,
+            entryCount: 2,
+            lastEnteredAt: new Date("2026-07-21T12:01:00.000Z"),
+          },
+        ],
+      }),
+      {
+        now: new Date("2026-07-21T12:03:00.000Z"),
+        validAssets: 500,
+        targetAssets: 1_000,
+        windowQuotaUnitsUsed: 100,
+        quotaLimit: 10_000,
+        quotaResetsAt: null,
+      },
+    );
+
+    expect(status.elapsed.quotaWaitMs).toBe(93_000);
+    expect(status.quota.waitCount).toBe(2);
+  });
+
+  it("oculta el ETA cuando una tormenta de errores deja menos de 50% de éxitos", () => {
+    const status = buildMarketSyncRunStatusView(
+      run({
+        httpAttempts: 3_540,
+        httpSucceeded: 674,
+        httpFailed: 2_863,
+        timeoutCount: 994,
+        recentValidAssetsPerMinute: 6,
+      }),
+      {
+        now: new Date("2026-07-21T12:03:00.000Z"),
+        validAssets: 3_797,
+        targetAssets: 10_000,
+        windowQuotaUnitsUsed: 970,
+        quotaLimit: 10_000,
+        quotaResetsAt: null,
+      },
+    );
+
+    expect(status.throughput).toMatchObject({
+      validAssetsPerMinute: null,
+      etaSeconds: null,
+      etaConfidence: "unavailable",
+      projectedCompletionAt: null,
+    });
+    expect(status.slowReason).toBe("timeouts");
   });
 });

@@ -64,7 +64,12 @@ function createClient(): SteamWebApiMarketAssetsCatalogClient {
 
 describe("SteamWebApiMarketAssetsCatalogClient", () => {
   beforeEach(() => {
-    rateLimiter.acquire.mockClear();
+    rateLimiter.acquire.mockReset();
+    rateLimiter.acquire.mockImplementation(
+      async (_units: number, options?: { beforeReserve?: () => Promise<void> }) => {
+        await options?.beforeReserve?.();
+      },
+    );
     rateLimiter.observeHeaders.mockClear();
     rateLimiter.penalize.mockClear();
   });
@@ -296,6 +301,82 @@ describe("SteamWebApiMarketAssetsCatalogClient", () => {
     });
     expect(result.durationMs).toBeGreaterThanOrEqual(1);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("obtiene admisión antes del fetch y retroalimenta el pacer una vez por respuesta física", async () => {
+    const pacer = {
+      acquire: vi.fn(async () => undefined),
+      observe: vi.fn(),
+      reset: vi.fn(),
+      getSnapshot: vi.fn(() => null),
+    };
+    const fetchMock = vi.fn(async () =>
+      response(200, {
+        data: [{ assetid: "1" }, { assetid: "2" }],
+        total: 2,
+        limit: 2,
+        offset: 0,
+        sort: "newest",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const pacedClient = new SteamWebApiMarketAssetsCatalogClient(
+      new SteamWebApiFloatAssetsClient("test-api-key"),
+      pacer as any,
+    );
+
+    await pacedClient.fetchCandidatePage(candidate, {
+      limit: 2,
+      offset: 0,
+      sort: "newest",
+      signal: controller.signal,
+    });
+
+    expect(pacer.acquire).toHaveBeenCalledOnce();
+    expect(pacer.acquire).toHaveBeenCalledWith(controller.signal);
+    expect(rateLimiter.acquire.mock.invocationCallOrder[0]).toBeLessThan(
+      pacer.acquire.mock.invocationCallOrder[0]!,
+    );
+    expect(pacer.acquire.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[0]!,
+    );
+    expect(pacer.observe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "success",
+        validAssets: 2,
+        completedAt: expect.any(Number),
+      }),
+    );
+    expect(pacer.observe).toHaveBeenCalledOnce();
+  });
+
+  it("clasifica HTTP 500 como congestión para que el pacer abra su gate", async () => {
+    const pacer = {
+      acquire: vi.fn(async () => undefined),
+      observe: vi.fn(),
+      reset: vi.fn(),
+      getSnapshot: vi.fn(() => null),
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => response(500, "upstream down")));
+    const pacedClient = new SteamWebApiMarketAssetsCatalogClient(
+      new SteamWebApiFloatAssetsClient("test-api-key"),
+      pacer as any,
+    );
+
+    await expect(
+      pacedClient.fetchCandidatePage(candidate, {
+        limit: 10,
+        offset: 0,
+        sort: "newest",
+      }),
+    ).rejects.toMatchObject({ status: 500, kind: "retryable" });
+    expect(pacer.observe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "server_error",
+        validAssets: 0,
+      }),
+    );
   });
 
   it("clasifica un AbortSignal externo como cancelación, no como timeout", async () => {

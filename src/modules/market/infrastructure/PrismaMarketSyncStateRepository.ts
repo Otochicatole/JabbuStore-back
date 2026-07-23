@@ -295,6 +295,26 @@ export class PrismaMarketSyncStateRepository
     });
   }
 
+  async markCancelled(key: string, _message: string): Promise<void> {
+    const finishedAt = new Date();
+    await prisma.marketSyncState.upsert({
+      where: { key },
+      create: {
+        ...stateCreateBase(key, "cancelled"),
+        currentPhase: "cancelled",
+        lastError: null,
+        lastFinishedAt: finishedAt,
+      },
+      update: {
+        currentPhase: "cancelled",
+        currentCandidate: null,
+        quotaResetsAt: null,
+        lastError: null,
+        lastFinishedAt: finishedAt,
+      },
+    });
+  }
+
   async markFinished(
     key: string,
     queueVersion: string,

@@ -73,6 +73,7 @@ export class GetMarketSyncStatusUseCase {
             openCount: 0,
             resumeAt: null,
           },
+        requestPacer: workerRuntime?.requestPacer ?? null,
         targetDurationSeconds:
           workerRuntime?.targetDurationSeconds ??
           workerCheckpoint.targetDurationSeconds ??
@@ -190,14 +191,24 @@ export class GetMarketSyncStatusUseCase {
     );
     const error = legacyPublishedAssets
       ? null
-      : durableRun?.lastError ?? state?.lastError ?? null;
+      : durableRun?.lastError ??
+        state?.lastError ??
+        runtime.lastError ??
+        null;
     const durablePaused = durableRun?.status === "paused";
+    const durableCancelled =
+      durableRun?.status === "cancelled" ||
+      state?.currentPhase === "cancelled";
     const checkpointRecoverable =
       hasCheckpoint &&
       durableRun?.status !== "failed" &&
-      state?.currentPhase !== "failed";
+      durableRun?.status !== "cancelled" &&
+      state?.currentPhase !== "failed" &&
+      state?.currentPhase !== "cancelled";
     const phase: MarketSyncPhase =
-      durablePaused || interruptedDurableRun || publicationFinalizationPending
+      durableCancelled
+      ? "cancelled"
+      : durablePaused || interruptedDurableRun || publicationFinalizationPending
       ? "paused"
       : durableRun?.status === "failed"
         ? "failed"
@@ -257,11 +268,12 @@ export class GetMarketSyncStatusUseCase {
       run,
       running: false,
       resumable:
-        durablePaused ||
+        !durableCancelled &&
+        (durablePaused ||
         interruptedDurableRun ||
         publicationFinalizationPending ||
         checkpointRecoverable ||
-        publicationPending,
+        publicationPending),
       phase,
       targetAssets,
       requestedAssets: targetAssets,
@@ -306,14 +318,16 @@ export class GetMarketSyncStatusUseCase {
         durableRun?.runFinishedAt?.toISOString() ??
         durableRun?.latestAttemptFinishedAt?.toISOString() ??
         state?.lastFinishedAt?.toISOString() ??
-        null,
+        runtime.lastFinishedAt,
       lastSuccessfulAt:
         state?.lastSuccessfulAt?.toISOString() ??
         (legacyPublishedAssets
           ? state?.lastPublishedAt?.toISOString() ?? null
           : null),
-      lastError: error,
-      message: error
+      lastError: durableCancelled ? null : error,
+      message: durableCancelled
+        ? "Sincronización cancelada. El progreso quedó guardado y no se publicó un snapshot parcial."
+        : error
         ? durablePaused || interruptedDurableRun || publicationFinalizationPending
           ? `Sincronización pausada y recuperable: ${error}`
           : `La última sincronización falló: ${error}`

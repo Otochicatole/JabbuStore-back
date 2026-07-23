@@ -1,5 +1,6 @@
 import type { MarketAssetsPriorityCandidate } from "./MarketAssetsPriorityQueue";
 import type { MarketAssetsCatalogSort } from "../domain/MarketAssetsCatalog";
+import type { MarketAssetRequestPacerSnapshot } from "./MarketAssetRequestPacer";
 
 export type MarketAssetsRequestOutcome =
   | "success"
@@ -41,6 +42,8 @@ export interface MarketAssetsPageRequest {
 }
 
 export interface IMarketAssetsCatalogClient {
+  resetRequestPacing?(): void;
+  getRequestPacerSnapshot?(): MarketAssetRequestPacerSnapshot | null;
   getSafeSourceUrl(options: {
     limit: number;
     sort: MarketAssetsCatalogSort;

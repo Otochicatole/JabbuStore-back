@@ -9,6 +9,8 @@ import { marketSyncProgressService } from "./MarketSyncProgressService";
 import { syncExecutionCoordinator } from "./SyncExecutionCoordinator";
 import type { IMarketSyncRunRepository } from "../domain/MarketSyncRun";
 import { MarketAssetsApiError } from "./IMarketAssetsCatalogClient";
+import { MarketAssetsSyncCancelledError } from "./CollectMarketAssetsCatalogUseCase";
+import { marketAssetsShutdownCoordinator } from "./MarketAssetsShutdownCoordinator";
 
 /**
  * Resultado del job de assets. El nombre de la clase se conserva para no
@@ -28,6 +30,20 @@ export type FullCatalogSyncStartResult =
       blockingReason: "market_assets" | "bot_only";
     };
 
+export type FullCatalogSyncCancelResult =
+  | {
+      accepted: true;
+      alreadyRequested: boolean;
+      completion: Promise<void>;
+      blockingReason: null;
+    }
+  | {
+      accepted: false;
+      alreadyRequested: false;
+      completion: null;
+      blockingReason: "not_running" | "not_cancellable";
+    };
+
 export class SyncExecutionBusyError extends Error {
   constructor(readonly blockingReason: "market_assets" | "bot_only") {
     super(
@@ -36,6 +52,15 @@ export class SyncExecutionBusyError extends Error {
         : "Ya hay una sincronización de assets en curso.",
     );
     this.name = "SyncExecutionBusyError";
+  }
+}
+
+export class MarketAssetsCancellationPersistenceError extends Error {
+  constructor(readonly persistenceErrors: readonly unknown[]) {
+    super(
+      "La recolección se detuvo, pero no se pudo guardar el estado durable de cancelación. El checkpoint se conserva como recuperable y no se publicó un snapshot parcial.",
+    );
+    this.name = "MarketAssetsCancellationPersistenceError";
   }
 }
 
@@ -50,6 +75,41 @@ export class RunFullCatalogSyncUseCase {
 
   isRunning(): boolean {
     return RunFullCatalogSyncUseCase.activeExecution !== null;
+  }
+
+  tryCancel(): FullCatalogSyncCancelResult {
+    const active = RunFullCatalogSyncUseCase.activeExecution;
+    if (!active) {
+      return {
+        accepted: false,
+        alreadyRequested: false,
+        completion: null,
+        blockingReason: "not_running",
+      };
+    }
+
+    const cancellation = marketAssetsShutdownCoordinator.requestCancellation();
+    if (!cancellation.accepted) {
+      return {
+        accepted: false,
+        alreadyRequested: false,
+        completion: null,
+        blockingReason: "not_cancellable",
+      };
+    }
+
+    return {
+      accepted: true,
+      alreadyRequested: cancellation.alreadyRequested,
+      completion: active.then(
+        () => undefined,
+        (error) => {
+          if (error instanceof MarketAssetsSyncCancelledError) return;
+          throw error;
+        },
+      ),
+      blockingReason: null,
+    };
   }
 
   tryStart(triggeredBy: string): FullCatalogSyncStartResult {
@@ -157,6 +217,20 @@ export class RunFullCatalogSyncUseCase {
       return marketResult;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof MarketAssetsSyncCancelledError) {
+        try {
+          await this.persistCancellation(message);
+        } catch (persistenceError) {
+          const persistenceMessage =
+            persistenceError instanceof Error
+              ? persistenceError.message
+              : String(persistenceError);
+          marketSyncProgressService.failSync(persistenceMessage, true);
+          throw persistenceError;
+        }
+        marketSyncProgressService.cancelSync(message);
+        throw error;
+      }
       const fatalProviderError =
         error instanceof MarketAssetsApiError && error.kind === "fatal";
       // El checkpoint se conserva para una reanudación manual o el próximo
@@ -228,5 +302,57 @@ export class RunFullCatalogSyncUseCase {
       return false;
     }
     return this.refreshMarketAssetsCatalog.hasPendingRecovery();
+  }
+
+  private async persistCancellation(message: string): Promise<void> {
+    let runPersisted = false;
+    let statePersisted = false;
+    const errors: unknown[] = [];
+
+    // Dos escrituras independientes dan una ruta de respaldo. cancel() cierra
+    // run + state transaccionalmente; markCancelled() deja al menos la fase
+    // terminal durable aunque el cierre detallado del run falle.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!runPersisted && this.syncRunRepository) {
+        try {
+          runPersisted = await this.syncRunRepository.cancel(
+            MARKET_ASSETS_SYNC_STATE_KEY,
+            message,
+          );
+          if (!runPersisted) {
+            errors.push(
+              new Error(
+                "No existía una corrida durable activa para cerrar.",
+              ),
+            );
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (!statePersisted) {
+        try {
+          await this.syncStateRepository.markCancelled(
+            MARKET_ASSETS_SYNC_STATE_KEY,
+            message,
+          );
+          statePersisted = true;
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (
+        statePersisted &&
+        (runPersisted || this.syncRunRepository == null)
+      ) {
+        return;
+      }
+      await Promise.resolve();
+    }
+
+    // Cualquiera de las dos rutas deja una marca durable suficiente para que
+    // status/scheduler no finjan que la cancelación nunca ocurrió.
+    if (runPersisted || statePersisted) return;
+    throw new MarketAssetsCancellationPersistenceError(errors);
   }
 }

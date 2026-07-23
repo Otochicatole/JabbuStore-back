@@ -28,6 +28,13 @@ export interface FloatRateLimitAcquireOptions {
   maxWaitMs?: number;
   priority?: FloatRateLimitPriority;
   onWait?: (waitMs: number) => void;
+  /**
+   * Se ejecuta cuando parece haber cuota, antes de reservarla. Al regresar se
+   * vuelve a validar la ventana de forma exclusiva y recién entonces se
+   * contabilizan unidades. Sirve para coordinar pacing + cuota sin que una
+   * reserva cruce ventanas mientras espera permiso para iniciar el HTTP.
+   */
+  beforeReserve?: () => Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -304,11 +311,8 @@ export class FloatRateLimiter {
     if (priority === "checkout") this.checkoutWaiters++;
 
     try {
-      for (;;) {
-        if (options.signal?.aborted) {
-          throw new FloatRateLimitAcquireCancelledError();
-        }
-        const decision = await this.runExclusive(async () => {
+      const inspectCapacity = (reserve: boolean) =>
+        this.runExclusive(async () => {
           await this.hydrate();
           this.refreshWindow();
           if (options.signal?.aborted) {
@@ -325,10 +329,16 @@ export class FloatRateLimiter {
             now >= this.cooldownUntil &&
             hasCapacity
           ) {
-            this.quotaUnitsUsed += requestedUnits;
-            // La reserva queda durable antes de permitir la request HTTP.
-            await this.persist();
-            return { acquired: true as const, waitMs: 0 };
+            if (reserve) {
+              this.quotaUnitsUsed += requestedUnits;
+              // La reserva queda durable antes de permitir la request HTTP.
+              await this.persist();
+            }
+            return {
+              ready: true as const,
+              acquired: reserve,
+              waitMs: 0,
+            };
           }
 
           const blockedUntil = Math.max(
@@ -336,31 +346,64 @@ export class FloatRateLimiter {
             hasCapacity ? now + 50 : this.windowResetsAt,
           );
           return {
-            acquired: false as const,
+            ready: false as const,
+            acquired: false,
             waitMs: Math.max(1, blockedUntil - now),
           };
         });
-        if (decision.acquired) return;
-        const waitMs = decision.waitMs;
-        if (
-          options.maxWaitMs != null &&
-          this.clock.now() - startedAt + waitMs >
-            Math.max(0, options.maxWaitMs)
-        ) {
-          throw new FloatRateLimitWaitTimeoutError(
-            Math.max(1, Math.ceil(waitMs / 1_000)),
-          );
+
+      for (;;) {
+        if (options.signal?.aborted) {
+          throw new FloatRateLimitAcquireCancelledError();
+        }
+        if (options.beforeReserve) {
+          const readiness = await inspectCapacity(false);
+          if (!readiness.ready) {
+            await this.waitForCapacity(
+              readiness.waitMs,
+              startedAt,
+              options,
+            );
+            continue;
+          }
+          await options.beforeReserve();
+          if (options.signal?.aborted) {
+            throw new FloatRateLimitAcquireCancelledError();
+          }
         }
 
-        if (waitMs >= 1_000) options.onWait?.(waitMs);
-        await this.sleepUntilRetry(
-          Math.min(waitMs, 5_000),
-          options.signal,
-        );
+        // La capacidad pudo cambiar mientras esperaba el pacer. La reserva se
+        // revalida y persiste en la ventana vigente, inmediatamente antes de
+        // devolver el permiso para el fetch físico.
+        const decision = await inspectCapacity(true);
+        if (decision.acquired) return;
+        await this.waitForCapacity(decision.waitMs, startedAt, options);
       }
     } finally {
       if (priority === "checkout") this.checkoutWaiters--;
     }
+  }
+
+  private async waitForCapacity(
+    waitMs: number,
+    startedAt: number,
+    options: FloatRateLimitAcquireOptions,
+  ): Promise<void> {
+    if (
+      options.maxWaitMs != null &&
+      this.clock.now() - startedAt + waitMs >
+        Math.max(0, options.maxWaitMs)
+    ) {
+      throw new FloatRateLimitWaitTimeoutError(
+        Math.max(1, Math.ceil(waitMs / 1_000)),
+      );
+    }
+
+    if (waitMs >= 1_000) options.onWait?.(waitMs);
+    await this.sleepUntilRetry(
+      Math.min(waitMs, 5_000),
+      options.signal,
+    );
   }
 
   private async sleepUntilRetry(

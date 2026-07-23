@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { RunFullCatalogSyncUseCase } from "../RunFullCatalogSyncUseCase";
+import {
+  MarketAssetsCancellationPersistenceError,
+  RunFullCatalogSyncUseCase,
+} from "../RunFullCatalogSyncUseCase";
 import { syncExecutionCoordinator } from "../SyncExecutionCoordinator";
 import { MarketAssetsApiError } from "../IMarketAssetsCatalogClient";
 import { config } from "../../../../shared/config";
+import { MarketAssetsSyncCancelledError } from "../CollectMarketAssetsCatalogUseCase";
+import { marketAssetsShutdownCoordinator } from "../MarketAssetsShutdownCoordinator";
+import { marketSyncProgressService } from "../MarketSyncProgressService";
 
 function marketResult() {
   return {
@@ -23,6 +29,7 @@ function stateRepository() {
     markStarted: vi.fn(async () => undefined),
     markFullSuccess: vi.fn(async () => undefined),
     markFailed: vi.fn(async () => undefined),
+    markCancelled: vi.fn(async () => undefined),
   };
 }
 
@@ -340,6 +347,140 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
       });
     } finally {
       botLease?.release();
+    }
+  });
+
+  it("cancela la ejecución activa, cierra el run como cancelled y conserva el checkpoint", async () => {
+    let rejectCollection!: (error: unknown) => void;
+    const collection = new Promise<never>((_resolve, reject) => {
+      rejectCollection = reject;
+    });
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => true),
+      recoverPending: vi.fn(async () => null),
+      execute: vi.fn(() => collection),
+    };
+    const state = stateRepository();
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-cancel" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => true),
+    };
+    const unregister = marketAssetsShutdownCoordinator.register(
+      async (reason) => {
+        expect(reason).toBe("user_cancelled");
+        rejectCollection(new MarketAssetsSyncCancelledError());
+      },
+    );
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      state as any,
+      runs as any,
+    );
+
+    try {
+      const started = useCase.tryStart("manual");
+      expect(started.started).toBe(true);
+      await vi.waitFor(() => {
+        expect(refreshMarket.execute).toHaveBeenCalledOnce();
+      });
+      marketSyncProgressService.updateWorkerRuntime({
+        inFlight: 48,
+        queueDepth: 100,
+      });
+
+      const cancellation = useCase.tryCancel();
+      expect(cancellation).toMatchObject({
+        accepted: true,
+        alreadyRequested: false,
+        blockingReason: null,
+      });
+      if (!cancellation.accepted) throw new Error("Cancelación no aceptada.");
+      await expect(cancellation.completion).resolves.toBeUndefined();
+      await expect(started.execution).rejects.toBeInstanceOf(
+        MarketAssetsSyncCancelledError,
+      );
+
+      expect(state.markCancelled).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining("cancelada por un administrador"),
+      );
+      expect(state.markFailed).not.toHaveBeenCalled();
+      expect(runs.cancel).toHaveBeenCalledOnce();
+      expect(runs.finishAttempt).not.toHaveBeenCalled();
+      expect(marketSyncProgressService.getWorkerRuntime()).toBeNull();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("no finge una cancelación durable si fallan las dos rutas de persistencia", async () => {
+    let rejectCollection!: (error: unknown) => void;
+    const collection = new Promise<never>((_resolve, reject) => {
+      rejectCollection = reject;
+    });
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => true),
+      recoverPending: vi.fn(async () => null),
+      execute: vi.fn(() => collection),
+    };
+    const state = stateRepository();
+    state.markCancelled.mockRejectedValue(new Error("sqlite state locked"));
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-cancel-failure" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => {
+        throw new Error("sqlite run locked");
+      }),
+    };
+    const unregister = marketAssetsShutdownCoordinator.register(
+      async () => {
+        rejectCollection(new MarketAssetsSyncCancelledError());
+      },
+    );
+    const useCase = new RunFullCatalogSyncUseCase(
+      refreshMarket as any,
+      state as any,
+      runs as any,
+    );
+
+    try {
+      const started = useCase.tryStart("manual");
+      expect(started.started).toBe(true);
+      await vi.waitFor(() => {
+        expect(refreshMarket.execute).toHaveBeenCalledOnce();
+      });
+      marketSyncProgressService.updateWorkerRuntime({
+        inFlight: 48,
+        queueDepth: 100,
+      });
+
+      const cancellation = useCase.tryCancel();
+      if (!cancellation.accepted) throw new Error("Cancelación no aceptada.");
+      await expect(cancellation.completion).rejects.toBeInstanceOf(
+        MarketAssetsCancellationPersistenceError,
+      );
+      await expect(started.execution).rejects.toBeInstanceOf(
+        MarketAssetsCancellationPersistenceError,
+      );
+      expect(runs.cancel).toHaveBeenCalledTimes(3);
+      expect(state.markCancelled).toHaveBeenCalledTimes(3);
+      expect(state.markFailed).not.toHaveBeenCalled();
+      expect(marketSyncProgressService.getWorkerRuntime()).toBeNull();
+      expect(marketSyncProgressService.getStatus()).toMatchObject({
+        running: false,
+        resumable: true,
+        phase: "paused",
+        lastError: expect.stringContaining(
+          "no se pudo guardar el estado durable",
+        ),
+      });
+    } finally {
+      unregister();
     }
   });
 });

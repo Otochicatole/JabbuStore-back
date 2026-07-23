@@ -96,6 +96,7 @@ export interface IMarketSyncStateRepository {
   /** Se llama cuando la publicación transaccional del snapshot de assets terminó. */
   markFullSuccess(key: string): Promise<void>;
   markFailed(key: string, error: string, resumable?: boolean): Promise<void>;
+  markCancelled(key: string, message: string): Promise<void>;
 
   /** Legacy incremental-sync completion method. */
   markFinished(

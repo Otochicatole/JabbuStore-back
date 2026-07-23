@@ -68,18 +68,31 @@ la descarga en el menor tiempo posible. Cada worker procesa una listing y pagina
 secuencialmente hasta obtener el máximo configurado para ella. No se crean
 procesos del sistema por skin.
 
+Los workers son lógicos: un admission pacer inicia por defecto hasta
+`MARKET_ASSETS_INITIAL_REQUESTS_PER_SECOND=4` requests físicas por segundo y
+puede crecer saludablemente hasta `MARKET_ASSETS_MAX_REQUESTS_PER_SECOND=16`.
+Esto conserva suficiente concurrencia para respuestas lentas, pero evita que
+respuestas `5xx` rápidas reciclen los 48 slots, consuman la cuota y dejen de
+producir assets.
+
 `MARKET_ASSETS_TARGET_DURATION_SECONDS=600` define un SLO de diez minutos, no un
-timeout ni una garantía absoluta. El modo forzado no reduce workers por latencia,
-timeouts ni errores `5xx`; sólo pausa nuevos despachos cuando la cuota lo exige o
-ante un `429`, y conserva como fatales los errores `401`, `402` y `403`. Si se
-prefiere que el pool reduzca o escale su concurrencia según la salud del proveedor,
-se puede configurar `MARKET_ASSETS_FORCE_MAX_CONCURRENCY=false`; en ese modo
-comienza con `MARKET_ASSETS_INITIAL_CONCURRENCY=6`. Si el proveedor no permite
-sostener el rendimiento necesario, la corrida continúa, reporta
+timeout ni una garantía absoluta. El modo forzado no reduce el número de workers;
+el pacer sí puede bajar temporalmente el ritmo físico o cerrar su gate ante
+timeouts/`5xx`, cuota o `429`, y conserva como fatales los errores `401`, `402` y
+`403`. Si se prefiere que también el pool reduzca o escale su concurrencia según
+la salud del proveedor, se puede configurar
+`MARKET_ASSETS_FORCE_MAX_CONCURRENCY=false`; en ese modo comienza con
+`MARKET_ASSETS_INITIAL_CONCURRENCY=6`. Si el proveedor no permite sostener el
+rendimiento necesario, la corrida continúa, reporta
 `ten_minute_target_unreachable` y conserva el snapshot anterior hasta reunir y
 validar el objetivo completo; nunca publica un snapshot parcial sólo porque hayan
 transcurrido los diez minutos.
 
 Los valores canónicos y el resto de opciones de cuota, timeout y archivos
-durables están documentados en `.env.example`. Los cambios de concurrencia
-requieren reiniciar el proceso.
+durables están documentados en `.env.example`. Los cambios de concurrencia o
+ritmo requieren reiniciar el proceso.
+
+`POST /api/market/sync/cancel` detiene cooperativamente una recolección activa:
+aborta los requests pendientes, integra las respuestas que ya terminaron,
+guarda el checkpoint y conserva visible el snapshot publicado anterior. La
+cancelación se rechaza cuando la corrida ya entró en validación o publicación.
