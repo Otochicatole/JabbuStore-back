@@ -29,10 +29,26 @@ En el directorio del proyecto, puedes ejecutar:
 
 * `bun run dev` o `npm run dev`: Inicia el servidor en modo desarrollo utilizando `nodemon` y genera el cliente de Prisma.
 * `bun run build` o `npm run build`: Compila el código TypeScript a JavaScript en el directorio `dist`.
-* `bun run start` o `npm run start`: Ejecuta la aplicación compilada.
+* `bun run start` o `npm run start`: Ejecuta primero `prisma migrate deploy` y sólo inicia la aplicación compilada si todas las migraciones se aplicaron correctamente.
 * `bun run prisma:generate` o `npm run prisma:generate`: Genera el cliente de Prisma basado en el esquema.
+* `npm run prisma:check`: Comprueba que la cadena completa de migraciones produzca exactamente el esquema Prisma actual.
 * `bun run prisma:migrate` o `npm run prisma:migrate`: Ejecuta las migraciones pendientes en la base de datos de desarrollo.
 * **Scripts Adicionales:** `reindex-floats` y `fix-bot-inspect-links` (scripts utilitarios específicos del negocio).
+
+## Despliegue de base de datos
+
+El servicio debe arrancarse mediante `npm start` (o `bun run start`), no ejecutando
+`node dist/index.js` directamente. El script de inicio aplica las migraciones
+pendientes antes de aceptar tráfico y falla de forma segura si la base no puede
+actualizarse.
+
+Los cambios de `prisma/schema.prisma` siempre deben incluir una migración en
+`prisma/migrations`. `prisma db push` puede usarse para prototipos locales, pero
+no reemplaza una migración versionada y nunca debe usarse como mecanismo de
+despliegue en producción.
+
+El build ejecuta `prisma:check`; si alguien modifica el esquema sin agregar su
+migración, la compilación falla antes de que ese código pueda desplegarse.
 
 ## Variables de Entorno (Configuración)
 El proyecto requiere un archivo `.env` en la raíz. Las variables típicas incluirían:
