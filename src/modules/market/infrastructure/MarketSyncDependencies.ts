@@ -43,6 +43,8 @@ const collector = new CollectMarketAssetsCatalogUseCase(
     initialConcurrency:
       config.marketAssetsCatalog.initialConcurrency,
     concurrency: config.marketAssetsCatalog.concurrency,
+    forceMaxConcurrency:
+      config.marketAssetsCatalog.forceMaxConcurrency,
     targetDurationSeconds:
       config.marketAssetsCatalog.targetDurationSeconds,
     sort: config.marketAssetsCatalog.sort,

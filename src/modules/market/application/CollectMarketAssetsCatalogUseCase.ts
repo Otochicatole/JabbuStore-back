@@ -49,6 +49,8 @@ export interface MarketAssetsCollectionOptions {
   initialConcurrency: number;
   /** Techo de workers HTTP en vuelo dentro del único proceso Node. */
   concurrency: number;
+  /** Usa siempre el techo y deshabilita reducciones adaptativas por congestión. */
+  forceMaxConcurrency: boolean;
   /** SLO de pared desde que comenzó la corrida hasta la publicación. */
   targetDurationSeconds: number;
   sort: MarketAssetsCatalogSort;
@@ -104,6 +106,7 @@ const DEFAULT_OPTIONS: MarketAssetsCollectionOptions = {
   assetsPerItem: 10,
   initialConcurrency: 6,
   concurrency: 48,
+  forceMaxConcurrency: false,
   targetDurationSeconds: 600,
   sort: "newest",
 };
@@ -139,6 +142,12 @@ function positiveInteger(value: unknown, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return String(value).trim().toLowerCase() === "true";
+}
+
 function optionsFromEnvironment(): MarketAssetsCollectionOptions {
   const rawSort = process.env.MARKET_ASSETS_SORT;
   const sort: MarketAssetsCatalogSort =
@@ -163,6 +172,10 @@ function optionsFromEnvironment(): MarketAssetsCollectionOptions {
     concurrency: positiveInteger(
       process.env.MARKET_ASSETS_CONCURRENCY,
       DEFAULT_OPTIONS.concurrency,
+    ),
+    forceMaxConcurrency: booleanValue(
+      process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY,
+      DEFAULT_OPTIONS.forceMaxConcurrency,
     ),
     targetDurationSeconds: positiveInteger(
       process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS,
@@ -194,9 +207,16 @@ function validateOptions(
   ) {
     throw new Error("MARKET_ASSETS_CONCURRENCY debe estar entre 1 y 48.");
   }
+  if (typeof options.forceMaxConcurrency !== "boolean") {
+    throw new Error(
+      "MARKET_ASSETS_FORCE_MAX_CONCURRENCY debe ser booleano.",
+    );
+  }
   options.initialConcurrency = Math.min(
     options.concurrency,
-    options.initialConcurrency,
+    options.forceMaxConcurrency
+      ? options.concurrency
+      : options.initialConcurrency,
   );
   if (
     !Number.isInteger(options.initialConcurrency) ||
@@ -333,10 +353,22 @@ function migrateCheckpointWorkerConfiguration(
     options.initialConcurrency,
     options.concurrency,
   );
-  checkpoint.effectiveConcurrency = Math.max(
-    1,
-    Math.min(checkpoint.effectiveConcurrency, options.concurrency),
-  );
+  checkpoint.effectiveConcurrency = options.forceMaxConcurrency
+    ? options.concurrency
+    : Math.max(
+        1,
+        Math.min(checkpoint.effectiveConcurrency, options.concurrency),
+      );
+  if (options.forceMaxConcurrency) {
+    checkpoint.rampStage = Math.max(
+      0,
+      MARKET_ASSET_CONCURRENCY_STAGES.findIndex(
+        (value) => value >= options.concurrency,
+      ),
+    );
+    checkpoint.concurrencyCooldownUntil = null;
+    checkpoint.consecutiveCongestionFailures = 0;
+  }
   checkpoint.targetDurationSeconds = options.targetDurationSeconds;
   checkpoint.targetDeadlineAt = new Date(
     Date.parse(checkpoint.startedAt) + options.targetDurationSeconds * 1_000,
@@ -593,7 +625,10 @@ export class CollectMarketAssetsCatalogUseCase {
       controller =
         AdaptiveMarketAssetWorkerController.restoreFromCheckpoint(
           checkpoint,
-          { maxConcurrency: options.concurrency },
+          {
+            maxConcurrency: options.concurrency,
+            forceMaxConcurrency: options.forceMaxConcurrency,
+          },
         );
     } catch (error) {
       console.error(
@@ -606,6 +641,7 @@ export class CollectMarketAssetsCatalogUseCase {
           options.concurrency,
         ),
         maxConcurrency: options.concurrency,
+        forceMaxConcurrency: options.forceMaxConcurrency,
       });
     }
 
@@ -627,6 +663,19 @@ export class CollectMarketAssetsCatalogUseCase {
     const lastRetryableErrors = new Map<string, MarketAssetsApiError>();
     const inFlight = new Map<string, InFlightCandidate>();
     const activeKeys = new Set<string>();
+    const recoveryKeys = new Set(
+      queue.candidates
+        .filter((candidate) => {
+          const progress = checkpoint.candidateProgress[candidate.key];
+          return Boolean(
+            progress &&
+              !progress.completed &&
+              progress.lastError &&
+              progress.deferredRecoveryAttempts > 0,
+          );
+        })
+        .map((candidate) => candidate.key),
+    );
     const shutdownAbortController = new AbortController();
     let nextScanIndex = checkpoint.cursorIndex;
     let logicalNow = this.runtime.now?.() ?? Date.now();
@@ -981,19 +1030,11 @@ export class CollectMarketAssetsCatalogUseCase {
             blockingError ??= error;
           }
         } else if (recovery) {
-          if (
-            progress.deferredRecoveryAttempts >=
-              MAX_DEFERRED_RECOVERY_ATTEMPTS &&
-            checkpoint.assets.length < options.targetAssets
-          ) {
-            progress.completed = false;
-            progress.exhausted = false;
-            nextScanIndex = Math.min(nextScanIndex, index);
-            blockingError ??= error;
-          } else {
-            progress.completed = true;
-            progress.exhausted = true;
-          }
+          // Se deja finalizar la ronda completa en paralelo. Si después de
+          // las dos rondas todavía faltan assets, el chequeo de unresolved
+          // pausa la corrida conservando el snapshot anterior.
+          progress.completed = true;
+          progress.exhausted = true;
         } else {
           // La primera falla se difiere para mantener los slots productivos.
           // Sólo se recupera al final si todavía faltan assets.
@@ -1002,6 +1043,9 @@ export class CollectMarketAssetsCatalogUseCase {
         }
       }
       checkpoint.candidateProgress[outcome.candidate.key] = progress;
+      if (recovery && progress.completed) {
+        recoveryKeys.delete(outcome.candidate.key);
+      }
 
       const previousEffective = decision.effectiveConcurrency;
       for (const sample of outcome.requestSamples) {
@@ -1055,6 +1099,37 @@ export class CollectMarketAssetsCatalogUseCase {
       return selected;
     };
 
+    const reopenDeferredRound = (): number => {
+      let reopened = 0;
+      let firstIndex = queue.candidates.length;
+      queue.candidates.forEach((candidate, index) => {
+        const progress = checkpoint.candidateProgress[candidate.key];
+        if (
+          !progress?.completed ||
+          !progress.lastError ||
+          progress.consecutiveFailures <= 0 ||
+          progress.deferredRecoveryAttempts >=
+            MAX_DEFERRED_RECOVERY_ATTEMPTS
+        ) {
+          return;
+        }
+        progress.completed = false;
+        progress.exhausted = false;
+        progress.deferredRecoveryAttempts++;
+        recoveryKeys.add(candidate.key);
+        firstIndex = Math.min(firstIndex, index);
+        reopened++;
+      });
+      if (reopened > 0) {
+        checkpoint.cursorIndex = Math.min(
+          checkpoint.cursorIndex,
+          firstIndex,
+        );
+        nextScanIndex = Math.min(nextScanIndex, firstIndex);
+      }
+      return reopened;
+    };
+
     const dispatchAvailable = async (): Promise<void> => {
       decision = controller.evaluate(demand(), now());
       const capacity = Math.max(
@@ -1075,6 +1150,7 @@ export class CollectMarketAssetsCatalogUseCase {
         historyHints,
       );
       for (const { candidate, index } of selected) {
+        const recovery = recoveryKeys.has(candidate.key);
         const dispatchedConcurrency = decision.dispatchConcurrency;
         const abortController = new AbortController();
         const signal = AbortSignal.any([
@@ -1089,7 +1165,8 @@ export class CollectMarketAssetsCatalogUseCase {
           options,
           stateKey,
           historyHints.get(candidate.key),
-          (failedAttemptsThisExecution.get(candidate.key) ?? 0) > 0,
+          recovery ||
+            (failedAttemptsThisExecution.get(candidate.key) ?? 0) > 0,
           signal,
         ).then((outcome) => {
           outcome.dispatchedConcurrency = dispatchedConcurrency;
@@ -1098,7 +1175,7 @@ export class CollectMarketAssetsCatalogUseCase {
         inFlight.set(candidate.key, {
           candidate,
           index,
-          recovery: false,
+          recovery,
           dispatchedConcurrency,
           abortController,
           promise,
@@ -1247,40 +1324,10 @@ export class CollectMarketAssetsCatalogUseCase {
             continue;
           }
 
-          const deferredIndex = queue.candidates.findIndex((candidate) => {
-            const progress = checkpoint.candidateProgress[candidate.key];
-            return Boolean(
-              progress?.completed &&
-                progress.lastError &&
-                progress.consecutiveFailures > 0 &&
-                progress.deferredRecoveryAttempts <
-                  MAX_DEFERRED_RECOVERY_ATTEMPTS,
-            );
-          });
-          if (deferredIndex >= 0) {
-            const candidate = queue.candidates[deferredIndex]!;
-            const progress = checkpoint.candidateProgress[candidate.key]!;
-            progress.completed = false;
-            progress.exhausted = false;
-            progress.deferredRecoveryAttempts++;
-            checkpoint.cursorIndex = Math.min(
-              checkpoint.cursorIndex,
-              deferredIndex,
-            );
-            nextScanIndex = Math.min(nextScanIndex, deferredIndex);
-            await this.loadHistoryHints([candidate], historyHints);
-            const outcome = await this.collectCandidate(
-              candidate,
-              checkpoint,
-              new Set(assetIds),
-              options,
-              stateKey,
-              historyHints.get(candidate.key),
-              true,
-              shutdownAbortController.signal,
-            );
-            outcome.dispatchedConcurrency = 1;
-            await integrateOutcome(outcome, deferredIndex, true);
+          const reopened = reopenDeferredRound();
+          if (reopened > 0) {
+            // El número de ronda queda durable antes de volver a abrir hasta
+            // `concurrency` requests. Un reinicio no regala intentos extra.
             await flushProgress(true);
             continue;
           }

@@ -94,9 +94,8 @@ function slowReason(input: {
     return "empty_catalog_results";
   }
   if (
-    run.concurrencyReductionCount > 0 ||
-    (run.configuredConcurrency > 0 &&
-      run.currentConcurrency < run.configuredConcurrency)
+    run.configuredConcurrency > 0 &&
+    run.currentConcurrency < run.configuredConcurrency
   ) {
     return "adaptive_concurrency";
   }

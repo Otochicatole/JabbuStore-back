@@ -9,6 +9,7 @@ const keys = [
   "STORE_SYNC_INTERVAL_MINUTES",
   "MARKET_ASSETS_CONCURRENCY",
   "MARKET_ASSETS_INITIAL_CONCURRENCY",
+  "MARKET_ASSETS_FORCE_MAX_CONCURRENCY",
   "MARKET_ASSETS_TARGET_DURATION_SECONDS",
 ] as const;
 
@@ -33,6 +34,7 @@ describe("sync scheduler config", () => {
     process.env.STORE_SYNC_INTERVAL_MINUTES = "30";
     process.env.MARKET_ASSETS_CONCURRENCY = "5";
     process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "9";
+    process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY = "false";
     process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "120";
     vi.resetModules();
 
@@ -45,6 +47,7 @@ describe("sync scheduler config", () => {
     expect(config.itemsCatalog.syncIntervalMinutes).toBe(45);
     expect(config.marketAssetsCatalog.concurrency).toBe(5);
     expect(config.marketAssetsCatalog.initialConcurrency).toBe(5);
+    expect(config.marketAssetsCatalog.forceMaxConcurrency).toBe(false);
     expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(120);
   });
 
@@ -55,6 +58,7 @@ describe("sync scheduler config", () => {
     delete process.env.STORE_SYNC_INTERVAL_MINUTES;
     process.env.MARKET_ASSETS_CONCURRENCY = "";
     process.env.MARKET_ASSETS_INITIAL_CONCURRENCY = "";
+    process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY = "";
     process.env.MARKET_ASSETS_TARGET_DURATION_SECONDS = "";
     vi.resetModules();
 
@@ -65,6 +69,7 @@ describe("sync scheduler config", () => {
     expect(config.itemsCatalog.syncIntervalMinutes).toBe(300);
     expect(config.marketAssetsCatalog.concurrency).toBe(48);
     expect(config.marketAssetsCatalog.initialConcurrency).toBe(6);
+    expect(config.marketAssetsCatalog.forceMaxConcurrency).toBe(true);
     expect(config.marketAssetsCatalog.targetDurationSeconds).toBe(600);
   });
 

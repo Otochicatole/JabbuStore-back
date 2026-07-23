@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RunFullCatalogSyncUseCase } from "../RunFullCatalogSyncUseCase";
 import { syncExecutionCoordinator } from "../SyncExecutionCoordinator";
 import { MarketAssetsApiError } from "../IMarketAssetsCatalogClient";
+import { config } from "../../../../shared/config";
 
 function marketResult() {
   return {
@@ -124,6 +125,47 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     expect(runs.complete.mock.invocationCallOrder[0]).toBeLessThan(
       state.markFullSuccess.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("registra el máximo configurado como concurrencia inicial en modo forzado", async () => {
+    const previousForce = config.marketAssetsCatalog.forceMaxConcurrency;
+    const previousMaximum = config.marketAssetsCatalog.concurrency;
+    const previousInitial = config.marketAssetsCatalog.initialConcurrency;
+    config.marketAssetsCatalog.forceMaxConcurrency = true;
+    config.marketAssetsCatalog.concurrency = 48;
+    config.marketAssetsCatalog.initialConcurrency = 6;
+
+    const refreshMarket = {
+      hasPendingRecovery: vi.fn(async () => false),
+      recoverPending: vi.fn(async () => marketResult()),
+      execute: vi.fn(),
+    };
+    const runs = {
+      startAttempt: vi.fn(async () => ({ id: "run-forced" })),
+      heartbeat: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      finishAttempt: vi.fn(async () => undefined),
+    };
+
+    try {
+      const useCase = new RunFullCatalogSyncUseCase(
+        refreshMarket as any,
+        stateRepository() as any,
+        runs as any,
+      );
+
+      await expect(useCase.execute("manual")).resolves.toEqual(marketResult());
+      expect(runs.startAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          configuredConcurrency: 48,
+          initialConcurrency: 48,
+        }),
+      );
+    } finally {
+      config.marketAssetsCatalog.forceMaxConcurrency = previousForce;
+      config.marketAssetsCatalog.concurrency = previousMaximum;
+      config.marketAssetsCatalog.initialConcurrency = previousInitial;
+    }
   });
 
   it("conserva recuperable la publicación si falla el cierre durable de la corrida", async () => {

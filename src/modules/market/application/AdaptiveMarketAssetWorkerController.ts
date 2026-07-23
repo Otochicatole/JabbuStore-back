@@ -51,6 +51,11 @@ export interface MarketAssetWorkerDemand {
 export interface AdaptiveMarketAssetWorkerControllerOptions {
   initialConcurrency?: number;
   maxConcurrency?: number;
+  /**
+   * Mantiene todos los slots disponibles activos. Los únicos eventos que
+   * detienen temporalmente el despacho son un 429 (hasta su reset) o un fatal.
+   */
+  forceMaxConcurrency?: boolean;
   congestionCooldownMs?: number;
   congestionBackoffMs?: number;
   maxCongestionBackoffMs?: number;
@@ -107,6 +112,8 @@ export interface AdaptiveMarketAssetWorkerControllerSnapshot {
   version: 1;
   initialConcurrency: number;
   maxConcurrency: number;
+  /** Opcional para poder restaurar snapshots v1 creados antes de este modo. */
+  forceMaxConcurrency?: boolean;
   effectiveConcurrency: number;
   congestionCooldownMs: number;
   congestionBackoffMs: number;
@@ -285,6 +292,7 @@ function validateSamples(value: unknown, label: string): RequestSample[] {
 export class AdaptiveMarketAssetWorkerController {
   private readonly initialConcurrency: number;
   private readonly maxConcurrency: number;
+  private readonly forceMaxConcurrency: boolean;
   private readonly congestionCooldownMs: number;
   private readonly congestionBackoffMs: number;
   private readonly maxCongestionBackoffMs: number;
@@ -320,6 +328,7 @@ export class AdaptiveMarketAssetWorkerController {
       this.maxConcurrency,
       "initialConcurrency",
     );
+    this.forceMaxConcurrency = options.forceMaxConcurrency === true;
     this.congestionCooldownMs = boundedInteger(
       options.congestionCooldownMs ?? DEFAULT_CONGESTION_COOLDOWN_MS,
       1,
@@ -338,7 +347,9 @@ export class AdaptiveMarketAssetWorkerController {
       Number.MAX_SAFE_INTEGER,
       "maxCongestionBackoffMs",
     );
-    this.effectiveConcurrency = this.initialConcurrency;
+    this.effectiveConcurrency = this.forceMaxConcurrency
+      ? this.maxConcurrency
+      : this.initialConcurrency;
   }
 
   static restore(
@@ -350,17 +361,20 @@ export class AdaptiveMarketAssetWorkerController {
     const controller = new AdaptiveMarketAssetWorkerController({
       initialConcurrency: snapshot.initialConcurrency,
       maxConcurrency: snapshot.maxConcurrency,
+      forceMaxConcurrency: snapshot.forceMaxConcurrency === true,
       congestionCooldownMs: snapshot.congestionCooldownMs,
       congestionBackoffMs: snapshot.congestionBackoffMs,
       maxCongestionBackoffMs: snapshot.maxCongestionBackoffMs,
     });
 
-    controller.effectiveConcurrency = boundedInteger(
-      snapshot.effectiveConcurrency,
-      1,
-      controller.maxConcurrency,
-      "effectiveConcurrency",
-    );
+    controller.effectiveConcurrency = controller.forceMaxConcurrency
+      ? controller.maxConcurrency
+      : boundedInteger(
+          snapshot.effectiveConcurrency,
+          1,
+          controller.maxConcurrency,
+          "effectiveConcurrency",
+        );
     controller.baselineLatenciesMs = snapshot.baselineLatenciesMs.map(
       (value, index) =>
         finiteNonNegative(value, `baselineLatenciesMs[${index}]`),
@@ -435,6 +449,7 @@ export class AdaptiveMarketAssetWorkerController {
         "circuitBreaker.congestionOpenCount",
       ),
     };
+    controller.normalizeForcedState();
     return controller;
   }
 
@@ -454,12 +469,14 @@ export class AdaptiveMarketAssetWorkerController {
       ...options,
       initialConcurrency: checkpoint.initialConcurrency,
     });
-    controller.effectiveConcurrency = boundedInteger(
-      checkpoint.effectiveConcurrency,
-      1,
-      controller.maxConcurrency,
-      "effectiveConcurrency",
-    );
+    controller.effectiveConcurrency = controller.forceMaxConcurrency
+      ? controller.maxConcurrency
+      : boundedInteger(
+          checkpoint.effectiveConcurrency,
+          1,
+          controller.maxConcurrency,
+          "effectiveConcurrency",
+        );
     const baseline =
       checkpoint.latencyBaselineMs == null
         ? null
@@ -512,6 +529,10 @@ export class AdaptiveMarketAssetWorkerController {
         ? null
         : mostRecentFailure?.outcome === "rate_limited"
           ? "rate_limited"
+          : controller.forceMaxConcurrency &&
+              mostRecentFailure == null &&
+              resumeAt != null
+            ? "rate_limited"
           : "congestion";
     let trailingSuccesses = 0;
     if (checkpoint.circuitBreaker.state === "half_open") {
@@ -538,6 +559,7 @@ export class AdaptiveMarketAssetWorkerController {
       congestionOpenCount:
         reason === "congestion" ? checkpoint.circuitBreaker.openCount : 0,
     };
+    controller.normalizeForcedState();
     return controller;
   }
 
@@ -572,7 +594,7 @@ export class AdaptiveMarketAssetWorkerController {
       this.rollingSamples.shift();
     }
 
-    if (isCongestion(completion.outcome)) {
+    if (!this.forceMaxConcurrency && isCongestion(completion.outcome)) {
       this.consecutiveCongestionFailures++;
     } else {
       this.consecutiveCongestionFailures = 0;
@@ -582,6 +604,9 @@ export class AdaptiveMarketAssetWorkerController {
       this.fatalObserved = true;
     } else if (completion.outcome === "rate_limited") {
       this.openRateLimitBreaker(completion.completedAt, completion.resumeAt);
+    } else if (this.forceMaxConcurrency) {
+      // En modo máximo los errores transitorios se difieren fuera del
+      // controller, sin reducir slots ni abrir el breaker por congestión.
     } else if (this.circuitBreaker.state === "half_open") {
       if (isTransportSuccess(completion.outcome)) {
         this.circuitBreaker.halfOpenSuccesses++;
@@ -619,8 +644,12 @@ export class AdaptiveMarketAssetWorkerController {
       this.circuitBreaker.resumeAt != null &&
       now >= this.circuitBreaker.resumeAt
     ) {
-      this.circuitBreaker.state = "half_open";
-      this.circuitBreaker.halfOpenSuccesses = 0;
+      if (this.forceMaxConcurrency) {
+        this.closeCircuitBreaker();
+      } else {
+        this.circuitBreaker.state = "half_open";
+        this.circuitBreaker.halfOpenSuccesses = 0;
+      }
     }
 
     const throughput = this.throughput();
@@ -632,6 +661,7 @@ export class AdaptiveMarketAssetWorkerController {
 
     if (
       !this.fatalObserved &&
+      !this.forceMaxConcurrency &&
       this.circuitBreaker.state === "closed" &&
       now >= this.cooldownUntil
     ) {
@@ -648,6 +678,7 @@ export class AdaptiveMarketAssetWorkerController {
       version: 1,
       initialConcurrency: this.initialConcurrency,
       maxConcurrency: this.maxConcurrency,
+      forceMaxConcurrency: this.forceMaxConcurrency,
       effectiveConcurrency: this.effectiveConcurrency,
       congestionCooldownMs: this.congestionCooldownMs,
       congestionBackoffMs: this.congestionBackoffMs,
@@ -837,14 +868,31 @@ export class AdaptiveMarketAssetWorkerController {
       resumeAt: null,
       halfOpenSuccesses: 0,
     };
-    this.effectiveConcurrency = Math.min(
-      this.initialConcurrency,
-      this.maxConcurrency,
-    );
+    this.effectiveConcurrency = this.forceMaxConcurrency
+      ? this.maxConcurrency
+      : Math.min(this.initialConcurrency, this.maxConcurrency);
     this.consecutiveCongestionFailures = 0;
     this.cooldownUntil = 0;
     this.stageSamples = [];
     this.rollingSamples = [];
+  }
+
+  /**
+   * Un checkpoint adaptativo previo puede contener cooldown o un breaker de
+   * congestión. Al activar force-max esos estados no deben limitar el pool.
+   * Sólo se conserva una pausa real de cuota pendiente.
+   */
+  private normalizeForcedState(): void {
+    if (!this.forceMaxConcurrency) return;
+    this.effectiveConcurrency = this.maxConcurrency;
+    this.cooldownUntil = 0;
+    this.consecutiveCongestionFailures = 0;
+    if (
+      this.circuitBreaker.state === "half_open" ||
+      this.circuitBreaker.reason === "congestion"
+    ) {
+      this.closeCircuitBreaker();
+    }
   }
 
   private decision(

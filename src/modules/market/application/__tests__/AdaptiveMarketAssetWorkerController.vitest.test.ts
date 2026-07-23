@@ -103,6 +103,207 @@ describe("AdaptiveMarketAssetWorkerController", () => {
     ]);
   });
 
+  it("force-max parte en el máximo y no reduce ni abre el breaker por congestión", () => {
+    const controller = new AdaptiveMarketAssetWorkerController({
+      initialConcurrency: 6,
+      maxConcurrency: 48,
+      forceMaxConcurrency: true,
+    });
+
+    expect(controller.evaluate(urgentDemand, 0)).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 48,
+    });
+
+    const outcomes = ["timeout", "network_error", "server_error"] as const;
+    const decision = observeMany(
+      controller,
+      96,
+      0,
+      (completedAt, index) => ({
+        outcome: outcomes[index % outcomes.length]!,
+        completedAt,
+        latencyMs: 60_000,
+      }),
+    );
+
+    expect(decision).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 48,
+      cooldownUntil: null,
+      circuitBreaker: {
+        state: "closed",
+        openedCount: 0,
+      },
+    });
+    expect(decision.recentCongestionRate).toBe(1);
+  });
+
+  it("force-max pausa ante 429 y vuelve directamente al máximo al llegar el reset", () => {
+    const controller = new AdaptiveMarketAssetWorkerController({
+      forceMaxConcurrency: true,
+    });
+    let decision = controller.observe(
+      {
+        outcome: "rate_limited",
+        completedAt: 1_000,
+        latencyMs: 300,
+        resumeAt: 61_000,
+      },
+      urgentDemand,
+    );
+
+    expect(decision).toMatchObject({
+      state: "breaker_open",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 0,
+      circuitBreaker: {
+        state: "open",
+        reason: "rate_limited",
+        resumeAt: 61_000,
+      },
+    });
+    expect(controller.evaluate(urgentDemand, 60_999).state).toBe(
+      "breaker_open",
+    );
+
+    decision = controller.evaluate(urgentDemand, 61_000);
+    expect(decision).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 48,
+      circuitBreaker: {
+        state: "closed",
+        reason: null,
+        probeConcurrency: null,
+      },
+    });
+  });
+
+  it("force-max sigue deteniendo el despacho ante un error fatal", () => {
+    const controller = new AdaptiveMarketAssetWorkerController({
+      forceMaxConcurrency: true,
+    });
+    const decision = controller.observe(
+      {
+        outcome: "fatal",
+        completedAt: 100,
+        latencyMs: 20,
+      },
+      urgentDemand,
+    );
+
+    expect(decision).toMatchObject({
+      state: "halted",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 0,
+    });
+  });
+
+  it("el snapshot conserva force-max y restaura siempre en el máximo", () => {
+    const controller = new AdaptiveMarketAssetWorkerController({
+      initialConcurrency: 3,
+      maxConcurrency: 32,
+      forceMaxConcurrency: true,
+    });
+    observeMany(controller, 10, 0, (completedAt) => ({
+      outcome: "timeout",
+      completedAt,
+      latencyMs: 30_000,
+    }));
+
+    const snapshot = JSON.parse(JSON.stringify(controller.toSnapshot()));
+    expect(snapshot.forceMaxConcurrency).toBe(true);
+
+    const restored = AdaptiveMarketAssetWorkerController.restore(snapshot);
+    const decision = observeMany(
+      restored,
+      64,
+      100,
+      (completedAt) => ({
+        outcome: "network_error",
+        completedAt,
+        latencyMs: 30_000,
+      }),
+    );
+    expect(decision).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 32,
+      dispatchConcurrency: 32,
+      circuitBreaker: { state: "closed" },
+    });
+    expect(restored.toSnapshot().forceMaxConcurrency).toBe(true);
+  });
+
+  it("force-max ignora cooldown y breaker de congestión de un checkpoint adaptativo", () => {
+    const adaptive = new AdaptiveMarketAssetWorkerController();
+    observeMany(adaptive, 5, 0, (completedAt) => ({
+      outcome: "timeout",
+      completedAt,
+      latencyMs: 30_000,
+    }));
+    const checkpoint = adaptive.toCheckpointState();
+    expect(checkpoint.circuitBreaker.state).toBe("open");
+
+    const restored =
+      AdaptiveMarketAssetWorkerController.restoreFromCheckpoint(checkpoint, {
+        maxConcurrency: 48,
+        forceMaxConcurrency: true,
+      });
+    expect(restored.evaluate(urgentDemand, 10)).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 48,
+      cooldownUntil: null,
+      circuitBreaker: {
+        state: "closed",
+        reason: null,
+      },
+    });
+  });
+
+  it("force-max conserva un reset de cuota durable aunque el checkpoint no tenga muestras", () => {
+    const resetAt = Date.UTC(2026, 6, 23, 0, 2);
+    const checkpoint = {
+      initialConcurrency: 2,
+      effectiveConcurrency: 2,
+      rampStage: 0,
+      latencyBaselineMs: null,
+      recentHealthSamples: [],
+      concurrencyCooldownUntil: null,
+      consecutiveCongestionFailures: 0,
+      circuitBreaker: {
+        state: "open" as const,
+        openCount: 1,
+        resumeAt: new Date(resetAt).toISOString(),
+      },
+    };
+
+    const restored =
+      AdaptiveMarketAssetWorkerController.restoreFromCheckpoint(checkpoint, {
+        maxConcurrency: 48,
+        forceMaxConcurrency: true,
+      });
+
+    expect(restored.evaluate(urgentDemand, resetAt - 1)).toMatchObject({
+      state: "breaker_open",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 0,
+      circuitBreaker: {
+        reason: "rate_limited",
+        resumeAt: resetAt,
+      },
+    });
+    expect(restored.evaluate(urgentDemand, resetAt)).toMatchObject({
+      state: "running",
+      effectiveConcurrency: 48,
+      dispatchConcurrency: 48,
+      circuitBreaker: { state: "closed", reason: null },
+    });
+  });
+
   it("no escala si el throughput actual ya cumple el tiempo restante", () => {
     const controller = new AdaptiveMarketAssetWorkerController();
     const relaxedDemand = {

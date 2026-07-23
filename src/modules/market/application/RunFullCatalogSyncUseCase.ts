@@ -107,7 +107,9 @@ export class RunFullCatalogSyncUseCase {
         assetsPerItem: config.marketAssetsCatalog.assetsPerItem,
         configuredConcurrency: config.marketAssetsCatalog.concurrency,
         initialConcurrency:
-          config.marketAssetsCatalog.initialConcurrency,
+          config.marketAssetsCatalog.forceMaxConcurrency
+            ? config.marketAssetsCatalog.concurrency
+            : config.marketAssetsCatalog.initialConcurrency,
         recoveryRequested,
         recoveryKind: recoveryRequested ? "pending" : "none",
       });

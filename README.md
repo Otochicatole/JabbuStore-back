@@ -61,19 +61,24 @@ El proyecto requiere un archivo `.env` en la raíz. Las variables típicas inclu
 
 ## Pool de assets del Global Market
 
-La recolección usa un pool HTTP adaptativo dentro de un único proceso Node. El
-pool comienza con `MARKET_ASSETS_INITIAL_CONCURRENCY=6` workers y puede escalar
-hasta `MARKET_ASSETS_CONCURRENCY=48`; cada worker procesa una listing y pagina
+La recolección usa un pool HTTP continuo dentro de un único proceso Node. Con
+`MARKET_ASSETS_FORCE_MAX_CONCURRENCY=true` (valor predeterminado), mantiene
+activos los `MARKET_ASSETS_CONCURRENCY=48` workers desde el inicio para completar
+la descarga en el menor tiempo posible. Cada worker procesa una listing y pagina
 secuencialmente hasta obtener el máximo configurado para ella. No se crean
 procesos del sistema por skin.
 
 `MARKET_ASSETS_TARGET_DURATION_SECONDS=600` define un SLO de diez minutos, no un
-timeout ni una garantía absoluta. El pool escala o reduce su concurrencia según
-la latencia y los errores de SteamWebAPI, y abre un circuit breaker ante
-congestión o respuestas `429`. Si el proveedor no permite sostener el rendimiento
-necesario, la corrida continúa, reporta `ten_minute_target_unreachable` y conserva
-el snapshot anterior hasta reunir y validar el objetivo completo; nunca publica
-un snapshot parcial sólo porque hayan transcurrido los diez minutos.
+timeout ni una garantía absoluta. El modo forzado no reduce workers por latencia,
+timeouts ni errores `5xx`; sólo pausa nuevos despachos cuando la cuota lo exige o
+ante un `429`, y conserva como fatales los errores `401`, `402` y `403`. Si se
+prefiere que el pool reduzca o escale su concurrencia según la salud del proveedor,
+se puede configurar `MARKET_ASSETS_FORCE_MAX_CONCURRENCY=false`; en ese modo
+comienza con `MARKET_ASSETS_INITIAL_CONCURRENCY=6`. Si el proveedor no permite
+sostener el rendimiento necesario, la corrida continúa, reporta
+`ten_minute_target_unreachable` y conserva el snapshot anterior hasta reunir y
+validar el objetivo completo; nunca publica un snapshot parcial sólo porque hayan
+transcurrido los diez minutos.
 
 Los valores canónicos y el resto de opciones de cuota, timeout y archivos
 durables están documentados en `.env.example`. Los cambios de concurrencia

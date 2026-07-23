@@ -35,6 +35,10 @@ const marketAssetsInitialConcurrency = Math.min(
     toPositiveInteger(process.env.MARKET_ASSETS_INITIAL_CONCURRENCY, 6),
   ),
 );
+const marketAssetsForceMaxConcurrency = toBoolean(
+  process.env.MARKET_ASSETS_FORCE_MAX_CONCURRENCY,
+  true,
+);
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -131,6 +135,11 @@ export const config = {
     ),
     /** Techo adaptativo de requests simultáneos. */
     concurrency: marketAssetsMaxConcurrency,
+    /**
+     * Mantiene todos los workers configurados activos para priorizar la menor
+     * duración posible. En `false`, vuelve a habilitar el escalado adaptativo.
+     */
+    forceMaxConcurrency: marketAssetsForceMaxConcurrency,
     /** Workers iniciales antes de medir latencia y salud del proveedor. */
     initialConcurrency: marketAssetsInitialConcurrency,
     /** Objetivo SLO; no habilita publicación parcial al vencer. */

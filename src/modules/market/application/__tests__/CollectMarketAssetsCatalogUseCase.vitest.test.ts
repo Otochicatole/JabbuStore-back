@@ -415,6 +415,156 @@ describe("CollectMarketAssetsCatalogUseCase", () => {
     expect(peakActive).toBe(3);
   });
 
+  it("despacha los 48 workers desde el inicio cuando force-max está activo", async () => {
+    const catalog = Array.from({ length: 50 }, (_, index) => ({
+      markethashname: `AK-47 | Fixed Worker ${index} (Factory New)`,
+      itemgroup: "rifle",
+      pricereal: 100 - index,
+    }));
+    const gate = deferred<void>();
+    let active = 0;
+    let peakActive = 0;
+    let started = 0;
+    const apiCall = vi.fn(async (candidate, request) => {
+      started++;
+      active++;
+      peakActive = Math.max(peakActive, active);
+      try {
+        await waitForGateOrCancellation(gate.promise, request);
+        return page(
+          [
+            rawMarketAsset(
+              candidate.marketHashName,
+              `fixed-${candidate.key}`,
+            ),
+          ],
+          request,
+          1,
+        );
+      } finally {
+        active--;
+      }
+    });
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(apiCall),
+      priorityQueue(catalog),
+      new MemoryMarketAssetsCatalogStore(),
+      syncStateRepository(),
+      undefined,
+      {
+        targetAssets: 48,
+        assetsPerItem: 1,
+        initialConcurrency: 6,
+        concurrency: 48,
+        forceMaxConcurrency: true,
+      },
+    );
+
+    const execution = collector.execute("test-force-max-pool");
+    await waitUntil(
+      () => started === 48,
+      "El modo force-max no inició los 48 workers.",
+    );
+    expect(peakActive).toBe(48);
+
+    gate.resolve(undefined);
+    const { snapshot } = await execution;
+
+    expect(snapshot.validAssetCount).toBe(48);
+    expect(peakActive).toBe(48);
+  });
+
+  it("mantiene los 48 workers durante la recuperación diferida en force-max", async () => {
+    const catalog = Array.from({ length: 48 }, (_, index) => ({
+      markethashname: `AK-47 | Deferred Worker ${index} (Factory New)`,
+      itemgroup: "rifle",
+      pricereal: 100 - index,
+    }));
+    const recoveryGate = deferred<void>();
+    const attempts = new Map<string, number>();
+    let recoveryStarted = 0;
+    let activeRecoveryWorkers = 0;
+    let peakRecoveryWorkers = 0;
+    const apiCall = vi.fn(async (candidate, request) => {
+      const attempt = (attempts.get(candidate.key) ?? 0) + 1;
+      attempts.set(candidate.key, attempt);
+      if (attempt === 1) {
+        throw new MarketAssetsApiError(
+          "timeout inicial para diferir candidato",
+          "retryable",
+          0,
+          request.limit,
+          0,
+          1,
+          5,
+          "timeout",
+        );
+      }
+
+      recoveryStarted++;
+      activeRecoveryWorkers++;
+      peakRecoveryWorkers = Math.max(
+        peakRecoveryWorkers,
+        activeRecoveryWorkers,
+      );
+      try {
+        await waitForGateOrCancellation(recoveryGate.promise, request);
+        return page(
+          [
+            rawMarketAsset(
+              candidate.marketHashName,
+              `recovered-${candidate.key}`,
+            ),
+          ],
+          request,
+          1,
+        );
+      } finally {
+        activeRecoveryWorkers--;
+      }
+    });
+    const collector = new CollectMarketAssetsCatalogUseCase(
+      client(apiCall),
+      priorityQueue(catalog),
+      new MemoryMarketAssetsCatalogStore(),
+      syncStateRepository(),
+      undefined,
+      {
+        targetAssets: 48,
+        assetsPerItem: 1,
+        initialConcurrency: 6,
+        concurrency: 48,
+        forceMaxConcurrency: true,
+      },
+    );
+
+    const execution = collector.execute("test-force-max-deferred-pool");
+    let observationError: unknown = null;
+    try {
+      await vi.waitFor(
+        () => {
+          expect(recoveryStarted).toBe(48);
+        },
+        { timeout: 2_000, interval: 1 },
+      );
+      expect(peakRecoveryWorkers).toBe(48);
+    } catch (error) {
+      observationError = error;
+    } finally {
+      recoveryGate.resolve(undefined);
+    }
+
+    const { snapshot } = await execution;
+    if (observationError) throw observationError;
+
+    expect(snapshot.validAssetCount).toBe(48);
+    expect(peakRecoveryWorkers).toBe(48);
+    expect([...attempts.values()]).toHaveLength(48);
+    expect([...attempts.values()].every((attempt) => attempt === 2)).toBe(
+      true,
+    );
+  });
+
   it("publica un snapshot vacío cuando agotó de verdad todo el catálogo", async () => {
     const store = new MemoryMarketAssetsCatalogStore();
     const apiCall = vi.fn(async (_candidate, request) =>

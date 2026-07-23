@@ -221,4 +221,26 @@ describe("buildMarketSyncRunStatusView", () => {
     expect(status.slowReason).toBe("paused");
     expect(status.recommendedPollAfterMs).toBe(10_000);
   });
+
+  it("no informa reducción activa si force-max ya volvió al techo", () => {
+    const status = buildMarketSyncRunStatusView(
+      run({
+        configuredConcurrency: 48,
+        currentConcurrency: 48,
+        minimumConcurrencyUsed: 2,
+        concurrencyReductionCount: 21,
+      }),
+      {
+        now: new Date("2026-07-21T12:00:20.000Z"),
+        validAssets: 500,
+        targetAssets: 1_000,
+        windowQuotaUnitsUsed: 0,
+        quotaLimit: 10_000,
+        quotaResetsAt: null,
+      },
+    );
+
+    expect(status.slowReason).toBe("provider_latency");
+    expect(status.concurrency.reductions).toBe(21);
+  });
 });
