@@ -52,6 +52,7 @@ export interface IMarketAssetsCatalogClient {
     candidate: MarketAssetsPriorityCandidate,
     options: MarketAssetsPageRequest,
   ): Promise<MarketAssetsCandidatePage>;
+  fetchActiveYoupinPrices?(): Promise<any[]>;
 }
 
 export type MarketAssetsApiErrorKind =

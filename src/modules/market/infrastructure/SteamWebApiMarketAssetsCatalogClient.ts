@@ -246,4 +246,8 @@ export class SteamWebApiMarketAssetsCatalogClient
       ...(resumeAt == null ? {} : { resumeAt }),
     });
   }
+
+  async fetchActiveYoupinPrices(): Promise<any[]> {
+    return this.floatClient.fetchActiveYoupinPrices();
+  }
 }

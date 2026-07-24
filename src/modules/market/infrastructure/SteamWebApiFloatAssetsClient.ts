@@ -12,6 +12,10 @@ import { marketSyncProgressService } from "../application/MarketSyncProgressServ
 export const STEAM_FLOAT_ASSETS_URL =
   "https://www.steamwebapi.com/steam/api/float/assets";
 
+/** GET /market/youpin/prices (sin API key en constantes/logs). */
+export const STEAM_YOUPIN_PRICES_URL =
+  "https://www.steamwebapi.com/market/youpin/prices";
+
 export type FloatAssetsSort =
   | "newest"
   | "oldest"
@@ -423,5 +427,26 @@ export class SteamWebApiFloatAssetsClient {
     }
 
     return { assets: all, rowsUsed, rateLimited };
+  }
+
+  async fetchActiveYoupinPrices(): Promise<any[]> {
+    const apiKey = this.apiKey || config.steamwebapiApiKey;
+    if (!apiKey) {
+      console.warn("[SteamWebApiFloatAssetsClient] STEAMWEBAPI_API_KEY no configurado");
+      return [];
+    }
+
+    try {
+      const response = await fetch(`${STEAM_YOUPIN_PRICES_URL}?key=${apiKey}`);
+      if (!response.ok) {
+        console.warn(`[SteamWebApiFloatAssetsClient] Error obteniendo precios de YouPin: HTTP ${response.status}`);
+        return [];
+      }
+      const data = await response.json() as any;
+      return Array.isArray(data) ? data : [];
+    } catch (err: any) {
+      console.warn(`[SteamWebApiFloatAssetsClient] Error obteniendo precios de YouPin: ${err.message}`);
+      return [];
+    }
   }
 }

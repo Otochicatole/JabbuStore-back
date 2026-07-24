@@ -568,6 +568,43 @@ export class CollectMarketAssetsCatalogUseCase {
       ]),
     );
 
+    // Fetch active YouPin listings in bulk to pre-filter candidate keys
+    let activeListings: any[] = [];
+    if (typeof this.client.fetchActiveYoupinPrices === "function") {
+      try {
+        console.log("[Market Assets Sync] Fetching active YouPin prices in bulk...");
+        activeListings = await this.client.fetchActiveYoupinPrices();
+      } catch (error) {
+        console.error("[Market Assets Sync] Falló la precarga de precios YouPin:", error);
+      }
+    }
+    const hasActiveListings = activeListings.length > 0;
+    const activeSet = new Set<string>();
+    if (hasActiveListings) {
+      const activeMap = new Map<string, any>();
+      for (const item of activeListings) {
+        if (item.market_hash_name) {
+          activeMap.set(item.market_hash_name.trim(), item);
+        }
+      }
+      for (const candidate of queue.candidates) {
+        if (candidate.phase) {
+          const activeItem = activeMap.get(candidate.queryMarketHashName);
+          if (activeItem && activeItem.variants && activeItem.variants[candidate.phase] !== undefined) {
+            activeSet.add(candidate.key);
+          }
+        } else {
+          const activeItem = activeMap.get(candidate.marketHashName);
+          if (activeItem && activeItem.quantity > 0) {
+            activeSet.add(candidate.key);
+          }
+        }
+      }
+      console.log(
+        `[Market Assets Sync] Precargados ${activeListings.length} items activos. ${activeSet.size}/${queue.candidates.length} candidatos tienen stock en YouPin.`
+      );
+    }
+
     const storedCheckpoint = await this.store.readCheckpoint();
     const resumable = canResumeCheckpoint(storedCheckpoint, queue, options);
     let checkpoint: MarketAssetsCollectionCheckpoint;
@@ -1125,6 +1162,13 @@ export class CollectMarketAssetsCatalogUseCase {
           checkpoint.candidateProgress[candidate.key]?.completed ||
           activeKeys.has(candidate.key)
         ) {
+          continue;
+        }
+        if (hasActiveListings && !activeSet.has(candidate.key)) {
+          const progress = checkpoint.candidateProgress[candidate.key] ?? emptyCandidateProgress();
+          progress.completed = true;
+          progress.exhausted = true;
+          checkpoint.candidateProgress[candidate.key] = progress;
           continue;
         }
         selected.push({ candidate, index });
