@@ -46,7 +46,7 @@ interface CandidateOutcome {
 
 const DEFAULT_OPTIONS: MarketAssetsCollectionOptions = {
   targetAssets: 10_000,
-  assetsPerItem: 10,
+  assetsPerItem: 7,
   concurrency: 3,
   sort: "newest",
 };

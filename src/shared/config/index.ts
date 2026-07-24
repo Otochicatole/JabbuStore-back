@@ -115,8 +115,8 @@ export const config = {
   marketAssetsCatalog: {
     target: toPositiveInteger(process.env.MARKET_ASSETS_TARGET, 10_000),
     assetsPerItem: Math.min(
-      10,
-      toPositiveInteger(process.env.MARKET_ASSETS_PER_ITEM, 10),
+      7,
+      toPositiveInteger(process.env.MARKET_ASSETS_PER_ITEM, 7),
     ),
     /** Requests float/assets simultáneos; 3 evita saturación observada con 12. */
     concurrency: toPositiveInteger(process.env.MARKET_ASSETS_CONCURRENCY, 3),

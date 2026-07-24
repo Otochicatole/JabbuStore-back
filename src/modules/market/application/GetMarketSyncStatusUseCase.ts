@@ -140,7 +140,7 @@ export class GetMarketSyncStatusUseCase {
       phase,
       targetAssets,
       requestedAssets: targetAssets,
-      assetsPerItem: state?.assetsPerItem || 10,
+      assetsPerItem: state?.assetsPerItem || 7,
       rawAssets,
       validAssets,
       skippedAssets,

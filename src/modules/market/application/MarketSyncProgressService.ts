@@ -84,7 +84,7 @@ class MarketSyncProgressService {
       phase: "idle",
       triggeredBy: null,
       targetAssets: 0,
-      assetsPerItem: 10,
+      assetsPerItem: 7,
       rawAssets: 0,
       validAssets: 0,
       skippedAssets: 0,
@@ -135,7 +135,7 @@ class MarketSyncProgressService {
     const assetsPerItem =
       typeof assetsPerItemOrTriggeredBy === "number"
         ? assetsPerItemOrTriggeredBy
-        : 10;
+        : 7;
     const triggeredBy =
       typeof assetsPerItemOrTriggeredBy === "string"
         ? assetsPerItemOrTriggeredBy
