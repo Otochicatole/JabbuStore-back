@@ -33,6 +33,9 @@ export interface MarketSyncStatus {
   resumable: boolean;
   phase: MarketSyncPhase;
   triggeredBy: string | null;
+  /** Configuración vigente; puede diferir del objetivo de un snapshot anterior. */
+  configuredTargetAssets?: number;
+  configuredAssetsPerItem?: number;
   targetAssets: number;
   assetsPerItem: number;
   rawAssets: number;

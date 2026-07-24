@@ -1,5 +1,6 @@
 import type { IMarketSyncStateRepository } from "../domain/IMarketSyncStateRepository";
 import type { IMarketAssetsCatalogStore } from "../domain/MarketAssetsCatalog";
+import { config } from "../../../shared/config";
 import {
   marketSyncProgressService,
   type MarketSyncCompletionReason,
@@ -18,6 +19,10 @@ export class GetMarketSyncStatusUseCase {
 
   async execute(): Promise<MarketSyncStatus> {
     const runtime = marketSyncProgressService.getStatus();
+    const configuredCollection = {
+      configuredTargetAssets: config.marketAssetsCatalog.target,
+      configuredAssetsPerItem: config.marketAssetsCatalog.assetsPerItem,
+    };
     const [file, checkpoint, state, rateLimit] = await Promise.all([
       this.store.getStatus(),
       this.store.getCheckpointStatus(),
@@ -30,6 +35,7 @@ export class GetMarketSyncStatusUseCase {
     if (!file.exists && !checkpoint.exists && !state) {
       return {
         ...runtime,
+        ...configuredCollection,
         lastPublished: null,
         quotaUnitsUsed: rateLimit.quotaUnitsUsed,
         rowsUsed: rateLimit.quotaUnitsUsed,
@@ -63,6 +69,7 @@ export class GetMarketSyncStatusUseCase {
     if (runtime.running) {
       return {
         ...runtime,
+        ...configuredCollection,
         publishedListings: lastPublished?.publishedListings ?? 0,
         publishedFloats: lastPublished?.publishedFloats ?? 0,
         lastPublished,
@@ -135,6 +142,7 @@ export class GetMarketSyncStatusUseCase {
       : state?.totalCandidates ?? 0;
     return {
       ...runtime,
+      ...configuredCollection,
       running: false,
       resumable: hasCheckpoint || publicationPending,
       phase,
