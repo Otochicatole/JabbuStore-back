@@ -9,6 +9,8 @@ import {
   findOpenSellOrderForAsset,
 } from "../application/OrderUseCases";
 import { OrderStatus, OrderType } from "../domain/Order";
+import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
+import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { MercadoPagoService } from "../../../shared/infrastructure/MercadoPagoService";
 import { config } from "../../../shared/config";
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
@@ -650,6 +652,191 @@ export class OrderController {
     } catch (error: any) {
       console.error("[Orders] Error updating order status:", error);
       res.status(500).json({ error: error.message || "Error updating order status" });
+    }
+  }
+
+  async requote(req: Request, res: Response) {
+    try {
+      const id = req.params.id as string;
+      const { newPrice } = req.body;
+
+      if (typeof newPrice !== "number" || newPrice <= 0) {
+        return res.status(400).json({ error: "El nuevo precio debe ser un número válido mayor a 0." });
+      }
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: { items: true, bot: true }
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: "Orden no encontrada" });
+      }
+
+      if (order.status !== "RETENTION") {
+        return res.status(400).json({ error: "Sólo se pueden re-tasar órdenes en estado de RETENCIÓN." });
+      }
+
+      // Save original price in metadata (preserving existing metadata)
+      const currentMetadata = order.metadata && typeof order.metadata === 'object' && !Array.isArray(order.metadata)
+        ? (order.metadata as Record<string, any>)
+        : {};
+      
+      const originalPrice = currentMetadata.originalPrice || order.totalPrice;
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          totalPrice: newPrice,
+          metadata: {
+            ...currentMetadata,
+            originalPrice
+          }
+        },
+        include: { items: true, bot: true }
+      });
+
+      // Transition to AWAITING_APPROVAL and trigger notifications
+      const finalOrder = await this.updateOrderStatusUseCase.execute(
+        id,
+        "AWAITING_APPROVAL" as any
+      );
+
+      return res.json(finalOrder);
+    } catch (error: any) {
+      console.error("[Orders] Error in requote:", error);
+      return res.status(500).json({ error: error.message || "Error al re-tasar la orden" });
+    }
+  }
+
+  async approveRequote(req: Request, res: Response) {
+    try {
+      const id = req.params.id as string;
+      const userId = (req as any).user.id;
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: { items: true, bot: true }
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: "Orden no encontrada" });
+      }
+
+      // Authorization check
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      if (order.status !== "AWAITING_APPROVAL") {
+        return res.status(400).json({ error: "La orden no está pendiente de aprobación de cotización." });
+      }
+
+      // Transition back to RETENTION and trigger notifications
+      const updatedOrder = await this.updateOrderStatusUseCase.execute(
+        id,
+        "RETENTION" as any
+      );
+
+      // Create extra custom notification to confirm approval
+      const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(
+        new PrismaNotificationRepository()
+      );
+
+      await createNotificationUseCase.execute({
+        userId: order.userId,
+        adminId: null,
+        title: "notifications.sellRequoteApproved.title",
+        content: JSON.stringify({
+          key: "notifications.sellRequoteApproved.content",
+          params: { orderId: order.id.slice(0, 8), newPrice: order.totalPrice.toFixed(2) }
+        }),
+        type: "ORDER_STATUS",
+        link: "/listings"
+      });
+
+      // Admin notification
+      await createNotificationUseCase.execute({
+        userId: null,
+        adminId: null,
+        title: "notifications.sellRequoteApprovedAdmin.title",
+        content: JSON.stringify({
+          key: "notifications.sellRequoteApprovedAdmin.content",
+          params: { orderId: order.id.slice(0, 8), newPrice: order.totalPrice.toFixed(2) }
+        }),
+        type: "ORDER_STATUS",
+        link: "/admin/panel/orders/sell"
+      });
+
+      return res.json(updatedOrder);
+    } catch (error: any) {
+      console.error("[Orders] Error in approveRequote:", error);
+      return res.status(500).json({ error: error.message || "Error al aprobar cotización" });
+    }
+  }
+
+  async rejectRequote(req: Request, res: Response) {
+    try {
+      const id = req.params.id as string;
+      const userId = (req as any).user.id;
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: { items: true, bot: true }
+      });
+
+      if (!order) {
+        return res.status(404).json({ error: "Orden no encontrada" });
+      }
+
+      if (order.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      if (order.status !== "AWAITING_APPROVAL") {
+        return res.status(400).json({ error: "La orden no está pendiente de aprobación de cotización." });
+      }
+
+      // Transition to CANCELLED and trigger notifications
+      const updatedOrder = await this.updateOrderStatusUseCase.execute(
+        id,
+        "CANCELLED" as any
+      );
+
+      // Create extra custom notification to confirm rejection
+      const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(
+        new PrismaNotificationRepository()
+      );
+
+      await createNotificationUseCase.execute({
+        userId: order.userId,
+        adminId: null,
+        title: "notifications.sellRequoteRejected.title",
+        content: JSON.stringify({
+          key: "notifications.sellRequoteRejected.content",
+          params: { orderId: order.id.slice(0, 8) }
+        }),
+        type: "ORDER_STATUS",
+        link: "/listings"
+      });
+
+      // Admin notification
+      await createNotificationUseCase.execute({
+        userId: null,
+        adminId: null,
+        title: "notifications.sellRequoteRejectedAdmin.title",
+        content: JSON.stringify({
+          key: "notifications.sellRequoteRejectedAdmin.content",
+          params: { orderId: order.id.slice(0, 8) }
+        }),
+        type: "ORDER_STATUS",
+        link: "/admin/panel/orders/sell"
+      });
+
+      return res.json(updatedOrder);
+    } catch (error: any) {
+      console.error("[Orders] Error in rejectRequote:", error);
+      return res.status(500).json({ error: error.message || "Error al rechazar cotización" });
     }
   }
 

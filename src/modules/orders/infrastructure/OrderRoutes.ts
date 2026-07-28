@@ -113,12 +113,23 @@ router.post("/webhook/paypal", (req, res) =>
   orderController.handlePayPalWebhook(req, res),
 );
 
+// Client requote approval/rejection routes
+router.post("/:id/approve-requote", authMiddleware, (req, res) =>
+  orderController.approveRequote(req, res),
+);
+router.post("/:id/reject-requote", authMiddleware, (req, res) =>
+  orderController.rejectRequote(req, res),
+);
+
 // Admin Routes
 router.get("/all", authMiddleware, adminOnly, (req, res) =>
   orderController.getAllOrders(req, res),
 );
 router.patch("/:id/status", authMiddleware, adminOnly, (req, res) =>
   orderController.updateStatus(req, res),
+);
+router.patch("/:id/requote", authMiddleware, adminOnly, (req, res) =>
+  orderController.requote(req, res),
 );
 
 export default router;

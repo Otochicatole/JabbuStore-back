@@ -179,6 +179,7 @@ app.get('/', (req, res) => {
 import { startMarketAssetsSyncScheduler } from './modules/market/infrastructure/FullCatalogSyncScheduler';
 import { startLocalPriceCatalogSyncScheduler } from './modules/pricing/infrastructure/LocalPriceCatalogSyncScheduler';
 import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
+import { startRetentionScheduler } from './modules/orders/infrastructure/RetentionScheduler';
 
 async function bootstrap() {
   // Limpiar configuraciones no editables en la DB para respetar el archivo .env
@@ -202,6 +203,8 @@ async function bootstrap() {
     startMarketAssetsSyncScheduler();
     // Ejecución automática de sorteos programados vencidos
     startRaffleScheduler();
+    // Verificación periódica de retenciones de venta vencidas (8 días)
+    startRetentionScheduler();
   });
 }
 

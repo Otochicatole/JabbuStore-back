@@ -820,9 +820,41 @@ export class UpdateOrderStatusUseCase {
               params: { orderId: order.id.slice(0, 8) },
             });
           }
+        } else if (status === OrderStatus.RETENTION) {
+          title = "notifications.sellRetention.title";
+          content = JSON.stringify({
+            key: "notifications.sellRetention.content",
+            params: { orderId: order.id.slice(0, 8) },
+          });
+          link = "/listings";
+          // Save retention start timestamp in metadata for countdown timer
+          const currentMeta = order.metadata && typeof order.metadata === "object" ? (order.metadata as Record<string, any>) : {};
+          if (!currentMeta.retentionStartedAt) {
+            await prisma.order.update({
+              where: { id: orderId },
+              data: { metadata: { ...currentMeta, retentionStartedAt: new Date().toISOString() } },
+            });
+          }
+        } else if (status === OrderStatus.AWAITING_APPROVAL) {
+          title = "notifications.sellRequoted.title";
+          const originalPrice = (metadata as any)?.originalPrice || order.totalPrice;
+          content = JSON.stringify({
+            key: "notifications.sellRequoted.content",
+            params: {
+              orderId: order.id.slice(0, 8),
+              originalPrice: Number(originalPrice).toFixed(2),
+              newPrice: Number(order.totalPrice).toFixed(2),
+            },
+          });
+          link = "/listings";
         }
 
-        const shouldNotifyUser = !isRaffleOrder || isRaffleApproval || status === OrderStatus.CANCELLED;
+        const shouldNotifyUser =
+          !isRaffleOrder ||
+          isRaffleApproval ||
+          status === OrderStatus.CANCELLED ||
+          status === OrderStatus.RETENTION ||
+          status === OrderStatus.AWAITING_APPROVAL;
 
         if (shouldNotifyUser) {
           await createNotificationUseCase.execute({
@@ -832,6 +864,34 @@ export class UpdateOrderStatusUseCase {
             content,
             type: "ORDER_STATUS",
             link,
+          });
+        }
+
+        // Shared Admin notification for retention and requote
+        let adminTitle = "";
+        let adminContent = "";
+        if (status === OrderStatus.RETENTION) {
+          adminTitle = "notifications.sellRetentionAdmin.title";
+          adminContent = JSON.stringify({
+            key: "notifications.sellRetentionAdmin.content",
+            params: { orderId: order.id.slice(0, 8) }
+          });
+        } else if (status === OrderStatus.AWAITING_APPROVAL) {
+          adminTitle = "notifications.sellRequotedAdmin.title";
+          adminContent = JSON.stringify({
+            key: "notifications.sellRequotedAdmin.content",
+            params: { orderId: order.id.slice(0, 8), newPrice: order.totalPrice }
+          });
+        }
+
+        if (adminTitle && adminContent) {
+          await createNotificationUseCase.execute({
+            userId: null,
+            adminId: null,
+            title: adminTitle,
+            content: adminContent,
+            type: "ORDER_STATUS",
+            link: "/admin/panel/orders/sell",
           });
         }
 

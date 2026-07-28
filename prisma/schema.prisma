@@ -136,6 +136,8 @@ enum OrderStatus {
   TRADE_PENDING
   COMPLETED
   CANCELLED
+  RETENTION
+  AWAITING_APPROVAL
 }
 
 enum TicketStatus {
