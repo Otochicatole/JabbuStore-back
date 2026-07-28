@@ -765,7 +765,7 @@ export class OrderController {
           params: { orderId: order.id.slice(0, 8), newPrice: order.totalPrice.toFixed(2) }
         }),
         type: "ORDER_STATUS",
-        link: "/admin/panel/orders/sell"
+        link: `/admin/panel/orders/listing?id=${order.id}`
       });
 
       return res.json(updatedOrder);
@@ -830,7 +830,7 @@ export class OrderController {
           params: { orderId: order.id.slice(0, 8) }
         }),
         type: "ORDER_STATUS",
-        link: "/admin/panel/orders/sell"
+        link: `/admin/panel/orders/listing?id=${order.id}`
       });
 
       return res.json(updatedOrder);

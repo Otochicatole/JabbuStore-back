@@ -74,7 +74,7 @@ async function checkExpiredRetentions() {
             }
           }),
           type: "ORDER_STATUS",
-          link: "/admin/panel/orders/sell",
+          link: `/admin/panel/orders/listing?id=${order.id}`,
         });
 
         // Also notify the client

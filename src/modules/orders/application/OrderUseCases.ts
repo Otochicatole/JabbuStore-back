@@ -891,7 +891,7 @@ export class UpdateOrderStatusUseCase {
             title: adminTitle,
             content: adminContent,
             type: "ORDER_STATUS",
-            link: "/admin/panel/orders/sell",
+            link: `/admin/panel/orders/listing?id=${order.id}`,
           });
         }
 
