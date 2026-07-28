@@ -103,7 +103,7 @@ export class TicketService {
           await createNotificationUseCase.execute({
             userId,
             adminId: null,
-            title: 'Nuevo ticket de soporte',
+            title: 'notifications.newTicket.title',
             content: input.message.slice(0, 160),
             type: 'TICKET_MESSAGE',
             link: `/tickets?ticket=${ticket.id}`,
@@ -113,8 +113,14 @@ export class TicketService {
           await createNotificationUseCase.execute({
             userId: null,
             adminId: null,
-            title: 'Nuevo ticket de soporte',
-            content: `${ticket.user?.name || 'Usuario Steam'}: ${input.subject}`,
+            title: 'notifications.newTicket.title',
+            content: JSON.stringify({
+              key: 'notifications.newTicket.content',
+              params: {
+                userName: ticket.user?.name || 'Steam User',
+                subject: input.subject,
+              },
+            }),
             type: 'TICKET_MESSAGE',
             link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
           });
@@ -250,7 +256,7 @@ export class TicketService {
         await createNotificationUseCase.execute({
           userId: ticket.userId,
           adminId: null,
-          title: 'Nuevo mensaje de soporte',
+          title: 'notifications.ticketAlert',
           content: input.body.slice(0, 160),
           type: 'TICKET_MESSAGE',
           link: `/tickets?ticket=${ticket.id}`,
@@ -260,13 +266,19 @@ export class TicketService {
           where: { id: actor.id },
           select: { name: true }
         });
-        const senderName = sender?.name || 'Usuario Steam';
+        const senderName = sender?.name || 'Steam User';
 
         await createNotificationUseCase.execute({
           userId: null,
           adminId: null,
-          title: `Nuevo mensaje de ticket`,
-          content: `${senderName}: ${input.body.slice(0, 160)}`,
+          title: 'notifications.ticketAlert',
+          content: JSON.stringify({
+            key: 'notifications.newTicketMessage.content',
+            params: {
+              senderName,
+              message: input.body.slice(0, 160),
+            },
+          }),
           type: 'TICKET_MESSAGE',
           link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
         });
