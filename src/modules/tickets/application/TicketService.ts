@@ -51,10 +51,18 @@ async function ticketDto(ticket: any, actor: TicketActor) {
 }
 
 export class TicketService {
-  static async create(userId: string, input: { orderId: string; subject: string; message: string }) {
+  static async create(actor: TicketActor, input: { orderId: string; subject: string; message: string }) {
     return prisma.$transaction(async (tx) => {
-      const order = await tx.order.findFirst({ where: { id: input.orderId, userId } });
+      const isActorAdmin = actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN';
+
+      // Find the order
+      const order = isActorAdmin
+        ? await tx.order.findUnique({ where: { id: input.orderId } })
+        : await tx.order.findFirst({ where: { id: input.orderId, userId: actor.id } });
+
       if (!order) throw new Error('ORDER_NOT_FOUND');
+
+      const userId = order.userId; // Ticket belongs to the order owner
 
       const openCount = await tx.orderTicket.count({
         where: { orderId: input.orderId, userId, status: 'OPEN' },
@@ -66,11 +74,13 @@ export class TicketService {
           orderId: input.orderId,
           userId,
           subject: input.subject,
-          userLastReadAt: new Date(),
+          userLastReadAt: isActorAdmin ? null : new Date(),
+          adminLastReadAt: isActorAdmin ? new Date() : null,
           messages: {
             create: {
-              senderType: 'USER',
-              senderUserId: userId,
+              senderType: isActorAdmin ? 'ADMIN' : 'USER',
+              senderUserId: isActorAdmin ? null : actor.id,
+              senderAdminId: isActorAdmin ? actor.id : null,
               clientMessageId: randomUUID(),
               body: input.message,
             },
@@ -82,18 +92,33 @@ export class TicketService {
           messages: { orderBy: { createdAt: 'desc' }, take: 1 },
         },
       });
-      const result = await ticketDto(ticket, { id: userId, role: 'USER' });
-      
-      // Crear notificación para administración
+      const result = await ticketDto(ticket, actor);
+
+      // Crear notificación
       try {
         const notificationRepo = new PrismaNotificationRepository();
         const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepo);
-        await createNotificationUseCase.execute({
-          title: 'Nuevo ticket de soporte',
-          content: `${ticket.user?.name || 'Usuario Steam'}: ${input.subject}`,
-          type: 'TICKET_MESSAGE',
-          link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
-        });
+        if (isActorAdmin) {
+          // Notify client user
+          await createNotificationUseCase.execute({
+            userId,
+            adminId: null,
+            title: 'Nuevo ticket de soporte',
+            content: input.message.slice(0, 160),
+            type: 'TICKET_MESSAGE',
+            link: `/tickets?ticket=${ticket.id}`,
+          });
+        } else {
+          // Notify admins
+          await createNotificationUseCase.execute({
+            userId: null,
+            adminId: null,
+            title: 'Nuevo ticket de soporte',
+            content: `${ticket.user?.name || 'Usuario Steam'}: ${input.subject}`,
+            type: 'TICKET_MESSAGE',
+            link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
+          });
+        }
       } catch (err) {
         console.error('[TicketService.create] Error creating database notification:', err);
       }

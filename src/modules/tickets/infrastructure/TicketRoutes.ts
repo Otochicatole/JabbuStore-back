@@ -28,11 +28,11 @@ function errorResponse(res: any, error: unknown) {
   return res.status(status).json({ error: code });
 }
 
-router.post('/', ticketUserAuth, createLimiter, async (req, res) => {
+router.post('/', ticketActorAuth, createLimiter, async (req, res) => {
   const parsed = createTicketSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'INVALID_TICKET' });
   try {
-    const ticket = await TicketService.create(actorFrom(req).id, parsed.data);
+    const ticket = await TicketService.create(actorFrom(req), parsed.data);
     emitTicketUpdated(ticket);
     emitTicketCreatedNotification(ticket);
     return res.status(201).json(ticket);
@@ -53,9 +53,11 @@ router.get('/me', ticketUserAuth, async (req, res) => {
 router.get('/admin', ticketAdminAuth, async (req, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
   const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 120) : undefined;
+  const orderId = typeof req.query.orderId === 'string' ? req.query.orderId : undefined;
   return res.json(await TicketService.list(actorFrom(req), {
     ...(status ? { status } : {}),
     ...(search ? { search } : {}),
+    ...(orderId ? { orderId } : {}),
   }));
 });
 
