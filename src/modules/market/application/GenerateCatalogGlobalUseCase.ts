@@ -33,6 +33,35 @@ export interface GenerateCatalogGlobalResult {
   durationMs: number;
 }
 
+const VALID_WEAPON_NAMES = [
+  "AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20",
+  "Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000",
+  "MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon",
+  "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
+];
+
+function isSkinOnly(marketHashName: string): boolean {
+  if (!marketHashName || typeof marketHashName !== "string") return false;
+  let name = marketHashName.trim();
+
+  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
+  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
+  
+  if (name.startsWith("Souvenir ")) name = name.slice(9).trim();
+
+  // Todos los cuchillos y guantes comienzan con ★
+  if (name.startsWith("★")) return true;
+
+  // Todas las skins de armas deben comenzar con "<NombreArma> |"
+  for (const weapon of VALID_WEAPON_NAMES) {
+    if (name.startsWith(`${weapon} |`)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export class GenerateCatalogGlobalUseCase {
   constructor(
     private readonly catalogStore = new SteamWebApiItemsCatalogStore(),
@@ -71,12 +100,14 @@ export class GenerateCatalogGlobalUseCase {
     const catalogIndex = buildCatalogIndex(catalogSnapshot.items);
     const pricesIndex = buildYoupinPricesIndex(youpinPricesPayload.items);
 
-    // 4. Cruzar y filtrar items
+    // 4. Cruzar y filtrar items (solo skins, sin stickers, llaveros ni cajas)
     const matchedItems: CatalogGlobalItemRow[] = [];
 
     for (const [marketHashName, priceRow] of pricesIndex.entries()) {
       const youpinAsk = typeof priceRow.price === "number" ? priceRow.price : 0;
       if (youpinAsk <= 0) continue;
+
+      if (!isSkinOnly(marketHashName)) continue;
 
       const catalogRow = catalogIndex.get(marketHashName);
       if (!catalogRow) continue;

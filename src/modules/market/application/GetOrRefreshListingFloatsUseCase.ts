@@ -71,14 +71,18 @@ export class GetOrRefreshListingFloatsUseCase {
       throw new Error(`El listing "${listingId}" no es de YouPin (provider=${listing.provider}).`);
     }
 
-    // 2. Verificar cache
+    // 2. Verificar si hay datos en DB
+    const existingCount = await prisma.floatItem.count({
+      where: { resaleItemId: listingId, market: 'YOUPIN', available: true },
+    });
+
     const needsRefresh = options.forceRefresh || this.cachePolicy.shouldRefresh(listing.floatsSyncedAt);
     let refreshFailed = false;
     let refreshError: string | null = null;
     let floatsSyncedAt = listing.floatsSyncedAt;
 
     if (needsRefresh) {
-      // 3. Single-flight: si ya hay una descarga en curso para este listing, esperar
+      // Single-flight
       let refreshPromise = inflight.get(listingId);
 
       if (!refreshPromise) {
@@ -86,17 +90,35 @@ export class GetOrRefreshListingFloatsUseCase {
           inflight.delete(listingId);
         });
         inflight.set(listingId, refreshPromise);
-      } else {
-        console.log(
-          `[GetOrRefreshFloats] listingId=${listingId} single-flight: esperando descarga en curso`,
-        );
       }
 
-      const refreshResult = await refreshPromise;
-      floatsSyncedAt = refreshResult.floatsSyncedAt;
-      if (refreshResult.error) {
-        refreshFailed = true;
-        refreshError = refreshResult.error;
+      if (existingCount > 0) {
+        // Stale-While-Revalidate: si ya tenemos datos en DB, los devolvemos INMEDIATAMENTE
+        // y dejamos la sincronización corriendo en segundo plano sin bloquear al usuario.
+        console.log(
+          `[GetOrRefreshFloats] listingId=${listingId}: Sirviendo ${existingCount} floats desde DB (refresh en background)`,
+        );
+        // Capturamos cualquier error en background sin tumbar la petición
+        refreshPromise.catch((err) =>
+          console.error(`[GetOrRefreshFloats] Background refresh error for ${listingId}:`, err),
+        );
+      } else {
+        // Si no hay ningún float en DB, esperamos con un timeout máximo de 6s para no congelar HTTP
+        try {
+          const timeoutPromise = new Promise<{ floatsSyncedAt: Date | null; error: string }>((_, reject) =>
+            setTimeout(() => reject(new Error('Tiempo de espera agotado al descargar floats (timeout 6s)')), 6000),
+          );
+          const refreshResult = await Promise.race([refreshPromise, timeoutPromise]);
+          floatsSyncedAt = refreshResult.floatsSyncedAt;
+          if (refreshResult.error) {
+            refreshFailed = true;
+            refreshError = refreshResult.error;
+          }
+        } catch (err: any) {
+          console.warn(`[GetOrRefreshFloats] listingId=${listingId}: Timeout/error esperando descarga inicial: ${err.message}`);
+          refreshFailed = true;
+          refreshError = err.message;
+        }
       }
     }
 

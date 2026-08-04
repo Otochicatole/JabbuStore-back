@@ -265,6 +265,33 @@ function stripInternal(item: InternalCatalogItem): CatalogItem {
   return publicItem;
 }
 
+const VALID_WEAPON_NAMES = [
+  "AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20",
+  "Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000",
+  "MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon",
+  "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
+];
+
+function isSkinOnly(marketHashName: string): boolean {
+  if (!marketHashName || typeof marketHashName !== "string") return false;
+  let name = marketHashName.trim();
+
+  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
+  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
+  
+  if (name.startsWith("Souvenir ")) name = name.slice(9).trim();
+
+  if (name.startsWith("★")) return true;
+
+  for (const weapon of VALID_WEAPON_NAMES) {
+    if (name.startsWith(`${weapon} |`)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
@@ -349,6 +376,8 @@ export class GetCatalogItemsUseCase {
           catalogGlobalItems = payload.items.flatMap((item): InternalCatalogItem[] => {
             const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
             if (!name || typeof name !== 'string') return [];
+
+            if (!isSkinOnly(name)) return [];
 
             const parsed = parseName(name);
             if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {

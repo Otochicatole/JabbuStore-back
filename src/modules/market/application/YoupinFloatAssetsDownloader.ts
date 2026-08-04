@@ -25,10 +25,10 @@ export interface FloatDownloadResult {
 
 const ENV_DEFAULTS: FloatDownloadConfig = {
   pageSize: Math.max(1, Number(process.env.YOUPIN_FLOAT_PAGE_SIZE) || 100),
-  maxPages: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_PAGES) || 5),
-  maxRetries: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_RETRIES) || 3),
-  retryDelayMs: Math.max(100, Number(process.env.YOUPIN_FLOAT_RETRY_DELAY_MS) || 1_000),
-  requestTimeoutMs: Math.max(1_000, Number(process.env.YOUPIN_FLOAT_REQUEST_TIMEOUT_MS) || 30_000),
+  maxPages: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_PAGES) || 2),
+  maxRetries: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_RETRIES) || 2),
+  retryDelayMs: Math.max(100, Number(process.env.YOUPIN_FLOAT_RETRY_DELAY_MS) || 400),
+  requestTimeoutMs: Math.max(1_000, Number(process.env.YOUPIN_FLOAT_REQUEST_TIMEOUT_MS) || 5_000),
 };
 
 function jitter(base: number): number {
