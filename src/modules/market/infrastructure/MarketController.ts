@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
-import { RunFullCatalogSyncUseCase } from '../application/RunFullCatalogSyncUseCase';
-import { GetMarketSyncStatusUseCase } from '../application/GetMarketSyncStatusUseCase';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
 import { DownloadYoupinPricesUseCase } from '../application/DownloadYoupinPricesUseCase';
 import { GenerateCatalogGlobalUseCase } from '../application/GenerateCatalogGlobalUseCase';
@@ -16,8 +14,6 @@ export class MarketController {
 
   constructor(
     private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
-    private runFullCatalogSyncUseCase: RunFullCatalogSyncUseCase,
-    private getMarketSyncStatusUseCase: GetMarketSyncStatusUseCase,
     private getOrRefreshListingFloatsUseCase: GetOrRefreshListingFloatsUseCase,
     private marketRepository = new PrismaMarketRepository(),
   ) {
@@ -103,61 +99,6 @@ export class MarketController {
     } catch (error: any) {
       console.error('[Market Controller] Error en Paso 4:', error);
       res.status(500).json({ error: error.message || 'Error al sincronizar a BD' });
-    }
-  }
-
-  /** POST /market/sync — Sincronización Completa (Pasos 1 a 4). */
-  async triggerSync(_req: Request, res: Response): Promise<void> {
-    try {
-      const started = this.runFullCatalogSyncUseCase.tryStart('manual');
-      if (!started.started) {
-        const blockedByBots = started.blockingReason === 'bot_only';
-        const message = blockedByBots
-          ? 'Hay una sincronización de bots en curso.'
-          : 'Ya hay una sincronización de assets en curso.';
-        res.status(409).json({
-          started: false,
-          error: message,
-          message,
-          blockingJob: started.blockingReason,
-          ...(blockedByBots
-            ? {}
-            : { status: await this.getMarketSyncStatusUseCase.execute() }),
-        });
-        return;
-      }
-
-      res.status(202).json({
-        started: true,
-        message: 'Sincronización completa de YouPin iniciada en segundo plano.',
-        statusUrl: '/api/market/sync/status',
-      });
-
-      void started.execution.then(
-        (result) => {
-          console.log(
-            `[Market Assets Background] Sincronización global YouPin completada: ${result.matched} listings.`,
-          );
-        },
-        (error) => {
-          console.error('[Market Assets Background] Error:', error);
-        },
-      );
-
-    } catch (error: any) {
-      console.error('[Market Controller] Error al iniciar sincronización:', error);
-      res.status(500).json({ error: error.message || 'Error al iniciar la sincronización.' });
-    }
-  }
-
-  /** GET /market/sync/status — devuelve exclusivamente el estado del job de assets. */
-  async getSyncStatus(_req: Request, res: Response): Promise<void> {
-    try {
-      const status = await this.getMarketSyncStatusUseCase.execute();
-      res.json(status);
-    } catch (error: any) {
-      console.error('[Market Controller] Error obteniendo status de sync:', error);
-      res.status(500).json({ error: error.message || 'Error al obtener el estado de sincronización.' });
     }
   }
 

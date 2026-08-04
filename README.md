@@ -33,7 +33,7 @@ En el directorio del proyecto, puedes ejecutar:
 * `bun run prisma:generate` o `npm run prisma:generate`: Genera el cliente de Prisma basado en el esquema.
 * `npm run prisma:check`: Comprueba que la cadena completa de migraciones produzca exactamente el esquema Prisma actual.
 * `bun run prisma:migrate` o `npm run prisma:migrate`: Ejecuta las migraciones pendientes en la base de datos de desarrollo.
-* **Scripts Adicionales:** `reindex-floats` y `fix-bot-inspect-links` (scripts utilitarios específicos del negocio).
+* **Scripts Adicionales:** `fix-bot-inspect-links` (scripts utilitarios específicos del negocio).
 
 ## Despliegue de base de datos
 

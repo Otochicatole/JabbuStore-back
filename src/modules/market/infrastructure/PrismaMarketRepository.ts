@@ -5,7 +5,6 @@ import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketListing, MarketListingUpsert } from '../domain/MarketListing';
 import { FloatItem } from '../domain/FloatItem';
 import { MarketStoreAsset } from '../domain/MarketStoreAsset';
-import { marketSyncProgressService } from '../application/MarketSyncProgressService';
 
 function mapMarketListingRow(
   row: {
@@ -190,9 +189,6 @@ export class PrismaMarketRepository implements IMarketRepository {
     const manualCount = sanitized.filter((s) => manualNames.has(s.name)).length;
     const autoCount = sanitized.length - manualCount;
 
-    // Reportar inicio de guardado en base de datos
-    marketSyncProgressService.startDatabaseSave(sanitized.length);
-
     const upsertOne = (listing: (typeof sanitized)[number]) => {
       const isManual = manualNames.has(listing.name);
       return prisma.marketListing.upsert({
@@ -223,7 +219,6 @@ export class PrismaMarketRepository implements IMarketRepository {
       await Promise.all(batch.map((listing) => upsertOne(listing)));
 
       const done = Math.min(i + parallelSize, sanitized.length);
-      marketSyncProgressService.updateDatabaseProgress(done);
       if (done % 1000 === 0 || done === sanitized.length) {
         console.log(
           `[Prisma Market Repository] Progreso: ${done}/${sanitized.length}`,
@@ -292,7 +287,6 @@ export class PrismaMarketRepository implements IMarketRepository {
 
     if (totalTouched === 0) return;
 
-    marketSyncProgressService.startDatabaseSave(totalTouched);
 
     const manualPrices =
       listingNames.length > 0
@@ -349,7 +343,6 @@ export class PrismaMarketRepository implements IMarketRepository {
       );
 
       processed += batch.length;
-      marketSyncProgressService.updateDatabaseProgress(processed);
     }
 
     if (listingNames.length > 0) {
@@ -398,7 +391,6 @@ export class PrismaMarketRepository implements IMarketRepository {
       }
 
       processed += emptyNames.length;
-      marketSyncProgressService.updateDatabaseProgress(processed);
     }
   }
 
@@ -427,7 +419,6 @@ export class PrismaMarketRepository implements IMarketRepository {
     }
 
     const now = new Date();
-    marketSyncProgressService.startDatabaseSave(listings.length);
 
     await prisma.$transaction(
       async (tx) => {
@@ -474,9 +465,6 @@ export class PrismaMarketRepository implements IMarketRepository {
           await tx.marketListing.createMany({
             data: automaticRows.slice(index, index + 400),
           });
-          marketSyncProgressService.updateDatabaseProgress(
-            Math.min(index + 400, automaticRows.length),
-          );
         }
 
         // A manual listing included in the new snapshot keeps its price and ID,
@@ -534,7 +522,6 @@ export class PrismaMarketRepository implements IMarketRepository {
           });
         }
 
-        marketSyncProgressService.updateDatabaseProgress(listings.length);
       },
       { maxWait: 10_000, timeout: 120_000 },
     );

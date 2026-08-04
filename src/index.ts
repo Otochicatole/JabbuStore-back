@@ -176,8 +176,6 @@ app.get('/', (req, res) => {
   });
 });
 
-import { startMarketAssetsSyncScheduler } from './modules/market/infrastructure/FullCatalogSyncScheduler';
-import { startLocalPriceCatalogSyncScheduler } from './modules/pricing/infrastructure/LocalPriceCatalogSyncScheduler';
 import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
 import { startRetentionScheduler } from './modules/orders/infrastructure/RetentionScheduler';
 
@@ -186,7 +184,7 @@ async function bootstrap() {
   await prisma.runtimeSetting.deleteMany({
     where: {
       key: {
-        notIn: ['ENABLE_SYNC', 'ENABLE_ITEMS_CATALOG_SYNC'],
+        notIn: [],
       },
     },
   });
@@ -197,10 +195,6 @@ async function bootstrap() {
   initializeTicketSocket(httpServer);
   httpServer.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
-    // Jobs independientes: catálogo local de precios y snapshot de assets.
-    // Ninguno ejecuta el inventario de bots; esa operación sigue siendo manual.
-    startLocalPriceCatalogSyncScheduler();
-    startMarketAssetsSyncScheduler();
     // Ejecución automática de sorteos programados vencidos
     startRaffleScheduler();
     // Verificación periódica de retenciones de venta vencidas (8 días)

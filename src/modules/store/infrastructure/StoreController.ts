@@ -7,7 +7,6 @@ import {
   itemsCatalogRefreshService,
 } from '../../../modules/pricing';
 import { BotService } from '../../marketplace/application/BotService';
-import { syncExecutionCoordinator } from '../../market/application/SyncExecutionCoordinator';
 
 const botPriceSyncService = new BotPriceSyncService();
 
@@ -29,21 +28,7 @@ export class StoreController {
   }
 
   async syncPrices(req: Request, res: Response) {
-    let lease: ReturnType<typeof syncExecutionCoordinator.tryAcquire> = null;
-    try {
-      lease = syncExecutionCoordinator.tryAcquire('bot_only');
-      if (!lease) {
-        const activeJob =
-          syncExecutionCoordinator.getBlockingKind('bot_only') ?? 'bot_only';
-        return res.status(409).json({
-          started: false,
-          error:
-            activeJob === 'market_assets'
-              ? 'Hay una sincronización de assets en curso; los bots se omiten hasta que termine.'
-              : 'Ya hay una sincronización de bots en curso.',
-          activeJob,
-        });
-      }
+
       console.log(
         '[StoreController] Solicitud de sync de precios de bots recibida. Ejecutando en segundo plano...',
       );
@@ -105,15 +90,8 @@ export class StoreController {
             '[Store Sync Prices Background Error]',
             err.message || err,
           );
-        } finally {
-          lease?.release();
         }
-      })();
-    } catch (error: any) {
-      lease?.release();
-      console.error('[StoreController Error] Failed to sync bot prices:', error);
-      res.status(500).json({ error: error.message || 'Failed to sync bot prices.' });
-    }
+    })();
   }
 
   async getPriceCatalogStatus(req: Request, res: Response) {

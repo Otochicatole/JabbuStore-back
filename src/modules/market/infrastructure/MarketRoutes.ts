@@ -3,9 +3,7 @@ import { MarketController } from './MarketController';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middlewares/authMiddleware';
 import {
-  getMarketSyncStatusUseCase,
   marketRepository,
-  runFullCatalogSyncUseCase,
   getOrRefreshListingFloatsUseCase,
 } from './MarketSyncDependencies';
 
@@ -16,8 +14,6 @@ const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase(marketReposi
 
 const marketController = new MarketController(
   getMarketStoreAssetsUseCase,
-  runFullCatalogSyncUseCase,
-  getMarketSyncStatusUseCase,
   getOrRefreshListingFloatsUseCase,
 );
 
@@ -41,10 +37,5 @@ router.post('/sync-catalog-global-db', authMiddleware, adminOnly, (req, res) =>
   marketController.syncCatalogGlobalDb(req, res),
 );
 
-// Ruta protegida — sincronización completa (Pasos 1 a 4)
-router.post('/sync', authMiddleware, adminOnly, (req, res) => marketController.triggerSync(req, res));
-
-// Ruta protegida — obtener estado de la sincronización en curso
-router.get('/sync/status', authMiddleware, adminOnly, (req, res) => marketController.getSyncStatus(req, res));
 
 export default router;

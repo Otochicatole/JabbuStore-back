@@ -4,7 +4,6 @@ import {
   type FloatRateLimitPriority,
   type FloatRateLimitSnapshot,
 } from "../application/FloatRateLimiter";
-import { marketSyncProgressService } from "../application/MarketSyncProgressService";
 
 /** GET /steam/api/float/assets (sin API key en constantes/logs). */
 export const STEAM_FLOAT_ASSETS_URL =
@@ -328,7 +327,6 @@ export class SteamWebApiFloatAssetsClient {
     let rateLimited = false;
 
     for (let page = 0; page < maxPages; page++) {
-      marketSyncProgressService.updateFetchPage(page + 1, all.length);
       const result = await this.fetchPage({
         source: "youpin",
         onlyMarketId: true,

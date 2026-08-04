@@ -19,11 +19,7 @@ const toPositiveInteger = (value: string | undefined, fallback: number) => {
   return parsed > 0 ? parsed : fallback;
 };
 
-const marketAssetsSyncIntervalMinutes = toPositiveInteger(
-  process.env.MARKET_ASSETS_SYNC_INTERVAL_MINUTES ||
-    process.env.FULL_CATALOG_SYNC_INTERVAL_MINUTES,
-  300,
-);
+
 
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -34,18 +30,7 @@ export const config = {
   backendUrl: process.env.BACKEND_URL || 'http://localhost:3001',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   
-  /**
-   * Intervalo de actualización automática de la base de datos de ítems para venta (en minutos).
-   * Refresca los inventarios desde Steam hacia la base de datos local.
-   * Se puede configurar mediante la variable de entorno STORE_SYNC_INTERVAL_MINUTES.
-   */
-  storeSyncIntervalMinutes: parseInt(process.env.STORE_SYNC_INTERVAL_MINUTES || '180', 10),
   
-  /** Habilitar/deshabilitar sólo el scheduler de assets del Global Market. */
-  enableSync: process.env.ENABLE_SYNC === 'true',
-  /** Habilitar/deshabilitar solo el scheduler automático del catálogo local de precios. */
-  enableItemsCatalogSync: process.env.ENABLE_ITEMS_CATALOG_SYNC === 'true',
-
   /**
    * Configuración del indexado de floats (endpoint /steam/api/float/assets).
    *
@@ -139,16 +124,6 @@ export const config = {
     ),
   },
 
-  /** Scheduler independiente del snapshot de assets del Global Market. */
-  marketAssetsSync: {
-    intervalMinutes: marketAssetsSyncIntervalMinutes,
-  },
-
-  /** @deprecated Alias interno para código anterior a la separación de jobs. */
-  fullCatalogSync: {
-    intervalMinutes: marketAssetsSyncIntervalMinutes,
-  },
-
   /** Legacy/diagnóstico: GET /market/youpin/prices (MCP Market Prices). */
   youpinPrices: {
     market: 'youpin' as const,
@@ -171,11 +146,6 @@ export const config = {
     currency: process.env.ITEMS_CATALOG_CURRENCY || process.env.ITEMS_PRICES_CURRENCY || 'USD',
     pageSize: parseInt(process.env.ITEMS_CATALOG_PAGE_SIZE || '50000', 10),
     maxPages: parseInt(process.env.ITEMS_CATALOG_MAX_PAGES || '10', 10),
-    syncIntervalMinutes: toPositiveInteger(
-      process.env.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES ||
-        process.env.STORE_SYNC_INTERVAL_MINUTES,
-      300,
-    ),
     staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),
     select:
       process.env.ITEMS_CATALOG_SELECT ||
@@ -202,19 +172,6 @@ export async function applyRuntimeConfigOverrides() {
   config.steamApiKey = await AdminSecureConfigService.getSecretValue('STEAM_API_KEY');
   config.steamwebapiApiKey = await AdminSecureConfigService.getSecretValue('STEAMWEBAPI_API_KEY');
 
-  config.storeSyncIntervalMinutes = toPositiveInteger(
-    runtime.STORE_SYNC_INTERVAL_MINUTES,
-    config.storeSyncIntervalMinutes,
-  );
-  config.enableSync = toBoolean(runtime.ENABLE_SYNC, config.enableSync);
-  config.enableItemsCatalogSync = toBoolean(
-    runtime.ENABLE_ITEMS_CATALOG_SYNC,
-    config.enableItemsCatalogSync,
-  );
-  config.itemsCatalog.syncIntervalMinutes = toPositiveInteger(
-    runtime.ITEMS_CATALOG_SYNC_INTERVAL_MINUTES,
-    config.itemsCatalog.syncIntervalMinutes,
-  );
   config.marketSync.pageSize = toPositiveInteger(
     runtime.MARKET_SYNC_PAGE_SIZE,
     config.marketSync.pageSize,
