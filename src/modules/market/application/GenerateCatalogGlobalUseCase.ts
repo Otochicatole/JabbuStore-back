@@ -47,7 +47,7 @@ function isSkinOnly(marketHashName: string): boolean {
   if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
   else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
   
-  if (name.startsWith("Souvenir ")) name = name.slice(9).trim();
+  if (name.startsWith("Souvenir ")) return false;
 
   // Todos los cuchillos y guantes comienzan con ★
   if (name.startsWith("★")) return true;
