@@ -6,13 +6,11 @@ node_modules
 dist
 
 /src/generated/prisma
-steamwebapi json data/
 steamwebapi-json-data/
+steamwebapi-json-data/*
 storage/
 
 # SQLite local
 prisma/dev.db
 prisma/dev.db-journal
 **/dev.db
-
-storage/
