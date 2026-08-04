@@ -27,9 +27,7 @@ router.get('/listings/:id/floats', (req, res) => marketController.getFloats(req,
 router.post('/download-items-catalog', authMiddleware, adminOnly, (req, res) =>
   marketController.downloadItemsCatalog(req, res),
 );
-router.post('/download-youpin-prices', authMiddleware, adminOnly, (req, res) =>
-  marketController.downloadYoupinPrices(req, res),
-);
+
 router.post('/generate-catalog-global', authMiddleware, adminOnly, (req, res) =>
   marketController.generateCatalogGlobal(req, res),
 );

@@ -2,13 +2,11 @@ import { Request, Response } from 'express';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
-import { DownloadYoupinPricesUseCase } from '../application/DownloadYoupinPricesUseCase';
 import { GenerateCatalogGlobalUseCase } from '../application/GenerateCatalogGlobalUseCase';
 import { SyncCatalogGlobalToDbUseCase } from '../application/SyncCatalogGlobalToDbUseCase';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
 
 export class MarketController {
-  private downloadYoupinPricesUseCase = new DownloadYoupinPricesUseCase();
   private generateCatalogGlobalUseCase = new GenerateCatalogGlobalUseCase();
   private syncCatalogGlobalToDbUseCase: SyncCatalogGlobalToDbUseCase;
 
@@ -53,23 +51,6 @@ export class MarketController {
       res.status(500).json({ error: error.message || 'Error al descargar items-catalog.json' });
     }
   }
-
-  /** POST /market/download-youpin-prices — Paso 2: Descargar youpin-prices.json */
-  async downloadYoupinPrices(_req: Request, res: Response): Promise<void> {
-    try {
-      console.log('[Market Controller] Iniciando Paso 2: Descargar youpin-prices.json...');
-      const result = await this.downloadYoupinPricesUseCase.execute();
-      res.json({
-        success: true,
-        message: 'youpin-prices.json descargado correctamente.',
-        ...result,
-      });
-    } catch (error: any) {
-      console.error('[Market Controller] Error en Paso 2:', error);
-      res.status(500).json({ error: error.message || 'Error al descargar youpin-prices.json' });
-    }
-  }
-
   /** POST /market/generate-catalog-global — Paso 3: Generar catalog-global.json */
   async generateCatalogGlobal(_req: Request, res: Response): Promise<void> {
     try {

@@ -1,9 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { SteamWebApiItemsCatalogStore } from "../../pricing";
-import type { SteamWebApiItemsCatalogRow, SteamWebApiYoupinPriceRow } from "../../pricing/domain/types";
-import { buildCatalogIndex, buildYoupinPricesIndex } from "./YoupinCatalogMatcher";
-import type { YoupinPricesJsonPayload } from "./DownloadYoupinPricesUseCase";
+import type { SteamWebApiItemsCatalogRow } from "../../pricing/domain/types";
 
 export const CATALOG_GLOBAL_JSON_PATH = path.join(
   process.cwd(),
@@ -13,13 +11,12 @@ export const CATALOG_GLOBAL_JSON_PATH = path.join(
 
 export interface CatalogGlobalItemRow extends SteamWebApiItemsCatalogRow {
   youpinAsk: number;
-  youpinVolume: number | null;
+  youpinVolume: null;
 }
 
 export interface CatalogGlobalPayload {
   generatedAt: string;
   totalCatalogItems: number;
-  totalPriceRows: number;
   matchedItemsCount: number;
   items: CatalogGlobalItemRow[];
 }
@@ -27,7 +24,6 @@ export interface CatalogGlobalPayload {
 export interface GenerateCatalogGlobalResult {
   generatedAt: string;
   totalCatalogItems: number;
-  totalPriceRows: number;
   matchedItemsCount: number;
   filePath: string;
   durationMs: number;
@@ -62,20 +58,24 @@ function isSkinOnly(marketHashName: string): boolean {
   return false;
 }
 
+function getCatalogMarketHashName(row: SteamWebApiItemsCatalogRow): string | null {
+  const name =
+    row.markethashname ??
+    row.market_hash_name ??
+    row.marketname ??
+    row.normalizedname;
+  return typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
+}
+
 export class GenerateCatalogGlobalUseCase {
   constructor(
     private readonly catalogStore = new SteamWebApiItemsCatalogStore(),
-    private readonly youpinPricesPath = path.join(
-      process.cwd(),
-      "steamwebapi-json-data",
-      "youpin-prices.json",
-    ),
     private readonly catalogGlobalPath = CATALOG_GLOBAL_JSON_PATH,
   ) {}
 
   async execute(): Promise<GenerateCatalogGlobalResult> {
     const start = Date.now();
-    console.log("[GenerateCatalogGlobal] Leyendo items-catalog.json y youpin-prices.json...");
+    console.log("[GenerateCatalogGlobal] Leyendo items-catalog.json...");
 
     // 1. Leer items-catalog.json
     const catalogSnapshot = await this.catalogStore.readCatalog();
@@ -83,48 +83,36 @@ export class GenerateCatalogGlobalUseCase {
       throw new Error("items-catalog.json no esta disponible o esta vacio. Ejecuta el Paso 1 primero.");
     }
 
-    // 2. Leer youpin-prices.json
-    let youpinPricesPayload: YoupinPricesJsonPayload;
-    try {
-      const raw = await fs.readFile(this.youpinPricesPath, "utf-8");
-      youpinPricesPayload = JSON.parse(raw);
-    } catch (err) {
-      throw new Error("youpin-prices.json no esta disponible. Ejecuta el Paso 2 primero.");
-    }
-
-    if (!Array.isArray(youpinPricesPayload.items) || youpinPricesPayload.items.length === 0) {
-      throw new Error("youpin-prices.json no contiene items validos.");
-    }
-
-    // 3. Construir índices
-    const catalogIndex = buildCatalogIndex(catalogSnapshot.items);
-    const pricesIndex = buildYoupinPricesIndex(youpinPricesPayload.items);
-
-    // 4. Cruzar y filtrar items (solo skins, sin stickers, llaveros ni cajas)
+    // 2. Filtrar items (solo skins, sin stickers, llaveros ni cajas)
     const matchedItems: CatalogGlobalItemRow[] = [];
+    const index = new Set<string>(); // para evitar duplicados
 
-    for (const [marketHashName, priceRow] of pricesIndex.entries()) {
-      const youpinAsk = typeof priceRow.price === "number" ? priceRow.price : 0;
-      if (youpinAsk <= 0) continue;
+    for (const catalogRow of catalogSnapshot.items) {
+      const marketHashName = getCatalogMarketHashName(catalogRow);
+      if (!marketHashName) continue;
+      
+      if (index.has(marketHashName)) continue;
 
       if (!isSkinOnly(marketHashName)) continue;
 
-      const catalogRow = catalogIndex.get(marketHashName);
-      if (!catalogRow) continue;
+      // Usamos el precio del catálogo. pricesafe o pricereal.
+      const youpinAsk = catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
+      if (youpinAsk <= 0) continue;
+
+      index.add(marketHashName);
 
       matchedItems.push({
         ...catalogRow,
         markethashname: marketHashName,
         youpinAsk,
-        youpinVolume: typeof priceRow.quantity === "number" ? priceRow.quantity : null,
+        youpinVolume: null,
       });
     }
 
     const generatedAt = new Date().toISOString();
     const payload: CatalogGlobalPayload = {
       generatedAt,
-      totalCatalogItems: catalogIndex.size,
-      totalPriceRows: pricesIndex.size,
+      totalCatalogItems: catalogSnapshot.items.length,
       matchedItemsCount: matchedItems.length,
       items: matchedItems,
     };
@@ -140,8 +128,7 @@ export class GenerateCatalogGlobalUseCase {
 
     return {
       generatedAt,
-      totalCatalogItems: catalogIndex.size,
-      totalPriceRows: pricesIndex.size,
+      totalCatalogItems: catalogSnapshot.items.length,
       matchedItemsCount: matchedItems.length,
       filePath: this.catalogGlobalPath,
       durationMs,
