@@ -12,6 +12,12 @@ import { PrismaMarketSyncStateRepository } from "./PrismaMarketSyncStateReposito
 import { SteamWebApiFloatAssetsClient } from "./SteamWebApiFloatAssetsClient";
 import { SteamWebApiMarketAssetsCatalogClient } from "./SteamWebApiMarketAssetsCatalogClient";
 
+// Nuevos imports para refactor YouPin
+import { SyncYoupinCatalogUseCase } from "../application/SyncYoupinCatalogUseCase";
+import { GetOrRefreshListingFloatsUseCase } from "../application/GetOrRefreshListingFloatsUseCase";
+import { FloatCachePolicy } from "../application/FloatCachePolicy";
+import { YoupinFloatAssetsDownloader } from "../application/YoupinFloatAssetsDownloader";
+
 export const marketRepository = new PrismaMarketRepository();
 export const marketSyncStateRepository =
   new PrismaMarketSyncStateRepository();
@@ -48,8 +54,21 @@ export const refreshMarketAssetsCatalogUseCase =
     marketSyncStateRepository,
   );
 
+// Instanciar los nuevos casos de uso del refactor
+export const syncYoupinCatalogUseCase = new SyncYoupinCatalogUseCase(
+  marketRepository,
+  marketSyncStateRepository,
+);
+
+export const getOrRefreshListingFloatsUseCase = new GetOrRefreshListingFloatsUseCase(
+  marketRepository,
+  new FloatCachePolicy(),
+  new YoupinFloatAssetsDownloader(),
+);
+
+// Actualizar RunFullCatalogSyncUseCase para que use la nueva lógica de sync global (Proceso 1)
 export const runFullCatalogSyncUseCase = new RunFullCatalogSyncUseCase(
-  refreshMarketAssetsCatalogUseCase,
+  syncYoupinCatalogUseCase as any, // Hacemos cast a any temporalmente si las interfaces no machean
   marketSyncStateRepository,
 );
 

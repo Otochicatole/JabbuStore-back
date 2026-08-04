@@ -18,9 +18,12 @@ export interface FullCatalogSyncSchedulerStatus {
 }
 
 export interface FullCatalogSyncSchedulerResult {
-  snapshotHash: string;
-  validAssets: number;
-  listings: number;
+  matched: number;
+  skippedNoPrice: number;
+  skippedNotInCatalog: number;
+  totalCatalogItems: number;
+  totalPriceRows: number;
+  durationMs: number;
 }
 
 export interface FullCatalogSyncSchedulerDependencies {
@@ -110,7 +113,7 @@ export function createFullCatalogSyncScheduler(
       const result = await dependencies.execute();
       succeeded = true;
       logger.log(
-        `[Market Assets Scheduler] Snapshot ${result.snapshotHash.slice(0, 12)}: ${result.validAssets} assets y ${result.listings} listings.`,
+        `[Market Assets Scheduler] Sincronización global YouPin completada: ${result.matched} listings cruzados.`,
       );
     } catch (error) {
       logger.error("[Market Assets Scheduler] Error:", error);

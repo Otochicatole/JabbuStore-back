@@ -1254,13 +1254,6 @@ export class OrderController {
           });
         }
 
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
-
-
-
-
         const overridesMap = new Map<string, any>();
         if (Array.isArray(items)) {
           items.forEach((ov) => {
@@ -1321,12 +1314,12 @@ export class OrderController {
         const youpinFloatItems =
           youpinFloatIds.length > 0
             ? await prisma.floatItem.findMany({
-                where: { id: { in: youpinFloatIds }, available: true },
+                where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
                 include: { resaleItem: true },
               })
             : [];
 
-        const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+        const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.assetId === id));
         if (missingYoupinFloatIds.length > 0) {
           return res.status(400).json({
             error: `Algunos assets YouPin ya no están disponibles: ${missingYoupinFloatIds.join(", ")}`,
@@ -1399,12 +1392,19 @@ export class OrderController {
         );
 
         const resolvedYoupinItems = youpinFloatIds.map((floatId: string) => {
-          const dbFloat = youpinFloatItems.find((f: any) => f.id === floatId)!;
+          const dbFloat = youpinFloatItems.find((f: any) => f.assetId === floatId)!;
           const override = overridesMap.get(`youpin-${floatId}`);
           const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
           const listing = dbFloat.resaleItem;
+          
+          // Workaround: si el ítem de YouPin requiere un marketHashName y no viene, fallar (legacy support).
+          // El string devuelto asume que el usuario lo verá si estamos en la v1 del carrito.
+          if (override?.isSpecific && !override.marketHashName && !listing.name) {
+            throw new Error(`Falta el marketHashName para el ítem YouPin "${floatId}". Reintente agregarlo al carrito.`);
+          }
+
           return {
-            assetId: `youpin-${dbFloat.id}`,
+            assetId: `youpin-${dbFloat.assetId}`,
             name: listing.name,
             price: floatPrice,
             iconUrl: listing.iconUrl || null,
@@ -1437,9 +1437,6 @@ export class OrderController {
           totalPrice,
         });
       } else if (type === "SELL") {
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
 
         if (quoteId) {
           const quote = await prisma.quote.findUnique({
@@ -1614,8 +1611,6 @@ export class OrderController {
         return res.status(400).json({ error: "itemIds must be an array of strings" });
       }
 
-      const { prisma } = require("../../../shared/infrastructure/PrismaClient");
-
       const youpinFloatIds = itemIds
         .filter((id: string) => id?.startsWith("youpin-"))
         .map((id: string) => id.replace(/^youpin-/, ""));
@@ -1661,11 +1656,11 @@ export class OrderController {
       const youpinFloatItems =
         youpinFloatIds.length > 0
           ? await prisma.floatItem.findMany({
-              where: { id: { in: youpinFloatIds }, available: true, price: { gt: 0 } },
-              select: { id: true }
+              where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true, price: { gt: 0 } },
+              select: { assetId: true }
             })
           : [];
-      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.id}`);
+      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.assetId}`);
 
       // Combinar todos los IDs válidos
       const validSet = new Set<string>([

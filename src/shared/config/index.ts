@@ -179,7 +179,7 @@ export const config = {
     staleAfterMs: parseInt(process.env.ITEMS_CATALOG_STALE_AFTER_MS || '86400000', 10),
     select:
       process.env.ITEMS_CATALOG_SELECT ||
-      'markethashname,marketname,normalizedname,pricereal,pricemix,pricelatest,prices,paintindex,variants,itemgroup,itemname,itemtype,wear,isstattrak,issouvenir,image',
+      'markethashname,marketname,normalizedname,pricereal,pricemix,pricelatest,prices,paintindex,variants,itemgroup,itemname,itemtype,wear,isstattrak,issouvenir,itemimage',
   },
 
   /**

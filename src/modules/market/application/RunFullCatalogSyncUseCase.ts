@@ -1,18 +1,11 @@
 import { config } from "../../../shared/config";
 import type { IMarketSyncStateRepository } from "../domain/IMarketSyncStateRepository";
 import { MARKET_ASSETS_SYNC_STATE_KEY } from "./GetMarketSyncStatusUseCase";
-import {
-  RefreshMarketAssetsCatalogUseCase,
-  type RefreshMarketAssetsResult,
-} from "./RefreshMarketAssetsCatalogUseCase";
 import { marketSyncProgressService } from "./MarketSyncProgressService";
 import { syncExecutionCoordinator } from "./SyncExecutionCoordinator";
+import { SyncYoupinCatalogUseCase, type SyncYoupinCatalogResult } from "./SyncYoupinCatalogUseCase";
 
-/**
- * Resultado del job de assets. El nombre de la clase se conserva para no
- * romper imports operativos, pero ya no incluye refresh de precios ni bots.
- */
-export type FullCatalogSyncResult = RefreshMarketAssetsResult;
+export type FullCatalogSyncResult = SyncYoupinCatalogResult;
 
 export type FullCatalogSyncStartResult =
   | {
@@ -30,8 +23,8 @@ export class SyncExecutionBusyError extends Error {
   constructor(readonly blockingReason: "market_assets" | "bot_only") {
     super(
       blockingReason === "bot_only"
-        ? "Hay una sincronización de bots en curso."
-        : "Ya hay una sincronización de assets en curso.",
+        ? "Hay una sincronizacion de bots en curso."
+        : "Ya hay una sincronizacion de assets en curso.",
     );
     this.name = "SyncExecutionBusyError";
   }
@@ -41,7 +34,7 @@ export class RunFullCatalogSyncUseCase {
   private static activeExecution: Promise<FullCatalogSyncResult> | null = null;
 
   constructor(
-    private refreshMarketAssetsCatalog: RefreshMarketAssetsCatalogUseCase,
+    private syncYoupinCatalogUseCase: SyncYoupinCatalogUseCase,
     private syncStateRepository: IMarketSyncStateRepository,
   ) {}
 
@@ -94,36 +87,22 @@ export class RunFullCatalogSyncUseCase {
 
   private async executeExclusive(triggeredBy: string): Promise<FullCatalogSyncResult> {
     marketSyncProgressService.startSync(
-      config.marketAssetsCatalog.target,
-      config.marketAssetsCatalog.assetsPerItem,
+      config.marketAssetsCatalog.target, // deprecated
+      config.marketAssetsCatalog.assetsPerItem, // deprecated
       triggeredBy,
     );
 
     try {
-      let marketResult = await this.refreshMarketAssetsCatalog.recoverPending();
-
-      if (!marketResult) {
-        await this.syncStateRepository.markStarted(
-          MARKET_ASSETS_SYNC_STATE_KEY,
-          undefined,
-          0,
-          {
-            phase: "building_priority_queue",
-            targetAssets: config.marketAssetsCatalog.target,
-            assetsPerItem: config.marketAssetsCatalog.assetsPerItem,
-            quotaLimit: config.floatSync.maxRowsPerMinute,
-          },
-        );
-        marketResult = await this.refreshMarketAssetsCatalog.execute();
-      }
+      // Delegamos al nuevo caso de uso refactorizado (Proceso 1)
+      const marketResult = await this.syncYoupinCatalogUseCase.execute();
 
       await this.syncStateRepository.markFullSuccess(
         MARKET_ASSETS_SYNC_STATE_KEY,
       );
       marketSyncProgressService.completeSync(
-        marketResult.listings,
-        marketResult.floats,
-        marketResult.completionReason,
+        marketResult.matched,
+        0, // floats_indexed = 0 porque ahora es diferido
+        "target_reached",
       );
       return marketResult;
     } catch (error) {

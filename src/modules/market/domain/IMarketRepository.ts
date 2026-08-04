@@ -55,4 +55,38 @@ export interface IMarketRepository {
 
   /** Obtiene todos los floats guardados para un listing de mercado */
   findFloatsByResaleItemId(resaleItemId: string): Promise<FloatItem[]>;
+
+  // ─── Nuevos métodos para lazy float loading ───────────────────────────────
+
+  /**
+   * Upsert de listings sin borrar otros ni tocar FloatItems.
+   * Preserva price cuando isPriceManual = true.
+   * Reemplaza solo los campos de metadata (iconUrl, rarity, youpinAsk, etc.).
+   */
+  upsertListings(listings: MarketListingUpsert[]): Promise<void>;
+
+  /** Busca un listing por su PK. Devuelve null si no existe. */
+  findById(id: string): Promise<{
+    id: string;
+    name: string;
+    provider: string;
+    floatsSyncedAt: Date | null;
+    isPriceManual: boolean;
+    price: number;
+    youpinAsk: number | null;
+  } | null>;
+
+  /**
+   * Actualiza floatsSyncedAt para marcar cuándo se consultaron los floats.
+   * Solo se debe llamar cuando la sincronización fue exitosa.
+   */
+  updateListingFloatsSyncedAt(id: string, syncedAt: Date): Promise<void>;
+
+  /**
+   * Marca como available = false todos los FloatItem de YOUPIN para el listing
+   * cuyo assetId NO esté en presentAssetIds.
+   * Solo afecta market = 'YOUPIN' y resaleItemId = id dado.
+   * Devuelve la cantidad de assets invalidados.
+   */
+  invalidateAbsentFloats(resaleItemId: string, presentAssetIds: string[]): Promise<number>;
 }

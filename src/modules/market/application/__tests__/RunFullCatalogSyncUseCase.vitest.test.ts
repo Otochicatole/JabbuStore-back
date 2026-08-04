@@ -1,18 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { RunFullCatalogSyncUseCase } from "../RunFullCatalogSyncUseCase";
 import { syncExecutionCoordinator } from "../SyncExecutionCoordinator";
+import type { SyncYoupinCatalogResult } from "../SyncYoupinCatalogUseCase";
 
-function marketResult() {
+function marketResult(): SyncYoupinCatalogResult {
   return {
-    listings: 2,
-    floats: 20,
-    rawAssets: 24,
-    validAssets: 20,
-    skippedAssets: 4,
-    snapshotHash: "a".repeat(64),
-    fetchedAt: new Date(0).toISOString(),
-    completionReason: "catalog_exhausted" as const,
-    recoveredSnapshot: false,
+    matched: 10,
+    skippedNoPrice: 2,
+    skippedNotInCatalog: 1,
+    totalCatalogItems: 11,
+    totalPriceRows: 13,
+    durationMs: 1500,
   };
 }
 
@@ -30,16 +28,17 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     const gate = new Promise<void>((resolve) => {
       releaseAssets = resolve;
     });
-    const refreshMarket = {
-      recoverPending: vi.fn(async () => null),
+    
+    const syncCatalog = {
       execute: vi.fn(async () => {
         await gate;
         return marketResult();
       }),
     };
+    
     const state = stateRepository();
     const useCase = new RunFullCatalogSyncUseCase(
-      refreshMarket as any,
+      syncCatalog as any,
       state as any,
     );
 
@@ -52,46 +51,19 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     releaseAssets();
     const result = await first.execution;
     expect(result).toEqual(marketResult());
-    expect(refreshMarket.execute).toHaveBeenCalledOnce();
-    expect(state.markStarted).toHaveBeenCalledWith(
-      expect.any(String),
-      undefined,
-      0,
-      expect.objectContaining({ phase: "building_priority_queue" }),
-    );
-    expect(state.markFullSuccess).toHaveBeenCalledOnce();
-  });
-
-  it("finaliza una publicación durable pendiente sin recolectar otra vez", async () => {
-    const recovered = { ...marketResult(), recoveredSnapshot: true };
-    const refreshMarket = {
-      recoverPending: vi.fn(async () => recovered),
-      execute: vi.fn(),
-    };
-    const state = stateRepository();
-    const useCase = new RunFullCatalogSyncUseCase(
-      refreshMarket as any,
-      state as any,
-    );
-
-    const result = await useCase.execute("scheduler-startup");
-
-    expect(result.recoveredSnapshot).toBe(true);
-    expect(refreshMarket.execute).not.toHaveBeenCalled();
-    expect(state.markStarted).not.toHaveBeenCalled();
+    expect(syncCatalog.execute).toHaveBeenCalledOnce();
     expect(state.markFullSuccess).toHaveBeenCalledOnce();
   });
 
   it("marca failed si falla la recolección/publicación", async () => {
-    const refreshMarket = {
-      recoverPending: vi.fn(async () => null),
+    const syncCatalog = {
       execute: vi.fn(async () => {
         throw new Error("asset failure");
       }),
     };
     const state = stateRepository();
     const useCase = new RunFullCatalogSyncUseCase(
-      refreshMarket as any,
+      syncCatalog as any,
       state as any,
     );
 
@@ -107,10 +79,7 @@ describe("RunFullCatalogSyncUseCase (assets-only)", () => {
     const botLease = syncExecutionCoordinator.tryAcquire("bot_only");
     expect(botLease).not.toBeNull();
     const useCase = new RunFullCatalogSyncUseCase(
-      {
-        recoverPending: vi.fn(async () => marketResult()),
-        execute: vi.fn(),
-      } as any,
+      { execute: vi.fn() } as any,
       stateRepository() as any,
     );
     try {

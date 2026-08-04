@@ -1,6 +1,11 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { BotService } from '../../marketplace/application/BotService';
 import { normalizeDopplerPhaseLabel } from '../../pricing/domain/DopplerPhase';
+import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import type { CatalogGlobalPayload, CatalogGlobalItemRow } from '../../market/application/GenerateCatalogGlobalUseCase';
+import { CATALOG_GLOBAL_JSON_PATH } from '../../market/application/GenerateCatalogGlobalUseCase';
 
 type SortOption =
   | 'price_desc'
@@ -118,6 +123,16 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
   }
 
   return Math.max(0, Math.round((basePrice + modifier) * 100) / 100);
+}
+
+function getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {
+  const image = row.image || row.itemimage;
+  if (!image) return null;
+  if (typeof image === 'string' && /^https?:\/\//i.test(image)) return image;
+  if (typeof image === 'string' && image.length > 0) {
+    return `https://community.cloudflare.steamstatic.com/economy/image/${image}/360fx360f`;
+  }
+  return null;
 }
 
 const WEAR_SUFFIX =
@@ -277,7 +292,6 @@ export class GetCatalogItemsUseCase {
     const storeItems = allStoreItems;
     const marketAssets = allMarketAssets;
 
-
     const settingsData = settings ?? {
       globalPriceModifierEnabled: false,
       globalPriceModifierType: 'percentage_increase',
@@ -318,9 +332,74 @@ export class GetCatalogItemsUseCase {
           };
         });
 
-    const marketCatalogItems: InternalCatalogItem[] = query.immediate
-      ? []
-      : marketAssets.flatMap((asset): InternalCatalogItem[] => {
+    let marketCatalogItems: InternalCatalogItem[] = [];
+
+    if (!query.immediate) {
+      let catalogGlobalItems: InternalCatalogItem[] = [];
+      try {
+        const raw = await fs.readFile(CATALOG_GLOBAL_JSON_PATH, 'utf-8');
+        const payload: CatalogGlobalPayload = JSON.parse(raw);
+
+        if (Array.isArray(payload.items) && payload.items.length > 0) {
+          const dbListings = await prisma.marketListing.findMany({
+            select: { id: true, name: true, price: true, isPriceManual: true },
+          });
+          const dbListingMap = new Map(dbListings.map((l) => [l.name, l]));
+
+          catalogGlobalItems = payload.items.flatMap((item): InternalCatalogItem[] => {
+            const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
+            if (!name || typeof name !== 'string') return [];
+
+            const parsed = parseName(name);
+            if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
+              return [];
+            }
+
+            const dbItem = dbListingMap.get(name);
+            const listingId = dbItem?.id ?? name;
+            const youpinAsk = item.youpinAsk ?? 0;
+            const basePrice = (dbItem?.isPriceManual && dbItem.price) ? dbItem.price : youpinAsk;
+
+            const price = dbItem?.isPriceManual
+              ? dbItem.price
+              : applyModifier(
+                  basePrice,
+                  settingsData.marketModifierEnabled,
+                  settingsData.marketModifierType,
+                  settingsData.marketModifierValue,
+                );
+
+            const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
+            const imageUrl = getCatalogIconUrl(item) || '/skin.webp';
+
+            return [{
+              id: listingId,
+              name: parsed.name,
+              weapon: parsed.weapon,
+              rarity: details.rarity || 'common',
+              price,
+              imageUrl,
+              float: null,
+              pattern: null,
+              exterior: details.exterior,
+              category: details.category,
+              isStatTrak: details.isStatTrak,
+              isSouvenir: details.isSouvenir,
+              phase: parsed.phase,
+              isImmediate: false,
+              inspectLink: null,
+              createdAt: new Date(),
+            } satisfies InternalCatalogItem];
+          });
+        }
+      } catch {
+        // Fallback a floatItem en DB si catalog-global.json no está disponible
+      }
+
+      if (catalogGlobalItems.length > 0) {
+        marketCatalogItems = catalogGlobalItems;
+      } else {
+        marketCatalogItems = marketAssets.flatMap((asset): InternalCatalogItem[] => {
           const parsed = parseName(asset.resaleItem.name);
           if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
             return [];
@@ -350,6 +429,8 @@ export class GetCatalogItemsUseCase {
             createdAt: asset.lastSyncAt,
           } satisfies InternalCatalogItem];
         });
+      }
+    }
 
     const filteredByCatalogFacets = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {
       if (normalizedQuery) {

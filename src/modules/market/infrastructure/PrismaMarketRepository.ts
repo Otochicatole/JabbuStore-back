@@ -72,7 +72,10 @@ export class PrismaMarketRepository implements IMarketRepository {
     const rows = await prisma.marketListing.findMany({
       where: {
         price: { gt: storeMinPriceGt() },
-        floats: { some: { available: true } },
+        OR: [
+          { floats: { some: { available: true } } },
+          { floatsSyncedAt: null },
+        ],
       },
       include: {
         floats: {
@@ -630,5 +633,115 @@ export class PrismaMarketRepository implements IMarketRepository {
       lastSyncAt: row.lastSyncAt,
       resaleItemId: row.resaleItemId,
     }));
+  }
+
+  // ─── Nuevos métodos: lazy float loading ──────────────────────────────────
+
+  /**
+   * Upsert de listings sin eliminar ningún otro. No toca FloatItems.
+   * Preserva price cuando isPriceManual = true.
+   */
+  async upsertListings(listings: MarketListingUpsert[]): Promise<void> {
+    if (listings.length === 0) return;
+
+    const manualRows = await prisma.marketListing.findMany({
+      where: { isPriceManual: true },
+      select: { name: true, price: true },
+    });
+    const manualMap = new Map(manualRows.map((r) => [r.name, r.price]));
+
+    const parallelSize = 10;
+    for (let i = 0; i < listings.length; i += parallelSize) {
+      const batch = listings.slice(i, i + parallelSize);
+      await Promise.all(
+        batch.map((listing) => {
+          const manualPrice = manualMap.get(listing.name);
+          const isManual = manualPrice != null;
+          return prisma.marketListing.upsert({
+            where: { name: listing.name },
+            create: {
+              name: listing.name,
+              provider: listing.provider,
+              youpinAsk: listing.youpinAsk,
+              youpinVolume: listing.youpinVolume,
+              price: manualPrice ?? listing.price,
+              iconUrl: listing.iconUrl ?? null,
+              rarity: listing.rarity || 'common',
+              exterior: listing.exterior ?? null,
+              category: listing.category || 'other',
+              isStatTrak: listing.isStatTrak ?? false,
+              isSouvenir: listing.isSouvenir ?? false,
+              isPriceManual: false,
+            },
+            update: {
+              provider: listing.provider,
+              youpinAsk: listing.youpinAsk,
+              youpinVolume: listing.youpinVolume,
+              iconUrl: listing.iconUrl ?? null,
+              rarity: listing.rarity || 'common',
+              exterior: listing.exterior ?? null,
+              category: listing.category || 'other',
+              isStatTrak: listing.isStatTrak ?? false,
+              isSouvenir: listing.isSouvenir ?? false,
+              // Solo actualizamos price si no es manual
+              ...(isManual ? {} : { price: listing.price }),
+            },
+          });
+        }),
+      );
+    }
+  }
+
+  async findById(id: string): Promise<{
+    id: string;
+    name: string;
+    provider: string;
+    floatsSyncedAt: Date | null;
+    isPriceManual: boolean;
+    price: number;
+    youpinAsk: number | null;
+  } | null> {
+    const row = await prisma.marketListing.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        provider: true,
+        floatsSyncedAt: true,
+        isPriceManual: true,
+        price: true,
+        youpinAsk: true,
+      },
+    });
+    return row;
+  }
+
+  async updateListingFloatsSyncedAt(id: string, syncedAt: Date): Promise<void> {
+    await prisma.marketListing.update({
+      where: { id },
+      data: { floatsSyncedAt: syncedAt },
+    });
+  }
+
+  /**
+   * Marca como available = false los FloatItem del listing cuyo assetId
+   * no esté en presentAssetIds. Solo afecta market = 'YOUPIN'.
+   */
+  async invalidateAbsentFloats(
+    resaleItemId: string,
+    presentAssetIds: string[],
+  ): Promise<number> {
+    const result = await prisma.floatItem.updateMany({
+      where: {
+        resaleItemId,
+        market: 'YOUPIN',
+        available: true,
+        ...(presentAssetIds.length > 0
+          ? { assetId: { notIn: presentAssetIds } }
+          : {}),
+      },
+      data: { available: false },
+    });
+    return result.count;
   }
 }

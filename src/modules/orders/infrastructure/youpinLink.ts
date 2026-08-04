@@ -29,8 +29,8 @@ export async function resolveYoupinExternalId(
 
   if (item.assetId.startsWith("youpin-")) {
     const floatId = item.assetId.replace(/^youpin-/, "");
-    const floatItem = await prisma.floatItem.findUnique({
-      where: { id: floatId },
+    const floatItem = await prisma.floatItem.findFirst({
+      where: { assetId: floatId, market: 'YOUPIN' },
       select: { externalId: true },
     });
     return floatItem?.externalId ?? null;
