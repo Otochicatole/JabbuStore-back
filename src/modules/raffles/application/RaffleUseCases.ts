@@ -53,12 +53,33 @@ export class CreateRaffleUseCase {
         });
       } else if (assetId.startsWith("youpin-")) {
         const floatId = assetId.replace(/^youpin-/, "");
-        const floatItem = await prisma.floatItem.findUnique({
-          where: { id: floatId },
+        const floatItem = await prisma.floatItem.findFirst({
+          where: { assetId: floatId, market: 'YOUPIN', available: true },
         });
 
         if (!floatItem) {
-          throw new Error(`El ítem de reventa con ID ${assetId} no existe en el catálogo.`);
+          const floatByUuid = await prisma.floatItem.findUnique({
+            where: { id: floatId },
+          });
+          const effectiveFloat = floatByUuid;
+          if (!effectiveFloat) {
+            throw new Error(`El ítem de reventa con ID ${assetId} no existe en el catálogo.`);
+          }
+
+          const listingByUuid = await MarketCatalogService.getListingByName(effectiveFloat.listingId);
+          prizes.push({
+            assetId,
+            position: item.position,
+            name: listingByUuid?.name ?? effectiveFloat.listingId,
+            price: effectiveFloat.price,
+            iconUrl: listingByUuid?.iconUrl || null,
+            rarity: listingByUuid?.rarity || "common",
+            exterior: listingByUuid?.exterior || null,
+            float: effectiveFloat.floatValue,
+            pattern: effectiveFloat.paintSeed,
+            provider: "youpin",
+          });
+          continue;
         }
 
         const listing = await MarketCatalogService.getListingByName(floatItem.listingId);
@@ -73,6 +94,26 @@ export class CreateRaffleUseCase {
           exterior: listing?.exterior || null,
           float: floatItem.floatValue,
           pattern: floatItem.paintSeed,
+          provider: "youpin",
+        });
+      } else if (assetId.startsWith("market-")) {
+        const marketHashName = assetId.replace(/^market-/, "");
+        const marketItem = await MarketCatalogService.getListingByName(marketHashName);
+
+        if (!marketItem) {
+          throw new Error(`El ítem de mercado "${marketHashName}" no existe en el catálogo.`);
+        }
+
+        prizes.push({
+          assetId,
+          position: item.position,
+          name: marketItem.name,
+          price: marketItem.price,
+          iconUrl: marketItem.iconUrl,
+          rarity: marketItem.rarity || "common",
+          exterior: marketItem.exterior,
+          float: null,
+          pattern: null,
           provider: "youpin",
         });
       } else {
