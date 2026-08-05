@@ -7,6 +7,7 @@ import {
   roundMoney,
 } from "../../orders/application/OrderPricingService";
 import { MarketCatalogService } from "../../market/application/MarketCatalogService";
+import { YoupinAssetValidator } from "../../market/application/YoupinAssetValidator";
 
 export interface CheckoutBaseAmountInput {
   type: "BUY" | "raffle";
@@ -113,12 +114,48 @@ export class CheckoutBaseAmountResolver {
       );
     }
 
+    const foundYoupinAssetIds = new Set(youpinFloatItems.map(f => f.assetId));
+    const apiValidatedFloats: Map<string, any> = new Map();
+
     const missingYoupinFloatIds = youpinFloatIds.filter(
-      (id) => !youpinFloatItems.some((item) => item.id === id),
+      (id) => !foundYoupinAssetIds.has(id),
     );
+
     if (missingYoupinFloatIds.length > 0) {
+      const apiAssets = missingYoupinFloatIds
+        .map(assetId => {
+          const override = overridesMap.get(`youpin-${assetId}`);
+          const listingId = override?.listingId;
+          return listingId ? { assetId, listingId } : null;
+        })
+        .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+      if (apiAssets.length > 0) {
+        try {
+          const validator = new YoupinAssetValidator();
+          const apiResults = await validator.validateBatch(apiAssets);
+          for (const [_key, result] of apiResults) {
+            if (result.valid) {
+              apiValidatedFloats.set(result.assetId, {
+                assetId: result.assetId,
+                listingId: result.listingId,
+                floatValue: result.floatValue,
+                paintSeed: result.paintSeed,
+                price: result.price,
+              });
+              foundYoupinAssetIds.add(result.assetId);
+            }
+          }
+        } catch (err) {
+          console.warn("[CheckoutBaseAmountResolver] API fallback error:", err);
+        }
+      }
+    }
+
+    const trulyMissingIds = missingYoupinFloatIds.filter(id => !foundYoupinAssetIds.has(id));
+    if (trulyMissingIds.length > 0) {
       throw new Error(
-        `Algunos assets YouPin ya no están disponibles: ${missingYoupinFloatIds.join(", ")}`,
+        `Algunos assets YouPin ya no están disponibles: ${trulyMissingIds.join(", ")}`,
       );
     }
 
@@ -160,8 +197,13 @@ export class CheckoutBaseAmountResolver {
     }
 
     for (const floatId of youpinFloatIds) {
-      const dbFloat = youpinFloatItems.find((candidate) => candidate.assetId === floatId)!;
-      const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+      let dbFloat = youpinFloatItems.find((candidate) => candidate.assetId === floatId);
+      const apiFloat = apiValidatedFloats.get(floatId);
+      const effectiveFloat = dbFloat || apiFloat;
+      if (!effectiveFloat) {
+        throw new Error(`El asset YouPin "${floatId}" no se encontró.`);
+      }
+      const itemPrice = getMarketCheckoutPrice(effectiveFloat.price, settingsData);
       if (!Number.isFinite(itemPrice) || itemPrice <= 0) {
         throw new Error(`El asset YouPin "${floatId}" no tiene un precio válido para checkout.`);
       }

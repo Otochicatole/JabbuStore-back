@@ -37,6 +37,7 @@ import {
   readPaymentQuoteSnapshot,
   type PaymentQuoteSnapshot,
 } from "../../payment-quotes/domain/PaymentQuote";
+import { YoupinAssetValidator } from "../../market/application/YoupinAssetValidator";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
@@ -1315,10 +1316,47 @@ export class OrderController {
               })
             : [];
 
-        const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.assetId === id));
+        const foundYoupinAssetIds = new Set(youpinFloatItems.map(f => f.assetId));
+        const apiValidatedFloats: Map<string, any> = new Map();
+
+        const missingYoupinFloatIds = youpinFloatIds.filter(id => !foundYoupinAssetIds.has(id));
         if (missingYoupinFloatIds.length > 0) {
+          const apiAssets = missingYoupinFloatIds
+            .map(assetId => {
+              const override = overridesMap.get(`youpin-${assetId}`);
+              const listingId = override?.listingId;
+              return listingId ? { assetId, listingId } : null;
+            })
+            .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+          if (apiAssets.length > 0) {
+            try {
+              const validator = new YoupinAssetValidator();
+              const apiResults = await validator.validateBatch(apiAssets);
+              for (const [_key, result] of apiResults) {
+                if (result.valid) {
+                  apiValidatedFloats.set(result.assetId, {
+                    assetId: result.assetId,
+                    listingId: result.listingId,
+                    floatValue: result.floatValue,
+                    paintSeed: result.paintSeed,
+                    price: result.price,
+                    inspectLink: result.inspectLink,
+                    market: 'YOUPIN',
+                    available: true,
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn("[validateOrder] API fallback error:", err);
+            }
+          }
+        }
+
+        const trulyMissingIds = missingYoupinFloatIds.filter(id => !apiValidatedFloats.has(id));
+        if (trulyMissingIds.length > 0) {
           return res.status(400).json({
-            error: `Algunos assets YouPin ya no están disponibles: ${missingYoupinFloatIds.join(", ")}`,
+            error: `Algunos assets YouPin ya no están disponibles: ${trulyMissingIds.join(", ")}`,
           });
         }
 
@@ -1389,16 +1427,33 @@ export class OrderController {
 
         const resolvedYoupinItems = await Promise.all(
           youpinFloatIds.map(async (floatId: string) => {
-            const dbFloat = youpinFloatItems.find((f: any) => f.assetId === floatId)!;
-            const listing = await MarketCatalogService.getListingByName(dbFloat.listingId);
+            let dbFloat = youpinFloatItems.find((f: any) => f.assetId === floatId);
+            const apiFloat = apiValidatedFloats.get(floatId);
+
+            const effectiveFloat = dbFloat || apiFloat;
+            if (!effectiveFloat) {
+              return {
+                assetId: `youpin-${floatId}`,
+                name: floatId,
+                price: 0,
+                iconUrl: null,
+                provider: "youpin",
+                float: null,
+                pattern: null,
+                exterior: null,
+                rarity: null,
+              };
+            }
+
+            const listing = await MarketCatalogService.getListingByName(effectiveFloat.listingId);
             return {
               assetId: `youpin-${floatId}`,
-              name: listing?.name ?? dbFloat.listingId,
-              price: getMarketCheckoutPrice(dbFloat.price, settingsData),
+              name: listing?.name ?? effectiveFloat.listingId,
+              price: getMarketCheckoutPrice(effectiveFloat.price, settingsData),
               iconUrl: listing?.iconUrl || null,
               provider: "youpin",
-              float: dbFloat.floatValue,
-              pattern: dbFloat.paintSeed,
+              float: effectiveFloat.floatValue,
+              pattern: effectiveFloat.paintSeed,
               exterior: listing?.exterior ?? null,
               rarity: listing?.rarity ?? null,
             };
@@ -1595,9 +1650,16 @@ export class OrderController {
 
   async validateCart(req: Request, res: Response) {
     try {
-      const { itemIds } = req.body;
+      const { itemIds, items } = req.body;
       if (!Array.isArray(itemIds)) {
         return res.status(400).json({ error: "itemIds must be an array of strings" });
+      }
+
+      const itemsOverrideMap = new Map<string, any>();
+      if (Array.isArray(items)) {
+        items.forEach((ov: any) => {
+          if (ov && ov.assetId) itemsOverrideMap.set(ov.assetId, ov);
+        });
       }
 
       const youpinFloatIds = itemIds
@@ -1618,7 +1680,6 @@ export class OrderController {
             })
           : [];
 
-      // Filtrar items cuyos bots estén activos y habilitados
       let activeBotIds: string[] = [];
       if (storeItems.length > 0) {
         const activeBots = await prisma.bot.findMany({
@@ -1631,13 +1692,13 @@ export class OrderController {
           .map((item: any) => item.assetId);
       }
 
-      // 2. Validar listings de mercado (legacy) usando MarketCatalogService
+      // 2. Validar listings de mercado usando MarketCatalogService
       const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
       const validMarketNames = marketNames
         .filter((name: string) => marketCatalogMap.has(name) && marketCatalogMap.get(name)!.price > 0)
         .map((name: string) => `market-${name}`);
 
-      // 3. Validar float items de YouPin (bajo pedido)
+      // 3. Validar float items de YouPin (bajo pedido) — local DB primero
       const youpinFloatItems =
         youpinFloatIds.length > 0
           ? await prisma.floatItem.findMany({
@@ -1645,7 +1706,33 @@ export class OrderController {
               select: { assetId: true }
             })
           : [];
-      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.assetId}`);
+      const validYoupinIds = new Set<string>(youpinFloatItems.map((f: any) => `youpin-${f.assetId}`));
+
+      // 4. Fallback a API para assets YouPin no encontrados localmente
+      const missingYoupinIds = youpinFloatIds.filter(
+        id => !youpinFloatItems.some(f => f.assetId === id)
+      );
+      if (missingYoupinIds.length > 0) {
+        const apiAssets = missingYoupinIds
+          .map(assetId => {
+            const override = itemsOverrideMap.get(`youpin-${assetId}`);
+            const listingId = override?.listingId;
+            return listingId ? { assetId, listingId } : null;
+          })
+          .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+        if (apiAssets.length > 0) {
+          try {
+            const validator = new YoupinAssetValidator();
+            const apiResults = await validator.validateBatch(apiAssets);
+            for (const [key, result] of apiResults) {
+              if (result.valid) validYoupinIds.add(key);
+            }
+          } catch (err) {
+            console.warn("[validateCart] API fallback error:", err);
+          }
+        }
+      }
 
       // Combinar todos los IDs válidos
       const validSet = new Set<string>([
