@@ -10,7 +10,7 @@ import {
 const router = Router();
 
 // Inyección de dependencias del módulo market
-const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase(marketRepository);
+const getMarketStoreAssetsUseCase = new GetMarketStoreAssetsUseCase();
 
 const marketController = new MarketController(
   getMarketStoreAssetsUseCase,
@@ -30,9 +30,6 @@ router.post('/download-items-catalog', authMiddleware, adminOnly, (req, res) =>
 
 router.post('/generate-catalog-global', authMiddleware, adminOnly, (req, res) =>
   marketController.generateCatalogGlobal(req, res),
-);
-router.post('/sync-catalog-global-db', authMiddleware, adminOnly, (req, res) =>
-  marketController.syncCatalogGlobalDb(req, res),
 );
 
 

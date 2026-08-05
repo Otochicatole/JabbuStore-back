@@ -3,20 +3,16 @@ import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssets
 import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
 import { GenerateCatalogGlobalUseCase } from '../application/GenerateCatalogGlobalUseCase';
-import { SyncCatalogGlobalToDbUseCase } from '../application/SyncCatalogGlobalToDbUseCase';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
 
 export class MarketController {
   private generateCatalogGlobalUseCase = new GenerateCatalogGlobalUseCase();
-  private syncCatalogGlobalToDbUseCase: SyncCatalogGlobalToDbUseCase;
 
   constructor(
     private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
     private getOrRefreshListingFloatsUseCase: GetOrRefreshListingFloatsUseCase,
     private marketRepository = new PrismaMarketRepository(),
-  ) {
-    this.syncCatalogGlobalToDbUseCase = new SyncCatalogGlobalToDbUseCase(this.marketRepository);
-  }
+  ) {}
 
   /** GET /market/listings — catálogo YouPin. */
   async getListings(_req: Request, res: Response): Promise<void> {
@@ -64,22 +60,6 @@ export class MarketController {
     } catch (error: any) {
       console.error('[Market Controller] Error en Paso 3:', error);
       res.status(500).json({ error: error.message || 'Error al generar catalog-global.json' });
-    }
-  }
-
-  /** POST /market/sync-catalog-global-db — Paso 4: Sincronizar catalog-global.json a BD */
-  async syncCatalogGlobalDb(_req: Request, res: Response): Promise<void> {
-    try {
-      console.log('[Market Controller] Iniciando Paso 4: Sincronizar catalog-global.json a BD...');
-      const result = await this.syncCatalogGlobalToDbUseCase.execute();
-      res.json({
-        success: true,
-        message: 'catalog-global.json sincronizado a base de datos correctamente.',
-        ...result,
-      });
-    } catch (error: any) {
-      console.error('[Market Controller] Error en Paso 4:', error);
-      res.status(500).json({ error: error.message || 'Error al sincronizar a BD' });
     }
   }
 

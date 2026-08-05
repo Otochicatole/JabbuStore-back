@@ -1,4 +1,3 @@
-import { MarketListingUpsert } from "../domain/MarketListing";
 import { FloatItem } from "../domain/FloatItem";
 import { PriceEnrichmentService } from "../../../shared/infrastructure/PriceEnrichmentService";
 import { buildInspectLinkFromCertificate } from "../../../shared/infrastructure/inspectLinkHelpers";
@@ -92,7 +91,7 @@ export function resolveListingNameFromAsset(asset: any): string {
   return withPhase;
 }
 
-export function assetToFloatItem(asset: any, resaleItemId: string): FloatItem | null {
+export function assetToFloatItem(asset: any, listingId: string): FloatItem | null {
   if (asset?.source !== "youpin") return null;
   if (asset.float === undefined || asset.float === null) return null;
 
@@ -119,83 +118,7 @@ export function assetToFloatItem(asset: any, resaleItemId: string): FloatItem | 
       ? String(asset.marketid)
       : String(asset.id ?? asset.assetid),
     lastSyncAt: new Date(),
-    resaleItemId,
+    listingId,
   };
 }
 
-export interface CatalogGroup {
-  listing: MarketListingUpsert;
-  floats: Omit<FloatItem, "resaleItemId">[];
-}
-
-export function groupYoupinAssetsIntoCatalog(
-  assets: any[],
-  minPrice: number,
-): { groups: Map<string, CatalogGroup>; skipped: number } {
-  const groups = new Map<string, CatalogGroup>();
-  let skipped = 0;
-
-  for (const asset of assets) {
-    if (asset?.source !== "youpin") {
-      skipped++;
-      continue;
-    }
-
-    const name = resolveListingNameFromAsset(asset);
-    if (!name) {
-      skipped++;
-      continue;
-    }
-
-    const price = resolveAssetPrice(asset);
-    if (price <= minPrice) {
-      skipped++;
-      continue;
-    }
-
-    const floatDraft = assetToFloatItem(asset, "pending");
-    if (!floatDraft) {
-      skipped++;
-      continue;
-    }
-
-    const { resaleItemId: _ignored, ...floatData } = floatDraft;
-    const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
-    const iconUrl = resolveAssetImageUrl(asset);
-
-    let group = groups.get(name);
-    if (!group) {
-      group = {
-        listing: {
-          name,
-          provider: "youpin",
-          youpinAsk: price,
-          youpinVolume: 1,
-          price,
-          iconUrl,
-          rarity: details.rarity,
-          exterior: details.exterior,
-          category: details.category,
-          isStatTrak: details.isStatTrak,
-          isSouvenir: details.isSouvenir,
-        },
-        floats: [],
-      };
-      groups.set(name, group);
-    } else {
-      group.listing.youpinVolume = (group.listing.youpinVolume ?? 0) + 1;
-      if (price < group.listing.price) {
-        group.listing.price = price;
-        group.listing.youpinAsk = price;
-        if (iconUrl) group.listing.iconUrl = iconUrl;
-      }
-      if (!group.listing.iconUrl && iconUrl) {
-        group.listing.iconUrl = iconUrl;
-      }
-    }
-
-    group.floats.push(floatData);
-  }
-
-  return { groups, skipped };
-}

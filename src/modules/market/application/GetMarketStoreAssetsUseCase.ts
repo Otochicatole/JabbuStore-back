@@ -1,6 +1,5 @@
 import { promises as fs } from 'fs';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
-import { IMarketRepository } from '../domain/IMarketRepository';
 import { MarketStoreAsset } from '../domain/MarketStoreAsset';
 import { resolveListingNameFromAsset } from './floatCatalogMapper';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
@@ -32,8 +31,6 @@ function getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {
 }
 
 export class GetMarketStoreAssetsUseCase {
-  constructor(private marketRepository: IMarketRepository) {}
-
   async execute(): Promise<(MarketStoreAsset & { displayPrice: number })[]> {
     const settings = await prisma.adminSettings.findFirst();
     const settingsData = settings ?? {
@@ -42,18 +39,11 @@ export class GetMarketStoreAssetsUseCase {
       marketModifierValue: 0,
     };
 
-    // 1. Intentar servir directamente desde catalog-global.json si existe
     try {
       const raw = await fs.readFile(CATALOG_GLOBAL_JSON_PATH, 'utf-8');
       const payload: CatalogGlobalPayload = JSON.parse(raw);
 
       if (Array.isArray(payload.items) && payload.items.length > 0) {
-        // Cargar mapa de IDs reales de MarketListing de la BD si existen
-        const dbListings = await prisma.marketListing.findMany({
-          select: { id: true, name: true, price: true, isPriceManual: true },
-        });
-        const dbListingMap = new Map(dbListings.map((l) => [l.name, l]));
-
         return payload.items.flatMap((item) => {
           const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
           if (!name || typeof name !== 'string') return [];
@@ -63,19 +53,16 @@ export class GetMarketStoreAssetsUseCase {
           });
           if (!canonicalName) return [];
 
-          const dbItem = dbListingMap.get(canonicalName);
-          const listingId = dbItem?.id ?? canonicalName;
+          const listingId = canonicalName;
           const youpinAsk = item.youpinAsk ?? 0;
-          const basePrice = (dbItem?.isPriceManual && dbItem.price) ? dbItem.price : youpinAsk;
+          const basePrice = youpinAsk; // Manual prices are no longer supported
 
-          const displayPrice = dbItem?.isPriceManual
-            ? dbItem.price
-            : applyModifier(
-                basePrice,
-                settingsData.marketModifierEnabled,
-                settingsData.marketModifierType,
-                settingsData.marketModifierValue,
-              );
+          const displayPrice = applyModifier(
+            basePrice,
+            settingsData.marketModifierEnabled,
+            settingsData.marketModifierType,
+            settingsData.marketModifierValue,
+          );
 
           const details = PriceEnrichmentService.inferDetailsFromMarketHashName(canonicalName);
           const iconUrl = getCatalogIconUrl(item);
@@ -106,29 +93,10 @@ export class GetMarketStoreAssetsUseCase {
           }];
         });
       }
-    } catch {
-      // Si catalog-global.json no existe o falla al leerlo, fallback al repositorio DB
+    } catch (e) {
+      console.error('[GetMarketStoreAssetsUseCase] Error leyendo catalog-global.json:', e);
     }
 
-    // 2. Fallback: Base de Datos
-    const assets = await this.marketRepository.findStoreAssets();
-    return assets.flatMap((asset) => {
-      const canonicalName = resolveListingNameFromAsset({
-        market_hash_name: asset.name,
-      });
-      if (!canonicalName) return [];
-
-      return [{
-        ...asset,
-        id: `youpin-${asset.floatItemId}`,
-        name: canonicalName,
-        displayPrice: applyModifier(
-          asset.price,
-          settingsData.marketModifierEnabled,
-          settingsData.marketModifierType,
-          settingsData.marketModifierValue,
-        ),
-      }];
-    });
+    return [];
   }
 }

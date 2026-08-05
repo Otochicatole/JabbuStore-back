@@ -44,21 +44,12 @@ export async function resolveYoupinExternalId(
     ? item.assetId.replace(/^market-/, "")
     : item.name;
 
-  const listing = await prisma.marketListing.findUnique({
-    where: { name: marketName },
-    select: { id: true },
-  });
-
-  if (!listing) {
-    return null;
-  }
-
   const where: {
-    resaleItemId: string;
+    listingId: string;
     floatValue: number;
     paintSeed?: number;
   } = {
-    resaleItemId: listing.id,
+    listingId: marketName,
     floatValue: Number(item.float),
   };
 

@@ -3,6 +3,7 @@ import { IRaffleRepository, Raffle, RafflePrize, RaffleTicket } from "../domain/
 import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
 import { emitLiveRaffleResult } from "../../tickets/infrastructure/TicketSocket";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
 
 export class CreateRaffleUseCase {
   constructor(private raffleRepository: IRaffleRepository) {}
@@ -54,21 +55,22 @@ export class CreateRaffleUseCase {
         const floatId = assetId.replace(/^youpin-/, "");
         const floatItem = await prisma.floatItem.findUnique({
           where: { id: floatId },
-          include: { resaleItem: true },
         });
 
         if (!floatItem) {
           throw new Error(`El ítem de reventa con ID ${assetId} no existe en el catálogo.`);
         }
 
+        const listing = await MarketCatalogService.getListingByName(floatItem.listingId);
+
         prizes.push({
           assetId,
           position: item.position,
-          name: floatItem.resaleItem.name,
+          name: listing?.name ?? floatItem.listingId,
           price: floatItem.price,
-          iconUrl: floatItem.resaleItem.iconUrl,
-          rarity: floatItem.resaleItem.rarity,
-          exterior: floatItem.resaleItem.exterior,
+          iconUrl: listing?.iconUrl || null,
+          rarity: listing?.rarity || "common",
+          exterior: listing?.exterior || null,
           float: floatItem.floatValue,
           pattern: floatItem.paintSeed,
           provider: "youpin",

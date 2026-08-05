@@ -9,5 +9,5 @@ export interface FloatItem {
   available?: boolean;
   externalId?: string | null;
   lastSyncAt?: Date;
-  resaleItemId: string;
+  listingId: string;
 }

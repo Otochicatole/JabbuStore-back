@@ -296,7 +296,7 @@ export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
 
-    const [settings, allStoreItems, allMarketAssets] = await Promise.all([
+    const [settings, storeItems] = await Promise.all([
       prisma.adminSettings.findFirst(),
       prisma.storeItem.findMany({
         where: {
@@ -305,19 +305,7 @@ export class GetCatalogItemsUseCase {
           price: { gt: 0 },
         },
       }),
-      prisma.floatItem.findMany({
-        where: {
-          available: true,
-          price: { gt: 0 },
-        },
-        include: {
-          resaleItem: true,
-        },
-      }),
     ]);
-
-    const storeItems = allStoreItems;
-    const marketAssets = allMarketAssets;
 
     const settingsData = settings ?? {
       globalPriceModifierEnabled: false,
@@ -368,11 +356,6 @@ export class GetCatalogItemsUseCase {
         const payload: CatalogGlobalPayload = JSON.parse(raw);
 
         if (Array.isArray(payload.items) && payload.items.length > 0) {
-          const dbListings = await prisma.marketListing.findMany({
-            select: { id: true, name: true, price: true, isPriceManual: true },
-          });
-          const dbListingMap = new Map(dbListings.map((l) => [l.name, l]));
-
           catalogGlobalItems = payload.items.flatMap((item): InternalCatalogItem[] => {
             const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
             if (!name || typeof name !== 'string') return [];
@@ -384,19 +367,16 @@ export class GetCatalogItemsUseCase {
               return [];
             }
 
-            const dbItem = dbListingMap.get(name);
-            const listingId = dbItem?.id ?? name;
+            const listingId = name;
             const youpinAsk = item.youpinAsk ?? 0;
-            const basePrice = (dbItem?.isPriceManual && dbItem.price) ? dbItem.price : youpinAsk;
+            const basePrice = youpinAsk;
 
-            const price = dbItem?.isPriceManual
-              ? dbItem.price
-              : applyModifier(
-                  basePrice,
-                  settingsData.marketModifierEnabled,
-                  settingsData.marketModifierType,
-                  settingsData.marketModifierValue,
-                );
+            const price = applyModifier(
+              basePrice,
+              settingsData.marketModifierEnabled,
+              settingsData.marketModifierType,
+              settingsData.marketModifierValue,
+            );
 
             const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
             const imageUrl = getCatalogIconUrl(item) || '/skin.webp';
@@ -421,44 +401,11 @@ export class GetCatalogItemsUseCase {
             } satisfies InternalCatalogItem];
           });
         }
-      } catch {
-        // Fallback a floatItem en DB si catalog-global.json no está disponible
+      } catch (e) {
+        console.error('[GetCatalogItemsUseCase] Error leyendo catalog-global.json:', e);
       }
 
-      if (catalogGlobalItems.length > 0) {
-        marketCatalogItems = catalogGlobalItems;
-      } else {
-        marketCatalogItems = marketAssets.flatMap((asset): InternalCatalogItem[] => {
-          const parsed = parseName(asset.resaleItem.name);
-          if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
-            return [];
-          }
-
-          return [{
-            id: `youpin-${asset.id}`,
-            name: parsed.name,
-            weapon: parsed.weapon,
-            rarity: asset.resaleItem.rarity,
-            price: applyModifier(
-              asset.price,
-              settingsData.marketModifierEnabled,
-              settingsData.marketModifierType,
-              settingsData.marketModifierValue,
-            ),
-            imageUrl: asset.resaleItem.iconUrl || '/skin.webp',
-            float: asset.floatValue,
-            pattern: asset.paintSeed,
-            exterior: asset.resaleItem.exterior,
-            category: asset.resaleItem.category,
-            isStatTrak: asset.resaleItem.isStatTrak,
-            isSouvenir: asset.resaleItem.isSouvenir,
-            phase: parsed.phase,
-            isImmediate: false,
-            inspectLink: asset.inspectLink,
-            createdAt: asset.lastSyncAt,
-          } satisfies InternalCatalogItem];
-        });
-      }
+      marketCatalogItems = catalogGlobalItems;
     }
 
     const filteredByCatalogFacets = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {

@@ -78,29 +78,6 @@ model StoreItem {
   updatedAt     DateTime @updatedAt
 }
 
-/// Catálogo de ítems de reventa provenientes de YouPin 
-model MarketListing {
-  id            String   @id @default(cuid())
-  name          String   @unique
-  provider      String   // 'youpin' — plataforma de reventa
-  youpinAsk     Float?
-  youpinVolume  Int?
-  price         Float    @default(0.0) // precio base seleccionado (YouPin)
-  iconUrl       String?
-  rarity        String   @default("common")
-  exterior      String?
-  category      String   @default("other")
-  isStatTrak    Boolean  @default(false)
-  isSouvenir    Boolean  @default(false)
-  isPriceManual Boolean  @default(false)
-  /// Último intento de indexar floats (se setea aunque no se encuentren), para priorizar el reindexado.
-  floatsSyncedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  floats        FloatItem[]
-
-  @@index([exterior, floatsSyncedAt])
-}
 
 model UserInventoryItem {
   assetId    String   @id
@@ -398,10 +375,10 @@ model FloatItem {
   externalId   String?
   lastSyncAt   DateTime      @default(now())
   
-  resaleItemId String
-  resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
+  listingId    String
 
   @@unique([market, assetId])
+  @@index([listingId])
   @@map("floats")
 }
 

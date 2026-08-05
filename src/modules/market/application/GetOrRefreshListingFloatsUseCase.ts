@@ -1,3 +1,4 @@
+import { promises as fs } from 'fs';
 import type { FloatItem } from '../domain/FloatItem';
 import type { IMarketRepository } from '../domain/IMarketRepository';
 import { stableMarketFloatId } from '../infrastructure/PrismaMarketRepository';
@@ -5,6 +6,9 @@ import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { FloatCachePolicy } from './FloatCachePolicy';
 import { YoupinFloatAssetsDownloader } from './YoupinFloatAssetsDownloader';
 import { MarketPricingService } from './MarketPricingService';
+import type { CatalogGlobalPayload } from './GenerateCatalogGlobalUseCase';
+import { CATALOG_GLOBAL_JSON_PATH } from './GenerateCatalogGlobalUseCase';
+import { resolveListingNameFromAsset } from './floatCatalogMapper';
 
 export interface ListingFloatItem {
   id: string;
@@ -41,16 +45,9 @@ export interface GetOrRefreshFloatsOptions {
 // Single-flight: evita consultas simultaneas a la misma skin
 const inflight = new Map<string, Promise<{ floatsSyncedAt: Date | null; error: string | null }>>();
 
-/**
- * Proceso 2: Carga diferida de assets para un MarketListing.
- *
- * - Verifica cache via FloatCachePolicy.
- * - Si stale o null: descarga paginada via YoupinFloatAssetsDownloader.
- * - Implementa single-flight por listingId.
- * - Upsert de FloatItem + invalida ausentes solo si la descarga es completa.
- * - Actualiza floatsSyncedAt solo tras exito.
- * - En caso de error con cache existente: devuelve cache + refreshFailed = true.
- */
+// Memoria para floatsSyncedAt, dado que ya no existe MarketListing en BD
+const memoryFloatsSyncedAt = new Map<string, Date>();
+
 export class GetOrRefreshListingFloatsUseCase {
   constructor(
     private readonly marketRepository: IMarketRepository,
@@ -59,34 +56,29 @@ export class GetOrRefreshListingFloatsUseCase {
   ) {}
 
   async execute(
-    listingId: string,
+    listingId: string, // canonicalName
     options: GetOrRefreshFloatsOptions = {},
   ): Promise<GetOrRefreshFloatsResult> {
-    // 1. Validar listing
-    const listing = await this.marketRepository.findById(listingId);
-    if (!listing) {
-      throw new Error(`MarketListing con ID "${listingId}" no existe.`);
-    }
-    if (listing.provider !== 'youpin') {
-      throw new Error(`El listing "${listingId}" no es de YouPin (provider=${listing.provider}).`);
-    }
+    
+    // Opcional: Validar que existe en el catálogo si es necesario, pero asumiremos
+    // que es válido ya que viene desde la URL formada por la UI.
 
     // 2. Verificar si hay datos en DB
     const existingCount = await prisma.floatItem.count({
-      where: { resaleItemId: listingId, market: 'YOUPIN', available: true },
+      where: { listingId: listingId, market: 'YOUPIN', available: true },
     });
 
-    const needsRefresh = options.forceRefresh || this.cachePolicy.shouldRefresh(listing.floatsSyncedAt);
+    let floatsSyncedAt = memoryFloatsSyncedAt.get(listingId) || null;
+    const needsRefresh = options.forceRefresh || this.cachePolicy.shouldRefresh(floatsSyncedAt);
     let refreshFailed = false;
     let refreshError: string | null = null;
-    let floatsSyncedAt = listing.floatsSyncedAt;
 
     if (needsRefresh) {
       // Single-flight
       let refreshPromise = inflight.get(listingId);
 
       if (!refreshPromise) {
-        refreshPromise = this.refreshFloats(listingId, listing.name).finally(() => {
+        refreshPromise = this.refreshFloats(listingId, listingId).finally(() => {
           inflight.delete(listingId);
         });
         inflight.set(listingId, refreshPromise);
@@ -126,7 +118,7 @@ export class GetOrRefreshListingFloatsUseCase {
     const { sortBy = 'float_asc', floatMin, floatMax, paintSeed, limit = 50, offset = 0 } = options;
 
     const where: any = {
-      resaleItemId: listingId,
+      listingId: listingId,
       market: 'YOUPIN',
       available: true,
     };
@@ -216,7 +208,7 @@ export class GetOrRefreshListingFloatsUseCase {
               available: true,
               externalId: f.externalId ?? null,
               lastSyncAt: now,
-              resaleItemId: listingId,
+              listingId: listingId,
             },
             update: {
               floatValue: f.floatValue,
@@ -245,9 +237,9 @@ export class GetOrRefreshListingFloatsUseCase {
         }
       }
 
-      // Actualizar floatsSyncedAt SOLO si la descarga fue exitosa
+      // Actualizar floatsSyncedAt en memoria (fue removido de MarketListing en Prisma)
       const syncedAt = new Date();
-      await this.marketRepository.updateListingFloatsSyncedAt(listingId, syncedAt);
+      memoryFloatsSyncedAt.set(listingId, syncedAt);
 
       console.log(
         `[GetOrRefreshFloats] listingId=${listingId} "${marketHashName}": ` +

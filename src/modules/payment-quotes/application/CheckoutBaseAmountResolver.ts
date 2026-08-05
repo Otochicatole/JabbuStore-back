@@ -6,6 +6,7 @@ import {
   getMarketCheckoutPrice,
   roundMoney,
 } from "../../orders/application/OrderPricingService";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
 
 export interface CheckoutBaseAmountInput {
   type: "BUY" | "raffle";
@@ -78,24 +79,21 @@ export class CheckoutBaseAmountResolver {
       .filter((id) => id.startsWith("market-"))
       .map((id) => id.replace(/^market-/, ""));
 
-    const [storeItems, marketListings, youpinFloatItems] = await Promise.all([
+    const [storeItems, youpinFloatItems] = await Promise.all([
       botIds.length > 0
         ? prisma.storeItem.findMany({
             where: { assetId: { in: botIds }, marketable: true },
           })
         : Promise.resolve([]),
-      marketNames.length > 0
-        ? prisma.marketListing.findMany({
-            where: { name: { in: marketNames } },
-          })
-        : Promise.resolve([]),
       youpinFloatIds.length > 0
         ? prisma.floatItem.findMany({
             where: { id: { in: youpinFloatIds }, available: true },
-            include: { resaleItem: true },
           })
         : Promise.resolve([]),
     ]);
+
+    const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
+    const marketListings = marketNames.map(name => marketCatalogMap.get(name)).filter(Boolean);
 
     const missingBotIds = botIds.filter((id) => !storeItems.some((item) => item.assetId === id));
     if (missingBotIds.length > 0) {
@@ -143,7 +141,7 @@ export class CheckoutBaseAmountResolver {
 
       if (override?.float !== undefined && override.float !== null) {
         const floatQueryWhere: any = {
-          resaleItemId: item.id,
+          listingId: item.name,
           floatValue: Number(override.float),
         };
         if (override.pattern !== undefined && override.pattern !== null) {

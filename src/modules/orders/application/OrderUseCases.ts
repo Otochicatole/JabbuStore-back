@@ -18,6 +18,7 @@ import {
   getUserSellCheckoutPrice,
   roundMoney,
 } from "./OrderPricingService";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
 
 const PRICE_MISMATCH_TOLERANCE = 0.01;
 const OPEN_SELL_ORDER_STATUSES = [
@@ -204,15 +205,11 @@ export class CreatePurchaseOrderUseCase {
       await BotService.assertStoreItemsFromActiveBots(storeItems);
     }
 
-    // Resolver market listings usando su campo unique 'name'
-    const marketListings =
-      marketNames.length > 0
-        ? await prisma.marketListing.findMany({
-            where: { name: { in: marketNames } },
-          })
-        : [];
+    // Resolver market listings usando MarketCatalogService
+    const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
+    const marketListings = marketNames.map(name => marketCatalogMap.get(name)).filter(Boolean);
 
-    const missingMarketNames = marketNames.filter(name => !marketListings.some(i => i.name === name));
+    const missingMarketNames = marketNames.filter(name => !marketCatalogMap.has(name));
     if (missingMarketNames.length > 0) {
       throw new Error(
         `Some market listings are no longer available: ${missingMarketNames.join(", ")}`,
@@ -223,7 +220,6 @@ export class CreatePurchaseOrderUseCase {
       youpinFloatIds.length > 0
         ? await prisma.floatItem.findMany({
             where: { id: { in: youpinFloatIds }, available: true },
-            include: { resaleItem: true },
           })
         : [];
 
@@ -281,7 +277,7 @@ export class CreatePurchaseOrderUseCase {
       itemPrice = getMarketCheckoutPrice(item.price, settingsData);
       if (override && override.float !== undefined && override.float !== null) {
         const floatQueryWhere: any = {
-          resaleItemId: item.id,
+          listingId: item.name,
           floatValue: Number(override.float),
         };
         if (override.pattern !== undefined && override.pattern !== null) {
@@ -321,7 +317,12 @@ export class CreatePurchaseOrderUseCase {
       const dbFloat = youpinFloatItems.find((f) => f.id === floatId)!;
       const override = overridesMap.get(`youpin-${floatId}`);
       const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
-      const listing = dbFloat.resaleItem;
+      
+      const listing = await MarketCatalogService.getListingByName(dbFloat.listingId);
+      if (!listing) {
+        throw new Error(`The YouPin asset ${floatId} belongs to a listing that is no longer available.`);
+      }
+
       const name = listing.name;
       const iconUrl = listing.iconUrl;
       const rarity = listing.rarity;

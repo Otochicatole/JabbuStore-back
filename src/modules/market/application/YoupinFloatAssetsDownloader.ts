@@ -13,7 +13,7 @@ export interface FloatDownloadConfig {
 }
 
 export interface FloatDownloadResult {
-  floats: Omit<FloatItem, 'resaleItemId'>[];
+  floats: Omit<FloatItem, 'listingId'>[];
   presentAssetIds: string[];
   pagesDownloaded: number;
   assetsDownloaded: number;
