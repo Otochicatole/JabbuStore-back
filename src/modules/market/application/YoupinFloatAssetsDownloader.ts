@@ -2,7 +2,6 @@ import type { FloatItem } from '../domain/FloatItem';
 import { SteamWebApiFloatAssetsClient } from '../infrastructure/SteamWebApiFloatAssetsClient';
 import { assetToFloatItem } from './floatCatalogMapper';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
-import { toSteamWebApiPhaseParam } from './floatSyncHelpers';
 
 export interface FloatDownloadConfig {
   pageSize: number;
@@ -24,11 +23,11 @@ export interface FloatDownloadResult {
 }
 
 const ENV_DEFAULTS: FloatDownloadConfig = {
-  pageSize: Math.max(1, Number(process.env.YOUPIN_FLOAT_PAGE_SIZE) || 100),
-  maxPages: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_PAGES) || 2),
+  pageSize: Math.max(1, Number(process.env.YOUPIN_FLOAT_PAGE_SIZE) || 50),
+  maxPages: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_PAGES) || 1),
   maxRetries: Math.max(1, Number(process.env.YOUPIN_FLOAT_MAX_RETRIES) || 2),
   retryDelayMs: Math.max(100, Number(process.env.YOUPIN_FLOAT_RETRY_DELAY_MS) || 400),
-  requestTimeoutMs: Math.max(1_000, Number(process.env.YOUPIN_FLOAT_REQUEST_TIMEOUT_MS) || 5_000),
+  requestTimeoutMs: Math.max(1_000, Number(process.env.YOUPIN_FLOAT_REQUEST_TIMEOUT_MS) || 8_000),
 };
 
 function jitter(base: number): number {
@@ -68,9 +67,8 @@ export class YoupinFloatAssetsDownloader {
     marketHashName: string,
   ): Promise<FloatDownloadResult> {
     const start = Date.now();
-    const { baseName, phase } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
+    const { baseName } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
     const queryName = baseName || marketHashName;
-    const phaseParam = toSteamWebApiPhaseParam(phase ?? null) ?? undefined;
 
     const seenAssetIds = new Set<string>();
     const floats: Omit<FloatItem, 'resaleItemId'>[] = [];
@@ -86,7 +84,7 @@ export class YoupinFloatAssetsDownloader {
     );
 
     for (let page = 0; page < this.config.maxPages; page++) {
-      const pageResult = await this.fetchPageWithRetry(queryName, offset, phaseParam);
+      const pageResult = await this.fetchPageWithRetry(queryName, offset);
 
       if (!pageResult.ok) {
         lastError = pageResult.error ?? `HTTP ${pageResult.status}`;
@@ -99,6 +97,9 @@ export class YoupinFloatAssetsDownloader {
       }
 
       const rawAssets: any[] = pageResult.assets;
+      console.log(
+        `[YoupinFloats] listingId=${listingId} page=${page} status=${pageResult.status} total=${pageResult.total} raw=${rawAssets.length} offset=${offset}`,
+      );
       assetsDownloaded += rawAssets.length;
       pagesDownloaded++;
 
@@ -121,7 +122,7 @@ export class YoupinFloatAssetsDownloader {
 
       // Procesar assets de esta pagina
       for (const asset of rawAssets) {
-        const floatItem = assetToFloatItem(asset, 'pending');
+        const floatItem = assetToFloatItem(asset, listingId);
         if (!floatItem) continue;
 
         const assetId = floatItem.assetId;
@@ -173,16 +174,17 @@ export class YoupinFloatAssetsDownloader {
     let lastResult: any = null;
 
     for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
+      // rateLimitPriority 'normal': prioridad media en el rate limiter (no saltea cola de checkout, no prioriza sync)
       const result = await this.client.fetchPage({
         marketHashName,
         source: 'youpin',
-        onlyMarketId: true,
+        onlyMarketId: false,
         withItems: true,
         limit: this.config.pageSize,
         offset,
-        sort: 'newest',
         ...(phase ? { phase } : {}),
         rateLimitPriority: 'normal',
+        bypassRateLimiter: true,
         requestTimeoutMs: this.config.requestTimeoutMs,
       });
 

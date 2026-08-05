@@ -59,11 +59,6 @@ export class GetOrRefreshListingFloatsUseCase {
     listingId: string, // canonicalName
     options: GetOrRefreshFloatsOptions = {},
   ): Promise<GetOrRefreshFloatsResult> {
-    
-    // Opcional: Validar que existe en el catálogo si es necesario, pero asumiremos
-    // que es válido ya que viene desde la URL formada por la UI.
-
-    // 2. Verificar si hay datos en DB
     const existingCount = await prisma.floatItem.count({
       where: { listingId: listingId, market: 'YOUPIN', available: true },
     });
@@ -95,10 +90,10 @@ export class GetOrRefreshListingFloatsUseCase {
           console.error(`[GetOrRefreshFloats] Background refresh error for ${listingId}:`, err),
         );
       } else {
-        // Si no hay ningún float en DB, esperamos con un timeout máximo de 6s para no congelar HTTP
+        // Si no hay ningún float en DB, esperamos con un timeout de 25s para dar tiempo a la descarga
         try {
           const timeoutPromise = new Promise<{ floatsSyncedAt: Date | null; error: string }>((_, reject) =>
-            setTimeout(() => reject(new Error('Tiempo de espera agotado al descargar floats (timeout 6s)')), 6000),
+            setTimeout(() => reject(new Error('Tiempo de espera agotado al descargar floats (timeout 25s)')), 25000),
           );
           const refreshResult = await Promise.race([refreshPromise, timeoutPromise]);
           floatsSyncedAt = refreshResult.floatsSyncedAt;

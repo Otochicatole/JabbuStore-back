@@ -66,20 +66,26 @@ export class MarketController {
   /** GET /market/listings/:id/floats — devuelve floats para un resale item con displayPrice */
   async getFloats(req: Request, res: Response): Promise<void> {
     try {
-      const id = decodeURIComponent(req.params.id as string);
-      if (!id) {
+      const rawId = decodeURIComponent(req.params.id as string);
+      if (!rawId) {
         res.status(400).json({ error: 'Falta el ID del artículo de reventa.' });
         return;
       }
+
+      const dopplerPhaseSuffix = /\s*\|\s*(Phase [1-4]|Ruby|Sapphire|Black Pearl|Emerald)\s*$/i;
+      const phaseMatch = rawId.match(dopplerPhaseSuffix);
+      const phase = phaseMatch ? phaseMatch[1] : null;
+      const listingId = rawId.replace(dopplerPhaseSuffix, '').trim();
       
       const options = {
-        limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 50,
+        ...req.query.phase ? { phase: String(req.query.phase) } : (phase ? { phase } : {}),
+        limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 20,
         offset: req.query.offset ? parseInt(req.query.offset as string, 10) : 0,
         sortBy: (req.query.sortBy as 'float_asc' | 'float_desc' | 'price_asc' | 'price_desc') || 'float_asc',
         forceRefresh: req.query.forceRefresh === 'true',
       };
       
-      const result = await this.getOrRefreshListingFloatsUseCase.execute(id, options);
+      const result = await this.getOrRefreshListingFloatsUseCase.execute(listingId, options);
       res.json(result.floats);
     } catch (error: any) {
       console.error('[Market Controller] Error obteniendo floats:', error);
