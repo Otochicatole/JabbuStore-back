@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { BotService } from '../../marketplace/application/BotService';
-import { normalizeDopplerPhaseLabel } from '../../pricing/domain/DopplerPhase';
+import { normalizeDopplerPhaseLabel, getDopplerPhaseLabelByPaintIndex } from '../../pricing/domain/DopplerPhase';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
 import type { CatalogGlobalPayload, CatalogGlobalItemRow } from '../../market/application/GenerateCatalogGlobalUseCase';
 import { CATALOG_GLOBAL_JSON_PATH } from '../../market/application/GenerateCatalogGlobalUseCase';
@@ -293,6 +293,17 @@ function isSkinOnly(marketHashName: string): boolean {
   return false;
 }
 
+const DOPPLER_STANDARD_PAINTS = new Set([415, 416, 417, 418, 419, 420, 421, 617, 618, 619, 849, 850, 851, 852, 853, 854, 855]);
+const DOPPLER_GAMMA_PAINTS = new Set([568, 569, 570, 571, 572, 1119, 1120, 1121, 1122, 1123]);
+
+const ALL_DOPPLER_PAINTS = new Set([...DOPPLER_STANDARD_PAINTS, ...DOPPLER_GAMMA_PAINTS]);
+
+function resolveDopplerPhase(paintIndex: number | null | undefined): string | null {
+  if (paintIndex == null || !Number.isFinite(paintIndex)) return null;
+  if (!ALL_DOPPLER_PAINTS.has(paintIndex)) return null;
+  return getDopplerPhaseLabelByPaintIndex(paintIndex);
+}
+
 export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
@@ -365,11 +376,15 @@ export class GetCatalogItemsUseCase {
             if (!isSkinOnly(name)) return [];
 
             const parsed = parseName(name);
-            if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
-              return [];
-            }
 
-            const listingId = name;
+            const variantPhase = (item as any).variantPhase as string | undefined;
+            const variantPaintIndex = (item as any).variantPaintIndex as number | undefined;
+            const variantImage = (item as any).variantImage as string | undefined;
+
+            const paintIndex = variantPaintIndex ?? (item as any).paintindex;
+            const dopplerPhase = resolveDopplerPhase(paintIndex);
+            const phase = variantPhase ?? parsed.phase ?? dopplerPhase;
+
             const youpinAsk = item.youpinAsk ?? 0;
             const basePrice = youpinAsk;
 
@@ -382,21 +397,24 @@ export class GetCatalogItemsUseCase {
 
             const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
             const imageUrl = getCatalogIconUrl(item) || '/skin.webp';
+            const displayImage = variantImage ? getCatalogIconUrl({ ...item, itemimage: variantImage, image: variantImage }) : imageUrl;
+
+            const finalPhase = phase ?? parsed.phase;
 
             return [{
-              id: listingId,
+              id: finalPhase ? `${name} | ${finalPhase}` : name,
               name: parsed.name,
               weapon: parsed.weapon,
               rarity: details.rarity || 'common',
               price,
-              imageUrl,
+              imageUrl: displayImage || imageUrl,
               float: null,
               pattern: null,
               exterior: details.exterior,
               category: details.category,
               isStatTrak: details.isStatTrak,
               isSouvenir: details.isSouvenir,
-              phase: parsed.phase,
+              phase: finalPhase,
               isImmediate: false,
               inspectLink: null,
               provider: "youpin" as const,

@@ -12,6 +12,9 @@ export const CATALOG_GLOBAL_JSON_PATH = path.join(
 export interface CatalogGlobalItemRow extends SteamWebApiItemsCatalogRow {
   youpinAsk: number;
   youpinVolume: null;
+  variantPhase?: string;
+  variantPaintIndex?: number;
+  variantImage?: string;
 }
 
 export interface CatalogGlobalPayload {
@@ -90,23 +93,54 @@ export class GenerateCatalogGlobalUseCase {
     for (const catalogRow of catalogSnapshot.items) {
       const marketHashName = getCatalogMarketHashName(catalogRow);
       if (!marketHashName) continue;
-      
-      if (index.has(marketHashName)) continue;
 
       if (!isSkinOnly(marketHashName)) continue;
 
-      // Usamos el precio del catálogo. pricesafe o pricereal.
-      const youpinAsk = catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
-      if (youpinAsk <= 0) continue;
+      const variants = Array.isArray(catalogRow.variants) ? catalogRow.variants : [];
 
-      index.add(marketHashName);
+      if (variants.length > 0) {
+        for (const variant of variants) {
+          const variantPrice = variant.pricereal ?? catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
+          if (variantPrice <= 0) continue;
 
-      matchedItems.push({
-        ...catalogRow,
-        markethashname: marketHashName,
-        youpinAsk,
-        youpinVolume: null,
-      });
+          const variantPaintIndex = variant.paintindex ?? variant.paint_index;
+          const dedupKey = variantPaintIndex != null
+            ? `${marketHashName}::${variantPaintIndex}`
+            : `${marketHashName}::variant-${variant.phase ?? 'unknown'}`;
+
+          if (index.has(dedupKey)) continue;
+          index.add(dedupKey);
+
+          const row: CatalogGlobalItemRow = {
+            ...catalogRow,
+            markethashname: marketHashName,
+            youpinAsk: variantPrice,
+            youpinVolume: null as null,
+          };
+          if (variant.phase) (row as any).variantPhase = variant.phase;
+          if (variantPaintIndex != null) (row as any).variantPaintIndex = variantPaintIndex;
+          if (variant.image) (row as any).variantImage = variant.image;
+
+          matchedItems.push(row);
+        }
+      } else {
+        const paintIndex = catalogRow.paintindex;
+        const dedupKey = paintIndex != null ? `${marketHashName}::${paintIndex}` : marketHashName;
+
+        if (index.has(dedupKey)) continue;
+
+        const youpinAsk = catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
+        if (youpinAsk <= 0) continue;
+
+        index.add(dedupKey);
+
+        matchedItems.push({
+          ...catalogRow,
+          markethashname: marketHashName,
+          youpinAsk,
+          youpinVolume: null,
+        });
+      }
     }
 
     const generatedAt = new Date().toISOString();

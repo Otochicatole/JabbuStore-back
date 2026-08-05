@@ -14,6 +14,12 @@ export interface MarketCatalogItemInfo {
   provider: string;
 }
 
+const DOPPLER_PHASE_SUFFIX = /\s*\|\s*(Phase [1-4]|Ruby|Sapphire|Black Pearl|Emerald)\s*$/i;
+
+function stripDopplerPhase(name: string): string {
+  return name.replace(DOPPLER_PHASE_SUFFIX, '').trim();
+}
+
 export class MarketCatalogService {
   private static cache: Map<string, MarketCatalogItemInfo> | null = null;
   private static lastMtimeMs = 0;
@@ -31,14 +37,14 @@ export class MarketCatalogService {
 
       if (Array.isArray(payload.items)) {
         for (const item of payload.items) {
-          const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
-          if (!name || typeof name !== 'string') continue;
+          const baseName = item.markethashname ?? item.market_hash_name ?? item.marketname;
+          if (!baseName || typeof baseName !== 'string') continue;
 
-          const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
+          const details = PriceEnrichmentService.inferDetailsFromMarketHashName(baseName);
           const iconUrl = this.getCatalogIconUrl(item);
 
-          newCache.set(name, {
-            name,
+          const info: MarketCatalogItemInfo = {
+            name: baseName,
             price: item.youpinAsk ?? 0,
             iconUrl,
             rarity: details.rarity || 'common',
@@ -47,7 +53,18 @@ export class MarketCatalogService {
             isStatTrak: details.isStatTrak,
             isSouvenir: details.isSouvenir,
             provider: 'youpin',
-          });
+          };
+
+          newCache.set(baseName, info);
+
+          const variantPhase = (item as any).variantPhase as string | undefined;
+          if (variantPhase) {
+            newCache.set(`${baseName} | ${variantPhase}`, {
+              ...info,
+              name: baseName,
+              price: item.youpinAsk ?? 0,
+            });
+          }
         }
       }
 
@@ -56,17 +73,17 @@ export class MarketCatalogService {
       return this.cache;
     } catch (e) {
       console.warn('[MarketCatalogService] Error reading catalog-global.json:', e);
-      return new Map(); // Return empty map if file doesn't exist
+      return new Map();
     }
   }
 
   static async getListingByName(name: string): Promise<MarketCatalogItemInfo | null> {
     const map = await this.getCatalogMap();
-    return map.get(name) ?? null;
+    return map.get(name) ?? map.get(stripDopplerPhase(name)) ?? null;
   }
 
   private static getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {
-    const image = row.image || row.itemimage;
+    const image = (row as any).variantImage || row.image || row.itemimage;
     if (!image) return null;
     if (typeof image === 'string' && /^https?:\/\//i.test(image)) return image;
     if (typeof image === 'string' && image.length > 0) {
