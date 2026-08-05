@@ -87,7 +87,7 @@ export class CheckoutBaseAmountResolver {
         : Promise.resolve([]),
       youpinFloatIds.length > 0
         ? prisma.floatItem.findMany({
-            where: { id: { in: youpinFloatIds }, available: true },
+            where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
           })
         : Promise.resolve([]),
     ]);
@@ -160,7 +160,7 @@ export class CheckoutBaseAmountResolver {
     }
 
     for (const floatId of youpinFloatIds) {
-      const dbFloat = youpinFloatItems.find((candidate) => candidate.id === floatId)!;
+      const dbFloat = youpinFloatItems.find((candidate) => candidate.assetId === floatId)!;
       const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
       if (!Number.isFinite(itemPrice) || itemPrice <= 0) {
         throw new Error(`El asset YouPin "${floatId}" no tiene un precio válido para checkout.`);

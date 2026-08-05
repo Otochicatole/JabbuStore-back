@@ -219,11 +219,11 @@ export class CreatePurchaseOrderUseCase {
     const youpinFloatItems =
       youpinFloatIds.length > 0
         ? await prisma.floatItem.findMany({
-            where: { id: { in: youpinFloatIds }, available: true },
+            where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
           })
         : [];
 
-    const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+    const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.assetId === id));
     if (missingYoupinFloatIds.length > 0) {
       throw new Error(
         `Some YouPin assets are no longer available: ${missingYoupinFloatIds.join(", ")}`,
@@ -314,7 +314,7 @@ export class CreatePurchaseOrderUseCase {
     }
 
     for (const floatId of youpinFloatIds) {
-      const dbFloat = youpinFloatItems.find((f) => f.id === floatId)!;
+      const dbFloat = youpinFloatItems.find((f) => f.assetId === floatId)!;
       const override = overridesMap.get(`youpin-${floatId}`);
       const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
       

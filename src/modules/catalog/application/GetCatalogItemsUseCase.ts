@@ -43,6 +43,7 @@ export interface CatalogItem {
   phase: string | null;
   isImmediate: boolean;
   inspectLink: string | null;
+  provider: "bot" | "youpin";
   variants?: CatalogItem[];
 }
 
@@ -343,6 +344,7 @@ export class GetCatalogItemsUseCase {
             phase: parsed.phase,
             isImmediate: true,
             inspectLink: item.inspectLink,
+            provider: "bot" as const,
             createdAt: item.createdAt,
           };
         });
@@ -397,6 +399,7 @@ export class GetCatalogItemsUseCase {
               phase: parsed.phase,
               isImmediate: false,
               inspectLink: null,
+              provider: "youpin" as const,
               createdAt: new Date(),
             } satisfies InternalCatalogItem];
           });
