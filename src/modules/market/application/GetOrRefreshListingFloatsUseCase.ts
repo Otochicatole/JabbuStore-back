@@ -40,6 +40,7 @@ export interface GetOrRefreshFloatsOptions {
   limit?: number;
   offset?: number;
   forceRefresh?: boolean;
+  phase?: string;
 }
 
 // Single-flight: evita consultas simultaneas a la misma skin
@@ -73,7 +74,7 @@ export class GetOrRefreshListingFloatsUseCase {
       let refreshPromise = inflight.get(listingId);
 
       if (!refreshPromise) {
-        refreshPromise = this.refreshFloats(listingId, listingId).finally(() => {
+        refreshPromise = this.refreshFloats(listingId, listingId, options.phase).finally(() => {
           inflight.delete(listingId);
         });
         inflight.set(listingId, refreshPromise);
@@ -173,9 +174,10 @@ export class GetOrRefreshListingFloatsUseCase {
   private async refreshFloats(
     listingId: string,
     marketHashName: string,
+    phase?: string,
   ): Promise<{ floatsSyncedAt: Date | null; error: string | null }> {
     try {
-      const result = await this.downloader.download(listingId, marketHashName);
+      const result = await this.downloader.download(listingId, marketHashName, phase);
 
       if (result.error && !result.complete) {
         // Descarga incompleta o fallida: NO invalidar assets anteriores

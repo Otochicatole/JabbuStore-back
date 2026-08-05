@@ -74,11 +74,11 @@ export class MarketController {
 
       const dopplerPhaseSuffix = /\s*\|\s*(Phase [1-4]|Ruby|Sapphire|Black Pearl|Emerald)\s*$/i;
       const phaseMatch = rawId.match(dopplerPhaseSuffix);
-      const phase = phaseMatch ? phaseMatch[1] : null;
+      const phase = phaseMatch ? phaseMatch[1] : undefined;
       const listingId = rawId.replace(dopplerPhaseSuffix, '').trim();
       
       const options = {
-        ...req.query.phase ? { phase: String(req.query.phase) } : (phase ? { phase } : {}),
+        ...(phase ? { phase } : {}),
         limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 20,
         offset: req.query.offset ? parseInt(req.query.offset as string, 10) : 0,
         sortBy: (req.query.sortBy as 'float_asc' | 'float_desc' | 'price_asc' | 'price_desc') || 'float_asc',

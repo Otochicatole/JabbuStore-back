@@ -2,6 +2,7 @@ import type { FloatItem } from '../domain/FloatItem';
 import { SteamWebApiFloatAssetsClient } from '../infrastructure/SteamWebApiFloatAssetsClient';
 import { assetToFloatItem } from './floatCatalogMapper';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import { toSteamWebApiPhaseParam } from './floatSyncHelpers';
 
 export interface FloatDownloadConfig {
   pageSize: number;
@@ -65,10 +66,12 @@ export class YoupinFloatAssetsDownloader {
   async download(
     listingId: string,
     marketHashName: string,
+    phase?: string,
   ): Promise<FloatDownloadResult> {
     const start = Date.now();
     const { baseName } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
     const queryName = baseName || marketHashName;
+    const phaseParam = toSteamWebApiPhaseParam(phase ?? null) ?? undefined;
 
     const seenAssetIds = new Set<string>();
     const floats: Omit<FloatItem, 'resaleItemId'>[] = [];
@@ -84,7 +87,7 @@ export class YoupinFloatAssetsDownloader {
     );
 
     for (let page = 0; page < this.config.maxPages; page++) {
-      const pageResult = await this.fetchPageWithRetry(queryName, offset);
+      const pageResult = await this.fetchPageWithRetry(queryName, offset, phaseParam);
 
       if (!pageResult.ok) {
         lastError = pageResult.error ?? `HTTP ${pageResult.status}`;
@@ -174,7 +177,6 @@ export class YoupinFloatAssetsDownloader {
     let lastResult: any = null;
 
     for (let attempt = 0; attempt < this.config.maxRetries; attempt++) {
-      // rateLimitPriority 'normal': prioridad media en el rate limiter (no saltea cola de checkout, no prioriza sync)
       const result = await this.client.fetchPage({
         marketHashName,
         source: 'youpin',
