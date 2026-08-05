@@ -1299,10 +1299,16 @@ export class OrderController {
         }
 
         // Validar market listings usando MarketCatalogService
-        const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
-        const marketItems = marketNames.map((name: string) => marketCatalogMap.get(name)).filter(Boolean);
+        const marketItems = await Promise.all(
+          marketNames.map(async (name: string) => ({
+            requestedName: name,
+            item: await MarketCatalogService.getListingByName(name),
+          })),
+        );
 
-        const missingMarketNames = marketNames.filter((name: string) => !marketCatalogMap.has(name));
+        const missingMarketNames = marketItems
+          .filter(({ item }) => !item)
+          .map(({ requestedName }) => requestedName);
         if (missingMarketNames.length > 0) {
           return res.status(400).json({
             error: `Algunos listings de mercado ya no están disponibles: ${missingMarketNames.join(", ")}`,
@@ -1380,7 +1386,10 @@ export class OrderController {
 
         const resolvedMarketItems = await Promise.all(
           marketNames.map(async (name: string) => {
-            const item = marketItems.find((i: any) => i.name === name)!;
+            const item = marketItems.find((entry: any) => entry.requestedName === name)?.item;
+            if (!item) {
+              throw new Error(`El listing de mercado "${name}" no existe en el catálogo.`);
+            }
             const override = overridesMap.get(`market-${name}`);
             if (override && override.float !== undefined && override.float !== null) {
               const floatQueryWhere: any = {
@@ -1693,10 +1702,15 @@ export class OrderController {
       }
 
       // 2. Validar listings de mercado usando MarketCatalogService
-      const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
-      const validMarketNames = marketNames
-        .filter((name: string) => marketCatalogMap.has(name) && marketCatalogMap.get(name)!.price > 0)
-        .map((name: string) => `market-${name}`);
+      const marketListings = await Promise.all(
+        marketNames.map(async (name: string) => ({
+          name,
+          item: await MarketCatalogService.getListingByName(name),
+        })),
+      );
+      const validMarketNames = marketListings
+        .filter(({ item }) => Boolean(item && item.price > 0))
+        .map(({ name }) => `market-${name}`);
 
       // 3. Validar float items de YouPin (bajo pedido) — local DB primero
       const youpinFloatItems =

@@ -93,8 +93,12 @@ export class CheckoutBaseAmountResolver {
         : Promise.resolve([]),
     ]);
 
-    const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
-    const marketListings = marketNames.map(name => marketCatalogMap.get(name)).filter(Boolean);
+    const marketListings = await Promise.all(
+      marketNames.map(async (name) => ({
+        requestedName: name,
+        item: await MarketCatalogService.getListingByName(name),
+      })),
+    );
 
     const missingBotIds = botIds.filter((id) => !storeItems.some((item) => item.assetId === id));
     if (missingBotIds.length > 0) {
@@ -105,9 +109,9 @@ export class CheckoutBaseAmountResolver {
       await BotService.assertStoreItemsFromActiveBots(storeItems);
     }
 
-    const missingMarketNames = marketNames.filter(
-      (name) => !marketListings.some((item) => item.name === name),
-    );
+    const missingMarketNames = marketListings
+      .filter(({ item }) => !item)
+      .map(({ requestedName }) => requestedName);
     if (missingMarketNames.length > 0) {
       throw new Error(
         `Algunos listings de mercado ya no están disponibles: ${missingMarketNames.join(", ")}`,
@@ -172,7 +176,10 @@ export class CheckoutBaseAmountResolver {
     }
 
     for (const name of marketNames) {
-      const item = marketListings.find((candidate) => candidate.name === name)!;
+      const item = marketListings.find((entry) => entry.requestedName === name)?.item;
+      if (!item) {
+        throw new Error(`El listing de mercado "${name}" no está disponible.`);
+      }
       const override = overridesMap.get(`market-${name}`);
       let itemPrice = getMarketCheckoutPrice(item.price, settingsData);
 

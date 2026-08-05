@@ -207,10 +207,16 @@ export class CreatePurchaseOrderUseCase {
     }
 
     // Resolver market listings usando MarketCatalogService
-    const marketCatalogMap = marketNames.length > 0 ? await MarketCatalogService.getCatalogMap() : new Map();
-    const marketListings = marketNames.map(name => marketCatalogMap.get(name)).filter(Boolean);
+    const marketListings = await Promise.all(
+      marketNames.map(async (name) => ({
+        requestedName: name,
+        item: await MarketCatalogService.getListingByName(name),
+      })),
+    );
 
-    const missingMarketNames = marketNames.filter(name => !marketCatalogMap.has(name));
+    const missingMarketNames = marketListings
+      .filter(({ item }) => !item)
+      .map(({ requestedName }) => requestedName);
     if (missingMarketNames.length > 0) {
       throw new Error(
         `Some market listings are no longer available: ${missingMarketNames.join(", ")}`,
@@ -305,7 +311,10 @@ export class CreatePurchaseOrderUseCase {
 
     // Market listings — precio del catálogo u override de float individual
     for (const name of marketNames) {
-      const item = marketListings.find((i: any) => i.name === name)!;
+      const item = marketListings.find((entry: any) => entry.requestedName === name)?.item;
+      if (!item) {
+        throw new Error(`The market listing ${name} is no longer available.`);
+      }
       const override = overridesMap.get(`market-${name}`);
       let itemPrice: number;
       let itemFloat: number | null = null;
