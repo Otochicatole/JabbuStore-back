@@ -120,6 +120,8 @@ export class AdminMarketplaceController {
         usdArsRateKind,
       });
 
+      console.log(`[Admin] usdArsRateKind changed to "${usdArsRateKind}" by admin ${(req as any).user?.id || "unknown"}`);
+
       res.json({
         ...settings,
         resellModifierType: settings.marketModifierType,

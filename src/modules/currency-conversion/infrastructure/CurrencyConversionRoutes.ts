@@ -9,5 +9,6 @@ const controller = new CurrencyConversionController(
 );
 
 router.get("/display-rates", (req, res) => controller.getDisplayRates(req, res));
+router.get("/all-rates", (req, res) => controller.getAllRates(req, res));
 
 export default router;
