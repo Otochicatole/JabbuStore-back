@@ -21,7 +21,7 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
 }
 
 function getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {
-  const image = row.image;
+  const image = (row as any).variantImage || row.image || row.itemimage;
   if (!image) return null;
   if (typeof image === 'string' && /^https?:\/\//i.test(image)) return image;
   if (typeof image === 'string' && image.length > 0) {
