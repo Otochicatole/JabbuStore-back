@@ -39,14 +39,85 @@ const VALID_WEAPON_NAMES = [
   "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
 ];
 
+const RIFLES = ["AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20"];
+const PISTOLS = ["Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000"];
+const SMGS = ["MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon"];
+const HEAVY = ["Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"];
+
+export interface CatalogFilters {
+  catalogFilterKnivesEnabled?: boolean;
+  catalogFilterGlovesEnabled?: boolean;
+  catalogFilterRiflesEnabled?: boolean;
+  catalogFilterPistolsEnabled?: boolean;
+  catalogFilterSMGsEnabled?: boolean;
+  catalogFilterHeavyEnabled?: boolean;
+  catalogFilterSouvenirEnabled?: boolean;
+  catalogFilterStatTrakEnabled?: boolean;
+  catalogMinPrice?: number;
+}
+
+type SkinCategory = "knife" | "glove" | "rifle" | "pistol" | "smg" | "heavy";
+
+function getSkinCategory(marketHashName: string): SkinCategory | null {
+  if (!marketHashName || typeof marketHashName !== "string") return null;
+  let name = marketHashName.trim();
+
+  if (name.startsWith("Souvenir ")) name = name.replace("Souvenir ", "");
+  if (name.startsWith("★ StatTrak™ ")) name = "★ " + name.slice(15).trim();
+  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
+  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
+
+  if (name.startsWith("★")) {
+    return name.toLowerCase().includes("glove") ? "glove" : "knife";
+  }
+
+  for (const rifle of RIFLES) {
+    if (name.startsWith(`${rifle} |`)) return "rifle";
+  }
+  for (const pistol of PISTOLS) {
+    if (name.startsWith(`${pistol} |`)) return "pistol";
+  }
+  for (const smg of SMGS) {
+    if (name.startsWith(`${smg} |`)) return "smg";
+  }
+  for (const h of HEAVY) {
+    if (name.startsWith(`${h} |`)) return "heavy";
+  }
+
+  return null;
+}
+
+function isCategoryAllowed(marketHashName: string, filters?: CatalogFilters): boolean {
+  if (!filters) return true;
+
+  const isSouvenir = marketHashName.startsWith("Souvenir ");
+  const isStatTrak = marketHashName.includes("StatTrak™ ") || marketHashName.includes("StatTrak ");
+
+  if (filters.catalogFilterSouvenirEnabled === false && isSouvenir) return false;
+  if (filters.catalogFilterStatTrakEnabled === false && isStatTrak) return false;
+
+  const category = getSkinCategory(marketHashName);
+  if (!category) return false;
+
+  switch (category) {
+    case "knife": return filters.catalogFilterKnivesEnabled !== false;
+    case "glove": return filters.catalogFilterGlovesEnabled !== false;
+    case "rifle": return filters.catalogFilterRiflesEnabled !== false;
+    case "pistol": return filters.catalogFilterPistolsEnabled !== false;
+    case "smg": return filters.catalogFilterSMGsEnabled !== false;
+    case "heavy": return filters.catalogFilterHeavyEnabled !== false;
+  }
+}
+
 function isSkinOnly(marketHashName: string): boolean {
   if (!marketHashName || typeof marketHashName !== "string") return false;
   let name = marketHashName.trim();
 
+  if (name.startsWith("★ StatTrak™ ")) name = "★ " + name.slice(15).trim();
   if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
   else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
   
-  if (name.startsWith("Souvenir ")) return false;
+  if (name.startsWith("Souvenir ")) name = name.replace("Souvenir ", "");
 
   // Todos los cuchillos y guantes comienzan con ★
   if (name.startsWith("★")) return true;
@@ -76,9 +147,10 @@ export class GenerateCatalogGlobalUseCase {
     private readonly catalogGlobalPath = CATALOG_GLOBAL_JSON_PATH,
   ) {}
 
-  async execute(): Promise<GenerateCatalogGlobalResult> {
+  async execute(filters?: CatalogFilters): Promise<GenerateCatalogGlobalResult> {
     const start = Date.now();
-    console.log("[GenerateCatalogGlobal] Leyendo items-catalog.json...");
+    const minPrice = filters?.catalogMinPrice ?? 0;
+    console.log("[GenerateCatalogGlobal] Leyendo items-catalog.json...", filters ? "con filtros" : "sin filtros");
 
     // 1. Leer items-catalog.json
     const catalogSnapshot = await this.catalogStore.readCatalog();
@@ -96,12 +168,14 @@ export class GenerateCatalogGlobalUseCase {
 
       if (!isSkinOnly(marketHashName)) continue;
 
+      if (filters && !isCategoryAllowed(marketHashName, filters)) continue;
+
       const variants = Array.isArray(catalogRow.variants) ? catalogRow.variants : [];
 
       if (variants.length > 0) {
         for (const variant of variants) {
           const variantPrice = variant.pricereal ?? catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
-          if (variantPrice <= 0) continue;
+          if (variantPrice <= 0 || variantPrice < minPrice) continue;
 
           const variantPaintIndex = variant.paintindex ?? variant.paint_index;
           const dedupKey = variantPaintIndex != null
@@ -130,7 +204,7 @@ export class GenerateCatalogGlobalUseCase {
         if (index.has(dedupKey)) continue;
 
         const youpinAsk = catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
-        if (youpinAsk <= 0) continue;
+        if (youpinAsk <= 0 || youpinAsk < minPrice) continue;
 
         index.add(dedupKey);
 

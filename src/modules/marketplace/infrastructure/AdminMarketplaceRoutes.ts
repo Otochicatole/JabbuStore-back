@@ -25,6 +25,7 @@ router.patch('/settings/payment-methods', AdminMarketplaceController.updatePayme
 router.patch('/settings/currency-conversion', AdminMarketplaceController.updateCurrencyConversionSettings);
 router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
 router.patch('/settings/home-stats', AdminMarketplaceController.updateHomeStatsSettings);
+router.patch('/settings/catalog-filters', AdminMarketplaceController.updateCatalogFilters);
 router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);
 router.post('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.upsertSecret);
 router.post('/settings/secrets/:key/reveal', secretsLimiter, AdminMarketplaceController.revealSecret);

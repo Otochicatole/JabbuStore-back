@@ -3,7 +3,9 @@ import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssets
 import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
 import { GenerateCatalogGlobalUseCase } from '../application/GenerateCatalogGlobalUseCase';
+import type { CatalogFilters } from '../application/GenerateCatalogGlobalUseCase';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
+import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
 export class MarketController {
   private generateCatalogGlobalUseCase = new GenerateCatalogGlobalUseCase();
@@ -47,11 +49,27 @@ export class MarketController {
       res.status(500).json({ error: error.message || 'Error al descargar items-catalog.json' });
     }
   }
-  /** POST /market/generate-catalog-global — Paso 3: Generar catalog-global.json */
+  /** POST /market/generate-catalog-global — Paso 2: Generar catalog-global.json con filtros */
   async generateCatalogGlobal(_req: Request, res: Response): Promise<void> {
     try {
-      console.log('[Market Controller] Iniciando Paso 3: Generar catalog-global.json...');
-      const result = await this.generateCatalogGlobalUseCase.execute();
+      console.log('[Market Controller] Iniciando Paso 2: Generar catalog-global.json...');
+
+      const adminSettings = await prisma.adminSettings.findFirst();
+      const filters: CatalogFilters | undefined = adminSettings
+        ? {
+            catalogFilterKnivesEnabled: adminSettings.catalogFilterKnivesEnabled,
+            catalogFilterGlovesEnabled: adminSettings.catalogFilterGlovesEnabled,
+            catalogFilterRiflesEnabled: adminSettings.catalogFilterRiflesEnabled,
+            catalogFilterPistolsEnabled: adminSettings.catalogFilterPistolsEnabled,
+            catalogFilterSMGsEnabled: adminSettings.catalogFilterSMGsEnabled,
+            catalogFilterHeavyEnabled: adminSettings.catalogFilterHeavyEnabled,
+            catalogFilterSouvenirEnabled: adminSettings.catalogFilterSouvenirEnabled,
+            catalogFilterStatTrakEnabled: adminSettings.catalogFilterStatTrakEnabled,
+            catalogMinPrice: adminSettings.catalogMinPrice,
+          }
+        : undefined;
+
+      const result = await this.generateCatalogGlobalUseCase.execute(filters);
       res.json({
         success: true,
         message: 'catalog-global.json generado correctamente.',

@@ -184,4 +184,22 @@ export class AdminSettingsService {
       data,
     });
   }
+
+  static async updateCatalogFilters(data: {
+    catalogFilterKnivesEnabled?: boolean;
+    catalogFilterGlovesEnabled?: boolean;
+    catalogFilterRiflesEnabled?: boolean;
+    catalogFilterPistolsEnabled?: boolean;
+    catalogFilterSMGsEnabled?: boolean;
+    catalogFilterHeavyEnabled?: boolean;
+    catalogFilterSouvenirEnabled?: boolean;
+    catalogFilterStatTrakEnabled?: boolean;
+    catalogMinPrice?: number;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
 }

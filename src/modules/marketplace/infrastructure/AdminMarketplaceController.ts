@@ -285,6 +285,36 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateCatalogFilters(req: Request, res: Response) {
+    try {
+      const {
+        catalogFilterKnivesEnabled,
+        catalogFilterGlovesEnabled,
+        catalogFilterRiflesEnabled,
+        catalogFilterPistolsEnabled,
+        catalogFilterSMGsEnabled,
+        catalogFilterHeavyEnabled,
+        catalogFilterSouvenirEnabled,
+        catalogFilterStatTrakEnabled,
+        catalogMinPrice,
+      } = req.body;
+      const settings = await AdminSettingsService.updateCatalogFilters({
+        catalogFilterKnivesEnabled,
+        catalogFilterGlovesEnabled,
+        catalogFilterRiflesEnabled,
+        catalogFilterPistolsEnabled,
+        catalogFilterSMGsEnabled,
+        catalogFilterHeavyEnabled,
+        catalogFilterSouvenirEnabled,
+        catalogFilterStatTrakEnabled,
+        catalogMinPrice,
+      });
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
