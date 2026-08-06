@@ -26,6 +26,9 @@ router.patch('/settings/currency-conversion', AdminMarketplaceController.updateC
 router.patch('/settings/manual-transfer', AdminMarketplaceController.updateManualTransferSettings);
 router.patch('/settings/home-stats', AdminMarketplaceController.updateHomeStatsSettings);
 router.patch('/settings/catalog-filters', AdminMarketplaceController.updateCatalogFilters);
+router.patch('/settings/auto-sync', AdminMarketplaceController.updateAutoSyncSettings);
+router.get('/settings/auto-sync/status', AdminMarketplaceController.getAutoSyncStatus);
+router.post('/settings/auto-sync/run-now', AdminMarketplaceController.runAutoSyncNow);
 router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);
 router.post('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.upsertSecret);
 router.post('/settings/secrets/:key/reveal', secretsLimiter, AdminMarketplaceController.revealSecret);

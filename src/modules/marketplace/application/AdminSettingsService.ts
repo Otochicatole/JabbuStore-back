@@ -202,4 +202,15 @@ export class AdminSettingsService {
       data,
     });
   }
+
+  static async updateAutoSyncSettings(data: {
+    autoSyncEnabled?: boolean;
+    autoSyncIntervalMinutes?: number;
+  }) {
+    const settings = await this.getSettings();
+    return prisma.adminSettings.update({
+      where: { id: settings.id },
+      data,
+    });
+  }
 }

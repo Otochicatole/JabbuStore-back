@@ -250,6 +250,10 @@ model AdminSettings {
   catalogFilterStatTrakEnabled Boolean @default(true)
   catalogMinPrice            Float    @default(0.1)
 
+  // Auto sync del catálogo
+  autoSyncEnabled            Boolean  @default(false)
+  autoSyncIntervalMinutes    Int      @default(5)
+
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }

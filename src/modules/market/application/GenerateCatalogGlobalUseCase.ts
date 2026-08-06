@@ -68,7 +68,8 @@ function getSkinCategory(marketHashName: string): SkinCategory | null {
   else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
 
   if (name.startsWith("★")) {
-    return name.toLowerCase().includes("glove") ? "glove" : "knife";
+    const lower = name.toLowerCase();
+    return (lower.includes("glove") || lower.includes("hand wrap")) ? "glove" : "knife";
   }
 
   for (const rifle of RIFLES) {

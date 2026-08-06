@@ -178,6 +178,7 @@ app.get('/', (req, res) => {
 
 import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
 import { startRetentionScheduler } from './modules/orders/infrastructure/RetentionScheduler';
+import { autoSyncService } from './modules/market/application/AutoSyncService';
 
 async function bootstrap() {
   // Limpiar configuraciones no editables en la DB para respetar el archivo .env
@@ -199,6 +200,8 @@ async function bootstrap() {
     startRaffleScheduler();
     // Verificación periódica de retenciones de venta vencidas (8 días)
     startRetentionScheduler();
+    // Auto sync del catálogo global
+    void autoSyncService.start();
   });
 }
 

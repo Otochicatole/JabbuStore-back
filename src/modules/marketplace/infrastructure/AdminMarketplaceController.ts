@@ -8,6 +8,7 @@ import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUse
 import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { AdminSecureConfigService } from '../application/AdminSecureConfigService';
+import { autoSyncService } from '../../market/application/AutoSyncService';
 
 const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
 let botInventorySyncRunning = false;
@@ -312,6 +313,37 @@ export class AdminMarketplaceController {
       res.json(settings);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateAutoSyncSettings(req: Request, res: Response) {
+    try {
+      const { autoSyncEnabled, autoSyncIntervalMinutes } = req.body;
+      const settings = await AdminSettingsService.updateAutoSyncSettings({
+        autoSyncEnabled,
+        autoSyncIntervalMinutes,
+      });
+      void autoSyncService.restart();
+      res.json({ ...settings, status: autoSyncService.status });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async getAutoSyncStatus(_req: Request, res: Response) {
+    try {
+      res.json(autoSyncService.status);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async runAutoSyncNow(_req: Request, res: Response) {
+    try {
+      await autoSyncService.runNow();
+      res.json(autoSyncService.status);
+    } catch (err: any) {
+      res.status(409).json({ error: err.message });
     }
   }
 
