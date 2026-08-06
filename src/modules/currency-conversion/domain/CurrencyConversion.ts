@@ -1,4 +1,4 @@
-export const DISPLAY_CURRENCIES = ["USD", "ARS", "BRL"] as const;
+export const DISPLAY_CURRENCIES = ["USD", "ARS"] as const;
 export const USD_ARS_RATE_KINDS = ["oficial", "blue", "cripto"] as const;
 
 export type DisplayCurrency = (typeof DISPLAY_CURRENCIES)[number];
@@ -15,7 +15,6 @@ export interface ExchangeRate<TKind extends string = string> {
 
 export interface IExchangeRateProvider {
   getUsdArsRate(kind: UsdArsRateKind): Promise<ExchangeRate<UsdArsRateKind>>;
-  getBrlArsRate(): Promise<ExchangeRate<"brl">>;
 }
 
 export const isDisplayCurrency = (value: unknown): value is DisplayCurrency =>

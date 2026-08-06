@@ -28,10 +28,6 @@ export class DolarApiExchangeRateProvider implements IExchangeRateProvider {
     return this.getRate(kind, `/v1/dolares/${kind}`) as Promise<ExchangeRate<UsdArsRateKind>>;
   }
 
-  getBrlArsRate(): Promise<ExchangeRate<"brl">> {
-    return this.getRate("brl", "/v1/cotizaciones/brl") as Promise<ExchangeRate<"brl">>;
-  }
-
   private async getRate(kind: string, path: string): Promise<ExchangeRate> {
     const cached = this.cache.get(kind);
     if (cached && cached.expiresAt > Date.now()) {

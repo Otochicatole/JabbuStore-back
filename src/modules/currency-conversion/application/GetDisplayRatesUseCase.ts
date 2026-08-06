@@ -13,22 +13,13 @@ export class GetDisplayRatesUseCase {
     const rateKind: UsdArsRateKind = isUsdArsRateKind(settings.usdArsRateKind)
       ? settings.usdArsRateKind
       : "blue";
-    const [usdArs, brlArs] = await Promise.all([
-      this.exchangeRateProvider.getUsdArsRate(rateKind),
-      this.exchangeRateProvider.getBrlArsRate(),
-    ]);
-    const usdBrl = usdArs.value / brlArs.value;
-
-    if (!Number.isFinite(usdBrl) || usdBrl <= 0) {
-      throw new Error("DolarAPI no devolvio tasas suficientes para calcular BRL.");
-    }
+    const usdArs = await this.exchangeRateProvider.getUsdArsRate(rateKind);
 
     return {
       baseCurrency: "USD" as const,
       rates: {
         USD: 1,
         ARS: usdArs.value,
-        BRL: usdBrl,
       },
       usdArsRateKind: rateKind,
       side: "venta" as const,
@@ -36,7 +27,6 @@ export class GetDisplayRatesUseCase {
       quotedAt: new Date().toISOString(),
       sourcesUpdatedAt: {
         usdArs: usdArs.providerUpdatedAt,
-        brlArs: brlArs.providerUpdatedAt,
       },
     };
   }

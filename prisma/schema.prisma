@@ -9,7 +9,6 @@ datasource db {
 enum DisplayCurrency {
   USD
   ARS
-  BRL
 }
 
 model User {
