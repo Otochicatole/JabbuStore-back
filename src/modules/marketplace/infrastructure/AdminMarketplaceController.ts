@@ -8,7 +8,7 @@ import { SyncStoreItemsUseCase } from '../../store/application/SyncStoreItemsUse
 import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { AdminSecureConfigService } from '../application/AdminSecureConfigService';
-import { syncExecutionCoordinator } from '../../market/application/SyncExecutionCoordinator';
+import { autoSyncService } from '../../market/application/AutoSyncService';
 
 const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
 let botInventorySyncRunning = false;
@@ -286,6 +286,67 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateCatalogFilters(req: Request, res: Response) {
+    try {
+      const {
+        catalogFilterKnivesEnabled,
+        catalogFilterGlovesEnabled,
+        catalogFilterRiflesEnabled,
+        catalogFilterPistolsEnabled,
+        catalogFilterSMGsEnabled,
+        catalogFilterHeavyEnabled,
+        catalogFilterSouvenirEnabled,
+        catalogFilterStatTrakEnabled,
+        catalogMinPrice,
+      } = req.body;
+      const settings = await AdminSettingsService.updateCatalogFilters({
+        catalogFilterKnivesEnabled,
+        catalogFilterGlovesEnabled,
+        catalogFilterRiflesEnabled,
+        catalogFilterPistolsEnabled,
+        catalogFilterSMGsEnabled,
+        catalogFilterHeavyEnabled,
+        catalogFilterSouvenirEnabled,
+        catalogFilterStatTrakEnabled,
+        catalogMinPrice,
+      });
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async updateAutoSyncSettings(req: Request, res: Response) {
+    try {
+      const { autoSyncEnabled, autoSyncIntervalMinutes } = req.body;
+      const settings = await AdminSettingsService.updateAutoSyncSettings({
+        autoSyncEnabled,
+        autoSyncIntervalMinutes,
+      });
+      void autoSyncService.restart();
+      res.json({ ...settings, status: autoSyncService.status });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async getAutoSyncStatus(_req: Request, res: Response) {
+    try {
+      res.json(autoSyncService.status);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  static async runAutoSyncNow(_req: Request, res: Response) {
+    try {
+      await autoSyncService.runNow();
+      res.json(autoSyncService.status);
+    } catch (err: any) {
+      res.status(409).json({ error: err.message });
+    }
+  }
+
   // Bots
   static async getBots(req: Request, res: Response) {
     try {
@@ -309,22 +370,7 @@ export class AdminMarketplaceController {
 
   /** POST /admin/marketplace/bots/sync — inventario Steam + precios (background) */
   static async syncBotsInventory(_req: Request, res: Response) {
-    const lease = syncExecutionCoordinator.tryAcquire('bot_only');
-    if (!lease) {
-      const activeJob =
-        syncExecutionCoordinator.getBlockingKind('bot_only') ?? 'bot_only';
-      res.status(409).json({
-        started: false,
-        error:
-          activeJob === 'market_assets'
-            ? 'Hay una sincronización de assets en curso; los bots se omiten hasta que termine.'
-            : 'Ya hay una sincronización de bots en curso.',
-        activeJob,
-      });
-      return;
-    }
     if (botInventorySyncRunning) {
-      lease.release();
       res.status(409).json({ error: 'Ya hay una sincronización de bots en curso.' });
       return;
     }
@@ -347,7 +393,6 @@ export class AdminMarketplaceController {
         console.error('[Admin] Error sincronizando bots (background):', err);
       } finally {
         botInventorySyncRunning = false;
-        lease.release();
       }
     })();
   }

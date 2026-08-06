@@ -3,8 +3,8 @@ import {
   floatRateLimiter,
   type FloatRateLimitPriority,
   type FloatRateLimitSnapshot,
+  type FloatRateLimitAcquireOptions,
 } from "../application/FloatRateLimiter";
-import { marketSyncProgressService } from "../application/MarketSyncProgressService";
 
 /** GET /steam/api/float/assets (sin API key en constantes/logs). */
 export const STEAM_FLOAT_ASSETS_URL =
@@ -34,6 +34,8 @@ export interface FloatAssetsQuery {
   maxRateLimitWaitMs?: number;
   onRateLimitWait?: (waitMs: number) => void;
   requestTimeoutMs?: number;
+  skipRateLimitIfExhausted?: boolean;
+  bypassRateLimiter?: boolean;
 }
 
 export interface FloatAssetsPage {
@@ -150,7 +152,7 @@ export class SteamWebApiFloatAssetsClient {
       return emptyPage({
         limit,
         offset,
-        sort,
+        sort: sort ?? "newest",
         status: 0,
         error: "STEAMWEBAPI_API_KEY no configurado",
         quotaUnitsUsed: 0,
@@ -161,8 +163,8 @@ export class SteamWebApiFloatAssetsClient {
       key: apiKey,
       limit: String(limit),
       offset: String(offset),
-      sort,
     });
+    if (sort) params.set("sort", sort);
     if (query.source) params.set("source", query.source);
     if (query.onlyMarketId !== undefined) {
       params.set("only_market_id", query.onlyMarketId ? "1" : "0");
@@ -186,15 +188,15 @@ export class SteamWebApiFloatAssetsClient {
       params.set("is_souvenir", query.isSouvenir ? "1" : "0");
     }
 
-    await floatRateLimiter.acquire(limit, {
-      priority: query.rateLimitPriority ?? "normal",
-      ...(query.maxRateLimitWaitMs != null
-        ? { maxWaitMs: query.maxRateLimitWaitMs }
-        : {}),
-      ...(query.onRateLimitWait
-        ? { onWait: query.onRateLimitWait }
-        : {}),
-    });
+    if (!query.bypassRateLimiter) {
+      const acquireOptions: FloatRateLimitAcquireOptions = {
+        priority: query.rateLimitPriority ?? "normal",
+      };
+      if (query.maxRateLimitWaitMs != null) acquireOptions.maxWaitMs = query.maxRateLimitWaitMs;
+      if (query.onRateLimitWait) acquireOptions.onWait = query.onRateLimitWait;
+      if (query.skipRateLimitIfExhausted) acquireOptions.skipIfExhausted = true;
+      await floatRateLimiter.acquire(limit, acquireOptions);
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(
@@ -203,7 +205,10 @@ export class SteamWebApiFloatAssetsClient {
     );
     let res: Response;
     try {
-      res = await fetch(`${STEAM_FLOAT_ASSETS_URL}?${params.toString()}`, {
+      const queryString = params.toString().replace(/\+/g, '%20');
+      const fullUrl = `${STEAM_FLOAT_ASSETS_URL}?${queryString}`;
+      console.log(`[FloatAssets] requesting: ${fullUrl.slice(0, 250)}`);
+      res = await fetch(fullUrl, {
         signal: controller.signal,
         headers: { accept: "application/json" },
       });
@@ -225,11 +230,13 @@ export class SteamWebApiFloatAssetsClient {
       clearTimeout(timeout);
     }
 
-    const rateHeaders = readRateLimitHeaders(res);
-    if (res.status === 429) {
-      await floatRateLimiter.penalize(rateHeaders);
-    } else {
-      await floatRateLimiter.observeHeaders(rateHeaders);
+    if (!query.bypassRateLimiter) {
+      const rateHeaders = readRateLimitHeaders(res);
+      if (res.status === 429) {
+        await floatRateLimiter.penalize(rateHeaders);
+      } else {
+        await floatRateLimiter.observeHeaders(rateHeaders);
+      }
     }
 
     const advertisedLength = Number(res.headers.get("content-length"));
@@ -302,6 +309,7 @@ export class SteamWebApiFloatAssetsClient {
     }
 
     const page = parseFloatAssetsResponse(parsed);
+    console.log(`[FloatAssets] ok total=${page.total} count=${page.assets.length} bodyStart=${body.slice(0, 120)}`);
     return {
       ...page,
       ok: true,
@@ -328,7 +336,6 @@ export class SteamWebApiFloatAssetsClient {
     let rateLimited = false;
 
     for (let page = 0; page < maxPages; page++) {
-      marketSyncProgressService.updateFetchPage(page + 1, all.length);
       const result = await this.fetchPage({
         source: "youpin",
         onlyMarketId: true,

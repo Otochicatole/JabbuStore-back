@@ -28,6 +28,7 @@ export interface FloatRateLimitAcquireOptions {
   maxWaitMs?: number;
   priority?: FloatRateLimitPriority;
   onWait?: (waitMs: number) => void;
+  skipIfExhausted?: boolean;
 }
 
 export interface FloatRateLimiterClock {
@@ -324,6 +325,10 @@ export class FloatRateLimiter {
             return { acquired: true as const, waitMs: 0 };
           }
 
+          if (options.skipIfExhausted && !hasCapacity) {
+            return { skipped: true as const, waitMs: 0 };
+          }
+
           const blockedUntil = Math.max(
             this.cooldownUntil,
             hasCapacity ? now + 50 : this.windowResetsAt,
@@ -334,6 +339,7 @@ export class FloatRateLimiter {
           };
         });
         if (decision.acquired) return;
+        if ("skipped" in decision && (decision as { skipped: true }).skipped) return;
         const waitMs = decision.waitMs;
         if (
           options.maxWaitMs != null &&

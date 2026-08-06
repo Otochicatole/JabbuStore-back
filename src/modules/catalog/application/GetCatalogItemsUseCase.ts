@@ -1,6 +1,11 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { BotService } from '../../marketplace/application/BotService';
-import { normalizeDopplerPhaseLabel } from '../../pricing/domain/DopplerPhase';
+import { normalizeDopplerPhaseLabel, getDopplerPhaseLabelByPaintIndex } from '../../pricing/domain/DopplerPhase';
+import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
+import type { CatalogGlobalPayload, CatalogGlobalItemRow } from '../../market/application/GenerateCatalogGlobalUseCase';
+import { CATALOG_GLOBAL_JSON_PATH } from '../../market/application/GenerateCatalogGlobalUseCase';
 
 type SortOption =
   | 'price_desc'
@@ -38,6 +43,7 @@ export interface CatalogItem {
   phase: string | null;
   isImmediate: boolean;
   inspectLink: string | null;
+  provider: "bot" | "youpin";
   variants?: CatalogItem[];
 }
 
@@ -118,6 +124,16 @@ function applyModifier(basePrice: number, enabled: boolean, type: string, value:
   }
 
   return Math.max(0, Math.round((basePrice + modifier) * 100) / 100);
+}
+
+function getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {
+  const image = row.image || row.itemimage;
+  if (!image) return null;
+  if (typeof image === 'string' && /^https?:\/\//i.test(image)) return image;
+  if (typeof image === 'string' && image.length > 0) {
+    return `https://community.cloudflare.steamstatic.com/economy/image/${image}/360fx360f`;
+  }
+  return null;
 }
 
 const WEAR_SUFFIX =
@@ -250,11 +266,49 @@ function stripInternal(item: InternalCatalogItem): CatalogItem {
   return publicItem;
 }
 
+const VALID_WEAPON_NAMES = [
+  "AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20",
+  "Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000",
+  "MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon",
+  "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
+];
+
+function isSkinOnly(marketHashName: string): boolean {
+  if (!marketHashName || typeof marketHashName !== "string") return false;
+  let name = marketHashName.trim();
+
+  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
+  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
+  
+  if (name.startsWith("Souvenir ")) name = name.slice(9).trim();
+
+  if (name.startsWith("★")) return true;
+
+  for (const weapon of VALID_WEAPON_NAMES) {
+    if (name.startsWith(`${weapon} |`)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+const DOPPLER_STANDARD_PAINTS = new Set([415, 416, 417, 418, 419, 420, 421, 617, 618, 619, 849, 850, 851, 852, 853, 854, 855]);
+const DOPPLER_GAMMA_PAINTS = new Set([568, 569, 570, 571, 572, 1119, 1120, 1121, 1122, 1123]);
+
+const ALL_DOPPLER_PAINTS = new Set([...DOPPLER_STANDARD_PAINTS, ...DOPPLER_GAMMA_PAINTS]);
+
+function resolveDopplerPhase(paintIndex: number | null | undefined): string | null {
+  if (paintIndex == null || !Number.isFinite(paintIndex)) return null;
+  if (!ALL_DOPPLER_PAINTS.has(paintIndex)) return null;
+  return getDopplerPhaseLabelByPaintIndex(paintIndex);
+}
+
 export class GetCatalogItemsUseCase {
   async execute(query: CatalogItemsQuery): Promise<CatalogItemsResult> {
     await BotService.purgeStoreItemsForInactiveBots();
 
-    const [settings, allStoreItems, allMarketAssets] = await Promise.all([
+    const [settings, storeItems] = await Promise.all([
       prisma.adminSettings.findFirst(),
       prisma.storeItem.findMany({
         where: {
@@ -263,20 +317,7 @@ export class GetCatalogItemsUseCase {
           price: { gt: 0 },
         },
       }),
-      prisma.floatItem.findMany({
-        where: {
-          available: true,
-          price: { gt: 0 },
-        },
-        include: {
-          resaleItem: true,
-        },
-      }),
     ]);
-
-    const storeItems = allStoreItems;
-    const marketAssets = allMarketAssets;
-
 
     const settingsData = settings ?? {
       globalPriceModifierEnabled: false,
@@ -314,42 +355,79 @@ export class GetCatalogItemsUseCase {
             phase: parsed.phase,
             isImmediate: true,
             inspectLink: item.inspectLink,
+            provider: "bot" as const,
             createdAt: item.createdAt,
           };
         });
 
-    const marketCatalogItems: InternalCatalogItem[] = query.immediate
-      ? []
-      : marketAssets.flatMap((asset): InternalCatalogItem[] => {
-          const parsed = parseName(asset.resaleItem.name);
-          if (/\bdoppler\b/i.test(parsed.name) && !parsed.phase) {
-            return [];
-          }
+    let marketCatalogItems: InternalCatalogItem[] = [];
 
-          return [{
-            id: `youpin-${asset.id}`,
-            name: parsed.name,
-            weapon: parsed.weapon,
-            rarity: asset.resaleItem.rarity,
-            price: applyModifier(
-              asset.price,
+    if (!query.immediate) {
+      let catalogGlobalItems: InternalCatalogItem[] = [];
+      try {
+        const raw = await fs.readFile(CATALOG_GLOBAL_JSON_PATH, 'utf-8');
+        const payload: CatalogGlobalPayload = JSON.parse(raw);
+
+        if (Array.isArray(payload.items) && payload.items.length > 0) {
+          catalogGlobalItems = payload.items.flatMap((item): InternalCatalogItem[] => {
+            const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
+            if (!name || typeof name !== 'string') return [];
+
+            if (!isSkinOnly(name)) return [];
+
+            const parsed = parseName(name);
+
+            const variantPhase = (item as any).variantPhase as string | undefined;
+            const variantPaintIndex = (item as any).variantPaintIndex as number | undefined;
+            const variantImage = (item as any).variantImage as string | undefined;
+
+            const paintIndex = variantPaintIndex ?? (item as any).paintindex;
+            const dopplerPhase = resolveDopplerPhase(paintIndex);
+            const phase = variantPhase ?? parsed.phase ?? dopplerPhase;
+
+            const youpinAsk = item.youpinAsk ?? 0;
+            const basePrice = youpinAsk;
+
+            const price = applyModifier(
+              basePrice,
               settingsData.marketModifierEnabled,
               settingsData.marketModifierType,
               settingsData.marketModifierValue,
-            ),
-            imageUrl: asset.resaleItem.iconUrl || '/skin.webp',
-            float: asset.floatValue,
-            pattern: asset.paintSeed,
-            exterior: asset.resaleItem.exterior,
-            category: asset.resaleItem.category,
-            isStatTrak: asset.resaleItem.isStatTrak,
-            isSouvenir: asset.resaleItem.isSouvenir,
-            phase: parsed.phase,
-            isImmediate: false,
-            inspectLink: asset.inspectLink,
-            createdAt: asset.lastSyncAt,
-          } satisfies InternalCatalogItem];
-        });
+            );
+
+            const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
+            const imageUrl = getCatalogIconUrl(item) || '/skin.webp';
+            const displayImage = variantImage ? getCatalogIconUrl({ ...item, itemimage: variantImage, image: variantImage }) : imageUrl;
+
+            const finalPhase = phase ?? parsed.phase;
+
+            return [{
+              id: finalPhase ? `${name} | ${finalPhase}` : name,
+              name: parsed.name,
+              weapon: parsed.weapon,
+              rarity: details.rarity || 'common',
+              price,
+              imageUrl: displayImage || imageUrl,
+              float: null,
+              pattern: null,
+              exterior: details.exterior,
+              category: details.category,
+              isStatTrak: details.isStatTrak,
+              isSouvenir: details.isSouvenir,
+              phase: finalPhase,
+              isImmediate: false,
+              inspectLink: null,
+              provider: "youpin" as const,
+              createdAt: new Date(),
+            } satisfies InternalCatalogItem];
+          });
+        }
+      } catch (e) {
+        console.error('[GetCatalogItemsUseCase] Error leyendo catalog-global.json:', e);
+      }
+
+      marketCatalogItems = catalogGlobalItems;
+    }
 
     const filteredByCatalogFacets = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {
       if (normalizedQuery) {

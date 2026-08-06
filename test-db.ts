@@ -1,1 +1,0 @@
-import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function main() { const bots = await prisma.user.findMany({ where: { isFake: true }, orderBy: { createdAt: 'desc' }, take: 1 }); console.log(bots[0].avatar); } main();

@@ -78,29 +78,6 @@ model StoreItem {
   updatedAt     DateTime @updatedAt
 }
 
-/// Catálogo de ítems de reventa provenientes de YouPin 
-model MarketListing {
-  id            String   @id @default(cuid())
-  name          String   @unique
-  provider      String   // 'youpin' — plataforma de reventa
-  youpinAsk     Float?
-  youpinVolume  Int?
-  price         Float    @default(0.0) // precio base seleccionado (YouPin)
-  iconUrl       String?
-  rarity        String   @default("common")
-  exterior      String?
-  category      String   @default("other")
-  isStatTrak    Boolean  @default(false)
-  isSouvenir    Boolean  @default(false)
-  isPriceManual Boolean  @default(false)
-  /// Último intento de indexar floats (se setea aunque no se encuentren), para priorizar el reindexado.
-  floatsSyncedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  floats        FloatItem[]
-
-  @@index([exterior, floatsSyncedAt])
-}
 
 model UserInventoryItem {
   assetId    String   @id
@@ -244,9 +221,9 @@ model AdminSettings {
   webhookUrl                 String?
   currency                   String   @default("USD")
   usdArsRateKind             String   @default("blue")
-  mercadoPagoEnabled         Boolean  @default(true)
-  paypalEnabled              Boolean  @default(true)
-  nowpaymentsEnabled         Boolean  @default(true)
+  mercadoPagoEnabled         Boolean  @default(false)
+  paypalEnabled              Boolean  @default(false)
+  nowpaymentsEnabled         Boolean  @default(false)
   manualTransferEnabled      Boolean  @default(false)
   manualBankAlias            String?
   manualBankCbu              String?
@@ -261,6 +238,21 @@ model AdminSettings {
   homeStatsAvailableSkins    String   @default("45K+")
   homeStatsTransactions      String   @default("2.5M+")
   homeStatsOnlineSupport     String   @default("24/7")
+
+  // Filtros del catálogo global
+  catalogFilterKnivesEnabled Boolean  @default(true)
+  catalogFilterGlovesEnabled Boolean  @default(true)
+  catalogFilterRiflesEnabled Boolean  @default(true)
+  catalogFilterPistolsEnabled Boolean @default(true)
+  catalogFilterSMGsEnabled   Boolean  @default(true)
+  catalogFilterHeavyEnabled  Boolean  @default(true)
+  catalogFilterSouvenirEnabled Boolean @default(false)
+  catalogFilterStatTrakEnabled Boolean @default(true)
+  catalogMinPrice            Float    @default(0.1)
+
+  // Auto sync del catálogo
+  autoSyncEnabled            Boolean  @default(false)
+  autoSyncIntervalMinutes    Int      @default(5)
 
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
@@ -398,56 +390,13 @@ model FloatItem {
   externalId   String?
   lastSyncAt   DateTime      @default(now())
   
-  resaleItemId String
-  resaleItem   MarketListing @relation(fields: [resaleItemId], references: [id], onDelete: Cascade)
+  listingId    String
 
   @@unique([market, assetId])
+  @@index([listingId])
   @@map("floats")
 }
 
-model MarketSyncState {
-  key                     String   @id
-  queueVersion            String
-  cursorIndex             Int      @default(0)
-  lastRowsUsed            Int      @default(0)
-  lastCandidatesVisited   Int      @default(0)
-  lastError               String?
-  lastStartedAt           DateTime?
-  lastFinishedAt          DateTime?
-
-  // Estado de la descarga/snapshot mas reciente. Puede existir sin haberse publicado.
-  snapshotHash            String?
-  rawAssetCount           Int      @default(0)
-  validAssetCount         Int      @default(0)
-  skippedAssetCount       Int      @default(0)
-  publishedListingCount   Int      @default(0)
-  publishedFloatCount     Int      @default(0)
-  lastDownloadedAt        DateTime?
-  lastPublishedAt         DateTime?
-
-  // Progreso durable de la corrida activa.
-  currentPhase            String?
-  targetAssets            Int      @default(0)
-  assetsPerItem           Int      @default(0)
-  totalCandidates         Int      @default(0)
-  currentCandidate        String?
-  quotaUnitsUsed          Int      @default(0)
-  quotaLimit              Int      @default(0)
-  quotaResetsAt           DateTime?
-  completionReason        String?
-
-  // Metricas del ultimo snapshot efectivamente publicado; nunca se pisan con progreso parcial.
-  lastPublishedSnapshotHash      String?
-  lastPublishedRawAssetCount     Int      @default(0)
-  lastPublishedValidAssetCount   Int      @default(0)
-  lastPublishedSkippedAssetCount Int      @default(0)
-  lastPublishedListingCount      Int      @default(0)
-  lastPublishedFloatCount        Int      @default(0)
-  lastSuccessfulAt               DateTime?
-
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
-}
 
 model Notification {
   id        String   @id @default(uuid())

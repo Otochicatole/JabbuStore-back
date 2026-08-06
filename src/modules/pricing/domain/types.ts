@@ -169,6 +169,7 @@ export interface SteamWebApiItemsCatalogRow extends SteamWebApiItemDetailsRow {
   normalizedname?: string;
   marketname?: string;
   image?: string;
+  itemimage?: string;
   pricesafe?: number;
   pricereal24h?: number;
   pricereal7d?: number;

@@ -23,6 +23,7 @@ import {
   getUserSellCheckoutPrice,
   roundMoney,
 } from "../application/OrderPricingService";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
 import {
   PaymentProofMetadata,
   resolvePaymentProofPath,
@@ -36,6 +37,7 @@ import {
   readPaymentQuoteSnapshot,
   type PaymentQuoteSnapshot,
 } from "../../payment-quotes/domain/PaymentQuote";
+import { YoupinAssetValidator } from "../../market/application/YoupinAssetValidator";
 
 const SELL_PRICE_MISMATCH_TOLERANCE = 0.01;
 const PAYMENT_AMOUNT_TOLERANCE = 0.01;
@@ -1254,13 +1256,6 @@ export class OrderController {
           });
         }
 
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
-
-
-
-
         const overridesMap = new Map<string, any>();
         if (Array.isArray(items)) {
           items.forEach((ov) => {
@@ -1303,15 +1298,17 @@ export class OrderController {
           return res.status(400).json({ error: err.message });
         }
 
-        // Validar market listings usando su campo unique 'name'
-        const marketItems =
-          marketNames.length > 0
-            ? await prisma.marketListing.findMany({
-                where: { name: { in: marketNames } },
-              })
-            : [];
+        // Validar market listings usando MarketCatalogService
+        const marketItems = await Promise.all(
+          marketNames.map(async (name: string) => ({
+            requestedName: name,
+            item: await MarketCatalogService.getListingByName(name),
+          })),
+        );
 
-        const missingMarketNames = marketNames.filter(name => !marketItems.some(i => i.name === name));
+        const missingMarketNames = marketItems
+          .filter(({ item }) => !item)
+          .map(({ requestedName }) => requestedName);
         if (missingMarketNames.length > 0) {
           return res.status(400).json({
             error: `Algunos listings de mercado ya no están disponibles: ${missingMarketNames.join(", ")}`,
@@ -1321,15 +1318,51 @@ export class OrderController {
         const youpinFloatItems =
           youpinFloatIds.length > 0
             ? await prisma.floatItem.findMany({
-                where: { id: { in: youpinFloatIds }, available: true },
-                include: { resaleItem: true },
+                where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
               })
             : [];
 
-        const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+        const foundYoupinAssetIds = new Set(youpinFloatItems.map(f => f.assetId));
+        const apiValidatedFloats: Map<string, any> = new Map();
+
+        const missingYoupinFloatIds = youpinFloatIds.filter(id => !foundYoupinAssetIds.has(id));
         if (missingYoupinFloatIds.length > 0) {
+          const apiAssets = missingYoupinFloatIds
+            .map(assetId => {
+              const override = overridesMap.get(`youpin-${assetId}`);
+              const listingId = override?.listingId;
+              return listingId ? { assetId, listingId } : null;
+            })
+            .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+          if (apiAssets.length > 0) {
+            try {
+              const validator = new YoupinAssetValidator();
+              const apiResults = await validator.validateBatch(apiAssets);
+              for (const [_key, result] of apiResults) {
+                if (result.valid) {
+                  apiValidatedFloats.set(result.assetId, {
+                    assetId: result.assetId,
+                    listingId: result.listingId,
+                    floatValue: result.floatValue,
+                    paintSeed: result.paintSeed,
+                    price: result.price,
+                    inspectLink: result.inspectLink,
+                    market: 'YOUPIN',
+                    available: true,
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn("[validateOrder] API fallback error:", err);
+            }
+          }
+        }
+
+        const trulyMissingIds = missingYoupinFloatIds.filter(id => !apiValidatedFloats.has(id));
+        if (trulyMissingIds.length > 0) {
           return res.status(400).json({
-            error: `Algunos assets YouPin ya no están disponibles: ${missingYoupinFloatIds.join(", ")}`,
+            error: `Algunos assets YouPin ya no están disponibles: ${trulyMissingIds.join(", ")}`,
           });
         }
 
@@ -1353,11 +1386,14 @@ export class OrderController {
 
         const resolvedMarketItems = await Promise.all(
           marketNames.map(async (name: string) => {
-            const item = marketItems.find((i: any) => i.name === name)!;
+            const item = marketItems.find((entry: any) => entry.requestedName === name)?.item;
+            if (!item) {
+              throw new Error(`El listing de mercado "${name}" no existe en el catálogo.`);
+            }
             const override = overridesMap.get(`market-${name}`);
             if (override && override.float !== undefined && override.float !== null) {
               const floatQueryWhere: any = {
-                resaleItemId: item.id,
+                listingId: item.name,
                 floatValue: Number(override.float),
               };
               if (override.pattern !== undefined && override.pattern !== null) {
@@ -1398,23 +1434,40 @@ export class OrderController {
           })
         );
 
-        const resolvedYoupinItems = youpinFloatIds.map((floatId: string) => {
-          const dbFloat = youpinFloatItems.find((f: any) => f.id === floatId)!;
-          const override = overridesMap.get(`youpin-${floatId}`);
-          const floatPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
-          const listing = dbFloat.resaleItem;
-          return {
-            assetId: `youpin-${dbFloat.id}`,
-            name: listing.name,
-            price: floatPrice,
-            iconUrl: listing.iconUrl || null,
-            provider: 'youpin',
-            float: override?.isSpecific === true ? dbFloat.floatValue : null,
-            pattern: override?.isSpecific === true ? dbFloat.paintSeed : null,
-            exterior: listing.exterior ?? null,
-            rarity: listing.rarity ?? null,
-          };
-        });
+        const resolvedYoupinItems = await Promise.all(
+          youpinFloatIds.map(async (floatId: string) => {
+            let dbFloat = youpinFloatItems.find((f: any) => f.assetId === floatId);
+            const apiFloat = apiValidatedFloats.get(floatId);
+
+            const effectiveFloat = dbFloat || apiFloat;
+            if (!effectiveFloat) {
+              return {
+                assetId: `youpin-${floatId}`,
+                name: floatId,
+                price: 0,
+                iconUrl: null,
+                provider: "youpin",
+                float: null,
+                pattern: null,
+                exterior: null,
+                rarity: null,
+              };
+            }
+
+            const listing = await MarketCatalogService.getListingByName(effectiveFloat.listingId);
+            return {
+              assetId: `youpin-${floatId}`,
+              name: listing?.name ?? effectiveFloat.listingId,
+              price: getMarketCheckoutPrice(effectiveFloat.price, settingsData),
+              iconUrl: listing?.iconUrl || null,
+              provider: "youpin",
+              float: effectiveFloat.floatValue,
+              pattern: effectiveFloat.paintSeed,
+              exterior: listing?.exterior ?? null,
+              rarity: listing?.rarity ?? null,
+            };
+          })
+        );
 
         const invalidPriceItem = [...resolvedBotItems, ...resolvedMarketItems, ...resolvedYoupinItems]
           .find((item) => !Number.isFinite(item.price) || item.price <= 0);
@@ -1437,9 +1490,6 @@ export class OrderController {
           totalPrice,
         });
       } else if (type === "SELL") {
-        const {
-          prisma,
-        } = require("../../../shared/infrastructure/PrismaClient");
 
         if (quoteId) {
           const quote = await prisma.quote.findUnique({
@@ -1609,12 +1659,17 @@ export class OrderController {
 
   async validateCart(req: Request, res: Response) {
     try {
-      const { itemIds } = req.body;
+      const { itemIds, items } = req.body;
       if (!Array.isArray(itemIds)) {
         return res.status(400).json({ error: "itemIds must be an array of strings" });
       }
 
-      const { prisma } = require("../../../shared/infrastructure/PrismaClient");
+      const itemsOverrideMap = new Map<string, any>();
+      if (Array.isArray(items)) {
+        items.forEach((ov: any) => {
+          if (ov && ov.assetId) itemsOverrideMap.set(ov.assetId, ov);
+        });
+      }
 
       const youpinFloatIds = itemIds
         .filter((id: string) => id?.startsWith("youpin-"))
@@ -1634,7 +1689,6 @@ export class OrderController {
             })
           : [];
 
-      // Filtrar items cuyos bots estén activos y habilitados
       let activeBotIds: string[] = [];
       if (storeItems.length > 0) {
         const activeBots = await prisma.bot.findMany({
@@ -1647,25 +1701,52 @@ export class OrderController {
           .map((item: any) => item.assetId);
       }
 
-      // 2. Validar listings de mercado (legacy)
-      const marketItems =
-        marketNames.length > 0
-          ? await prisma.marketListing.findMany({
-              where: { name: { in: marketNames }, price: { gt: 0 } },
-              select: { name: true }
-            })
-          : [];
-      const validMarketNames = marketItems.map((i: any) => `market-${i.name}`);
+      // 2. Validar listings de mercado usando MarketCatalogService
+      const marketListings = await Promise.all(
+        marketNames.map(async (name: string) => ({
+          name,
+          item: await MarketCatalogService.getListingByName(name),
+        })),
+      );
+      const validMarketNames = marketListings
+        .filter(({ item }) => Boolean(item && item.price > 0))
+        .map(({ name }) => `market-${name}`);
 
-      // 3. Validar float items de YouPin (bajo pedido)
+      // 3. Validar float items de YouPin (bajo pedido) — local DB primero
       const youpinFloatItems =
         youpinFloatIds.length > 0
           ? await prisma.floatItem.findMany({
-              where: { id: { in: youpinFloatIds }, available: true, price: { gt: 0 } },
-              select: { id: true }
+              where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true, price: { gt: 0 } },
+              select: { assetId: true }
             })
           : [];
-      const validYoupinIds = youpinFloatItems.map((f: any) => `youpin-${f.id}`);
+      const validYoupinIds = new Set<string>(youpinFloatItems.map((f: any) => `youpin-${f.assetId}`));
+
+      // 4. Fallback a API para assets YouPin no encontrados localmente
+      const missingYoupinIds = youpinFloatIds.filter(
+        id => !youpinFloatItems.some(f => f.assetId === id)
+      );
+      if (missingYoupinIds.length > 0) {
+        const apiAssets = missingYoupinIds
+          .map(assetId => {
+            const override = itemsOverrideMap.get(`youpin-${assetId}`);
+            const listingId = override?.listingId;
+            return listingId ? { assetId, listingId } : null;
+          })
+          .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+        if (apiAssets.length > 0) {
+          try {
+            const validator = new YoupinAssetValidator();
+            const apiResults = await validator.validateBatch(apiAssets);
+            for (const [key, result] of apiResults) {
+              if (result.valid) validYoupinIds.add(key);
+            }
+          } catch (err) {
+            console.warn("[validateCart] API fallback error:", err);
+          }
+        }
+      }
 
       // Combinar todos los IDs válidos
       const validSet = new Set<string>([

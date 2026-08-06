@@ -80,6 +80,7 @@ export class SteamWebApiItemsCatalogClient {
         currency: this.currency,
         production: "1",
         select: this.select,
+        grouped: "0",
       });
       if (this.market) {
         params.set("markets", this.market);

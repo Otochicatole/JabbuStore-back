@@ -18,6 +18,8 @@ import {
   getUserSellCheckoutPrice,
   roundMoney,
 } from "./OrderPricingService";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
+import { YoupinAssetValidator } from "../../market/application/YoupinAssetValidator";
 
 const PRICE_MISMATCH_TOLERANCE = 0.01;
 const OPEN_SELL_ORDER_STATUSES = [
@@ -204,15 +206,17 @@ export class CreatePurchaseOrderUseCase {
       await BotService.assertStoreItemsFromActiveBots(storeItems);
     }
 
-    // Resolver market listings usando su campo unique 'name'
-    const marketListings =
-      marketNames.length > 0
-        ? await prisma.marketListing.findMany({
-            where: { name: { in: marketNames } },
-          })
-        : [];
+    // Resolver market listings usando MarketCatalogService
+    const marketListings = await Promise.all(
+      marketNames.map(async (name) => ({
+        requestedName: name,
+        item: await MarketCatalogService.getListingByName(name),
+      })),
+    );
 
-    const missingMarketNames = marketNames.filter(name => !marketListings.some(i => i.name === name));
+    const missingMarketNames = marketListings
+      .filter(({ item }) => !item)
+      .map(({ requestedName }) => requestedName);
     if (missingMarketNames.length > 0) {
       throw new Error(
         `Some market listings are no longer available: ${missingMarketNames.join(", ")}`,
@@ -222,15 +226,51 @@ export class CreatePurchaseOrderUseCase {
     const youpinFloatItems =
       youpinFloatIds.length > 0
         ? await prisma.floatItem.findMany({
-            where: { id: { in: youpinFloatIds }, available: true },
-            include: { resaleItem: true },
+            where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
           })
         : [];
 
-    const missingYoupinFloatIds = youpinFloatIds.filter(id => !youpinFloatItems.some(f => f.id === id));
+    const foundYoupinAssetIds = new Set(youpinFloatItems.map(f => f.assetId));
+    const apiValidatedFloats: Map<string, any> = new Map();
+
+    const missingYoupinFloatIds = youpinFloatIds.filter(id => !foundYoupinAssetIds.has(id));
     if (missingYoupinFloatIds.length > 0) {
+      const apiAssets = missingYoupinFloatIds
+        .map(assetId => {
+          const override = overridesMap.get(`youpin-${assetId}`);
+          const listingId = override?.listingId;
+          return listingId ? { assetId, listingId } : null;
+        })
+        .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+      if (apiAssets.length > 0) {
+        try {
+          const validator = new YoupinAssetValidator();
+          const apiResults = await validator.validateBatch(apiAssets);
+          for (const [_key, result] of apiResults) {
+            if (result.valid) {
+              apiValidatedFloats.set(result.assetId, {
+                assetId: result.assetId,
+                listingId: result.listingId,
+                floatValue: result.floatValue,
+                paintSeed: result.paintSeed,
+                price: result.price,
+                inspectLink: result.inspectLink,
+                market: 'YOUPIN',
+                available: true,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("[CreatePurchaseOrder] API fallback error:", err);
+        }
+      }
+    }
+
+    const trulyMissingIds = missingYoupinFloatIds.filter(id => !apiValidatedFloats.has(id));
+    if (trulyMissingIds.length > 0) {
       throw new Error(
-        `Some YouPin assets are no longer available: ${missingYoupinFloatIds.join(", ")}`,
+        `Some YouPin assets are no longer available: ${trulyMissingIds.join(", ")}`,
       );
     }
 
@@ -271,7 +311,10 @@ export class CreatePurchaseOrderUseCase {
 
     // Market listings — precio del catálogo u override de float individual
     for (const name of marketNames) {
-      const item = marketListings.find((i: any) => i.name === name)!;
+      const item = marketListings.find((entry: any) => entry.requestedName === name)?.item;
+      if (!item) {
+        throw new Error(`The market listing ${name} is no longer available.`);
+      }
       const override = overridesMap.get(`market-${name}`);
       let itemPrice: number;
       let itemFloat: number | null = null;
@@ -281,7 +324,7 @@ export class CreatePurchaseOrderUseCase {
       itemPrice = getMarketCheckoutPrice(item.price, settingsData);
       if (override && override.float !== undefined && override.float !== null) {
         const floatQueryWhere: any = {
-          resaleItemId: item.id,
+          listingId: item.name,
           floatValue: Number(override.float),
         };
         if (override.pattern !== undefined && override.pattern !== null) {
@@ -318,16 +361,28 @@ export class CreatePurchaseOrderUseCase {
     }
 
     for (const floatId of youpinFloatIds) {
-      const dbFloat = youpinFloatItems.find((f) => f.id === floatId)!;
+      let dbFloat = youpinFloatItems.find((f) => f.assetId === floatId);
+      const apiFloat = apiValidatedFloats.get(floatId);
+
+      const effectiveFloat = dbFloat || apiFloat;
+      if (!effectiveFloat) {
+        throw new Error(`The YouPin asset ${floatId} was not found.`);
+      }
+
       const override = overridesMap.get(`youpin-${floatId}`);
-      const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
-      const listing = dbFloat.resaleItem;
+      const itemPrice = getMarketCheckoutPrice(effectiveFloat.price, settingsData);
+      
+      const listing = await MarketCatalogService.getListingByName(effectiveFloat.listingId);
+      if (!listing) {
+        throw new Error(`The YouPin asset ${floatId} belongs to a listing that is no longer available.`);
+      }
+
       const name = listing.name;
       const iconUrl = listing.iconUrl;
       const rarity = listing.rarity;
       const exterior = listing.exterior;
-      const floatVal = dbFloat.floatValue;
-      const patternVal = dbFloat.paintSeed;
+      const floatVal = effectiveFloat.floatValue;
+      const patternVal = effectiveFloat.paintSeed;
 
       if (!Number.isFinite(itemPrice) || itemPrice <= 0) {
         throw new Error(`The YouPin asset ${floatId} has an invalid checkout price.`);

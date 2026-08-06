@@ -6,6 +6,8 @@ import {
   getMarketCheckoutPrice,
   roundMoney,
 } from "../../orders/application/OrderPricingService";
+import { MarketCatalogService } from "../../market/application/MarketCatalogService";
+import { YoupinAssetValidator } from "../../market/application/YoupinAssetValidator";
 
 export interface CheckoutBaseAmountInput {
   type: "BUY" | "raffle";
@@ -78,24 +80,25 @@ export class CheckoutBaseAmountResolver {
       .filter((id) => id.startsWith("market-"))
       .map((id) => id.replace(/^market-/, ""));
 
-    const [storeItems, marketListings, youpinFloatItems] = await Promise.all([
+    const [storeItems, youpinFloatItems] = await Promise.all([
       botIds.length > 0
         ? prisma.storeItem.findMany({
             where: { assetId: { in: botIds }, marketable: true },
           })
         : Promise.resolve([]),
-      marketNames.length > 0
-        ? prisma.marketListing.findMany({
-            where: { name: { in: marketNames } },
-          })
-        : Promise.resolve([]),
       youpinFloatIds.length > 0
         ? prisma.floatItem.findMany({
-            where: { id: { in: youpinFloatIds }, available: true },
-            include: { resaleItem: true },
+            where: { assetId: { in: youpinFloatIds }, market: 'YOUPIN', available: true },
           })
         : Promise.resolve([]),
     ]);
+
+    const marketListings = await Promise.all(
+      marketNames.map(async (name) => ({
+        requestedName: name,
+        item: await MarketCatalogService.getListingByName(name),
+      })),
+    );
 
     const missingBotIds = botIds.filter((id) => !storeItems.some((item) => item.assetId === id));
     if (missingBotIds.length > 0) {
@@ -106,21 +109,57 @@ export class CheckoutBaseAmountResolver {
       await BotService.assertStoreItemsFromActiveBots(storeItems);
     }
 
-    const missingMarketNames = marketNames.filter(
-      (name) => !marketListings.some((item) => item.name === name),
-    );
+    const missingMarketNames = marketListings
+      .filter(({ item }) => !item)
+      .map(({ requestedName }) => requestedName);
     if (missingMarketNames.length > 0) {
       throw new Error(
         `Algunos listings de mercado ya no están disponibles: ${missingMarketNames.join(", ")}`,
       );
     }
 
+    const foundYoupinAssetIds = new Set(youpinFloatItems.map(f => f.assetId));
+    const apiValidatedFloats: Map<string, any> = new Map();
+
     const missingYoupinFloatIds = youpinFloatIds.filter(
-      (id) => !youpinFloatItems.some((item) => item.id === id),
+      (id) => !foundYoupinAssetIds.has(id),
     );
+
     if (missingYoupinFloatIds.length > 0) {
+      const apiAssets = missingYoupinFloatIds
+        .map(assetId => {
+          const override = overridesMap.get(`youpin-${assetId}`);
+          const listingId = override?.listingId;
+          return listingId ? { assetId, listingId } : null;
+        })
+        .filter((a): a is { assetId: string; listingId: string } => a !== null);
+
+      if (apiAssets.length > 0) {
+        try {
+          const validator = new YoupinAssetValidator();
+          const apiResults = await validator.validateBatch(apiAssets);
+          for (const [_key, result] of apiResults) {
+            if (result.valid) {
+              apiValidatedFloats.set(result.assetId, {
+                assetId: result.assetId,
+                listingId: result.listingId,
+                floatValue: result.floatValue,
+                paintSeed: result.paintSeed,
+                price: result.price,
+              });
+              foundYoupinAssetIds.add(result.assetId);
+            }
+          }
+        } catch (err) {
+          console.warn("[CheckoutBaseAmountResolver] API fallback error:", err);
+        }
+      }
+    }
+
+    const trulyMissingIds = missingYoupinFloatIds.filter(id => !foundYoupinAssetIds.has(id));
+    if (trulyMissingIds.length > 0) {
       throw new Error(
-        `Algunos assets YouPin ya no están disponibles: ${missingYoupinFloatIds.join(", ")}`,
+        `Algunos assets YouPin ya no están disponibles: ${trulyMissingIds.join(", ")}`,
       );
     }
 
@@ -137,13 +176,16 @@ export class CheckoutBaseAmountResolver {
     }
 
     for (const name of marketNames) {
-      const item = marketListings.find((candidate) => candidate.name === name)!;
+      const item = marketListings.find((entry) => entry.requestedName === name)?.item;
+      if (!item) {
+        throw new Error(`El listing de mercado "${name}" no está disponible.`);
+      }
       const override = overridesMap.get(`market-${name}`);
       let itemPrice = getMarketCheckoutPrice(item.price, settingsData);
 
       if (override?.float !== undefined && override.float !== null) {
         const floatQueryWhere: any = {
-          resaleItemId: item.id,
+          listingId: item.name,
           floatValue: Number(override.float),
         };
         if (override.pattern !== undefined && override.pattern !== null) {
@@ -162,8 +204,13 @@ export class CheckoutBaseAmountResolver {
     }
 
     for (const floatId of youpinFloatIds) {
-      const dbFloat = youpinFloatItems.find((candidate) => candidate.id === floatId)!;
-      const itemPrice = getMarketCheckoutPrice(dbFloat.price, settingsData);
+      let dbFloat = youpinFloatItems.find((candidate) => candidate.assetId === floatId);
+      const apiFloat = apiValidatedFloats.get(floatId);
+      const effectiveFloat = dbFloat || apiFloat;
+      if (!effectiveFloat) {
+        throw new Error(`El asset YouPin "${floatId}" no se encontró.`);
+      }
+      const itemPrice = getMarketCheckoutPrice(effectiveFloat.price, settingsData);
       if (!Number.isFinite(itemPrice) || itemPrice <= 0) {
         throw new Error(`El asset YouPin "${floatId}" no tiene un precio válido para checkout.`);
       }
