@@ -221,9 +221,9 @@ model AdminSettings {
   webhookUrl                 String?
   currency                   String   @default("USD")
   usdArsRateKind             String   @default("blue")
-  mercadoPagoEnabled         Boolean  @default(true)
-  paypalEnabled              Boolean  @default(true)
-  nowpaymentsEnabled         Boolean  @default(true)
+  mercadoPagoEnabled         Boolean  @default(false)
+  paypalEnabled              Boolean  @default(false)
+  nowpaymentsEnabled         Boolean  @default(false)
   manualTransferEnabled      Boolean  @default(false)
   manualBankAlias            String?
   manualBankCbu              String?
