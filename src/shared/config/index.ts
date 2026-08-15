@@ -169,8 +169,18 @@ export const config = {
 export async function applyRuntimeConfigOverrides() {
   const runtime = await AdminSecureConfigService.getRuntimeSettings();
 
-  config.steamApiKey = await AdminSecureConfigService.getSecretValue('STEAM_API_KEY');
-  config.steamwebapiApiKey = await AdminSecureConfigService.getSecretValue('STEAMWEBAPI_API_KEY');
+  for (const key of ['STEAM_API_KEY', 'STEAMWEBAPI_API_KEY'] as const) {
+    try {
+      const value = await AdminSecureConfigService.getSecretValue(key);
+      if (key === 'STEAM_API_KEY') config.steamApiKey = value;
+      if (key === 'STEAMWEBAPI_API_KEY') config.steamwebapiApiKey = value;
+    } catch (err) {
+      console.error(
+        `[config] No se pudo descifrar ${key}. La ADMIN_SECRETS_ENCRYPTION_KEY no coincide con la usada al guardar el secreto. Se mantendrá el valor de entorno si existe.`,
+        err,
+      );
+    }
+  }
 
   config.marketSync.pageSize = toPositiveInteger(
     runtime.MARKET_SYNC_PAGE_SIZE,
