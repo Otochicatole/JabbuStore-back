@@ -1,4 +1,3 @@
-import { Resend } from "resend";
 import { config } from "../config";
 import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
 
@@ -129,7 +128,8 @@ export class ResendService {
         return;
       }
 
-      const resend = new Resend(token);
+      const resendModule = await import("resend");
+      const resend = new resendModule.Resend(token);
       const result = await resend.emails.send({
         from: resolveFromEmail(from),
         to: [recipient],
