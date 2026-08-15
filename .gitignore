@@ -12,5 +12,6 @@ storage/
 
 # SQLite local
 prisma/dev.db
+prisma/seed.ts
 prisma/dev.db-journal
 **/dev.db
