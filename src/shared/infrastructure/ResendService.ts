@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { config } from "../config";
 import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
 
 interface NotificationLike {
@@ -90,7 +91,11 @@ function buildEmailText(notification: NotificationLike): string {
   ];
 
   if (notification.link) {
-    lines.push("", `Enlace: ${notification.link}`);
+    const baseUrl = (config.frontendUrl || "").replace(/\/+$/, "");
+    const path = notification.link.startsWith("/")
+      ? notification.link
+      : `/${notification.link}`;
+    lines.push("", `Enlace: ${baseUrl}/es${path}`);
   }
 
   return lines.join("\n");
