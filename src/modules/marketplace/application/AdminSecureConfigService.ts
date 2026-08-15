@@ -11,6 +11,9 @@ export const SECRET_KEYS = [
   "PAYPAL_CLIENT_ID",
   "PAYPAL_CLIENT_SECRET",
   "PAYPAL_SANDBOX",
+  "RESEND_TOKEN",
+  "RESEND_FROM",
+  "RESEND_TO",
 ] as const;
 
 export type SecretKey = (typeof SECRET_KEYS)[number];

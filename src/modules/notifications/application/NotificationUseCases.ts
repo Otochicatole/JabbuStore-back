@@ -1,5 +1,10 @@
 import { INotificationRepository, Notification } from '../domain/Notification';
 import { sendDbNotification } from '../../tickets/infrastructure/TicketSocket';
+import { ResendService } from '../../../shared/infrastructure/ResendService';
+
+const isAdminNotification = (notification: Notification) => {
+  return notification.userId === null;
+};
 
 export class CreateOrUpdateNotificationUseCase {
   constructor(private notificationRepository: INotificationRepository) {}
@@ -44,6 +49,14 @@ export class CreateOrUpdateNotificationUseCase {
       sendDbNotification(notification);
     } catch (err) {
       console.error('[CreateOrUpdateNotificationUseCase] Error emitting real-time notification:', err);
+    }
+
+    // Despachar email por cada notificación del panel de admin
+    if (isAdminNotification(notification)) {
+      console.log(
+        `[CreateOrUpdateNotificationUseCase] Despachando email para notificación admin: title=${notification.title} type=${notification.type} link=${notification.link}`,
+      );
+      void ResendService.sendNotificationEmail(notification);
     }
 
     return notification;
