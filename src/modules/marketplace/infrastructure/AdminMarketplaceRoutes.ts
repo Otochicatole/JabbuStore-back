@@ -6,7 +6,7 @@ import { authMiddleware, adminOnly } from '../../../shared/infrastructure/middle
 const router = Router();
 const secretsLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 8,
+  limit: Number(process.env.ADMIN_SECRETS_RATE_LIMIT || 100),
   standardHeaders: true,
   legacyHeaders: false,
 });
