@@ -7,6 +7,11 @@ export class CreateUserUseCase {
   constructor(private userRepository: IUserRepository) {}
 
   async execute(userData: Partial<User>): Promise<User> {
+    const existing = await this.userRepository.findByEmail(userData.email!);
+    if (existing) {
+      throw new Error('Email already registered');
+    }
+
     if (userData.password) {
       userData.password = await AuthService.hashPassword(userData.password);
     }
@@ -329,6 +334,14 @@ export class UpdateUserProfileUseCase {
     const user = await this.userRepository.findById(userId);
     if (!user) {
       throw new Error('User not found');
+    }
+
+    const nextEmail = data.email !== undefined ? data.email : user.email;
+    if (nextEmail && nextEmail !== user.email) {
+      const existing = await this.userRepository.findByEmail(nextEmail);
+      if (existing && existing.id !== userId) {
+        throw new Error('Email already registered');
+      }
     }
 
     const updatedUser = await this.userRepository.save({

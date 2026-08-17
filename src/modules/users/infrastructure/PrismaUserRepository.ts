@@ -39,7 +39,7 @@ export class PrismaUserRepository implements IUserRepository {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return prisma.user.findFirst({
+    return prisma.user.findUnique({
       where: { email },
     }) as any;
   }
