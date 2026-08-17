@@ -7,11 +7,6 @@ export class CreateUserUseCase {
   constructor(private userRepository: IUserRepository) {}
 
   async execute(userData: Partial<User>): Promise<User> {
-    const existing = await this.userRepository.findByEmail(userData.email!);
-    if (existing) {
-      throw new Error('User already exists');
-    }
-
     if (userData.password) {
       userData.password = await AuthService.hashPassword(userData.password);
     }
