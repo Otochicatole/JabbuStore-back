@@ -34,6 +34,19 @@ const LEGACY_CATEGORY_MAP: Record<string, string> = {
   'Kits musicales': 'music_kits',
   Parches: 'patches',
   Pegatinas: 'stickers',
+  Equipo: 'equipment',
+  'Equipo / Zeus': 'equipment',
+  'Cajas y contenedores': 'containers',
+  Stickers: 'stickers',
+  'Llaveros / Charms': 'charms',
+  Charms: 'charms',
+  Grafitis: 'graffiti',
+  Coleccionables: 'collectibles',
+  Pases: 'passes',
+  Llaves: 'keys',
+  Regalos: 'gifts',
+  Herramientas: 'tools',
+  Etiquetas: 'tags',
 };
 
 const LEGACY_CONDITION_MAP: Record<string, string> = {

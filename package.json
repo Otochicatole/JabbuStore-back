@@ -17,7 +17,8 @@
     "seed:reviews": "ts-node --transpile-only scripts/seed-home-reviews.ts",
     "reindex-floats": "ts-node --transpile-only scripts/reindex-floats.ts",
     "fix-bot-inspect-links": "ts-node --transpile-only scripts/fix-bot-inspect-links.ts",
-    "backfill:market-phase-images": "ts-node --transpile-only scripts/backfill-market-phase-images.ts"
+    "backfill:market-phase-images": "ts-node --transpile-only scripts/backfill-market-phase-images.ts",
+    "download:category-images": "node scripts/download-category-filter-images.mjs"
   },
   "keywords": [],
   "author": "",

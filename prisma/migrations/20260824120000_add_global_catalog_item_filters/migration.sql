@@ -1,0 +1,9 @@
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterStickersEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterContainersEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterAgentsEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterCharmsEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterGraffitiEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterPatchesEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterMusicKitsEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterCollectiblesEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "AdminSettings" ADD COLUMN "catalogFilterToolsEnabled" BOOLEAN NOT NULL DEFAULT false;

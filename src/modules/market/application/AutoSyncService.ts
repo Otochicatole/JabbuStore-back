@@ -1,6 +1,9 @@
 import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { itemsCatalogRefreshService } from "../../pricing/application/ItemsCatalogRefreshService";
-import { GenerateCatalogGlobalUseCase } from "./GenerateCatalogGlobalUseCase";
+import {
+  catalogFiltersFromSettings,
+  GenerateCatalogGlobalUseCase,
+} from "./GenerateCatalogGlobalUseCase";
 import type { CatalogFilters } from "./GenerateCatalogGlobalUseCase";
 import { SyncStoreItemsUseCase } from "../../store/application/SyncStoreItemsUseCase";
 import { PrismaStoreRepository } from "../../store/infrastructure/PrismaStoreRepository";
@@ -138,17 +141,7 @@ class AutoSyncService {
 
     const adminSettings = await prisma.adminSettings.findFirst();
     const filters: CatalogFilters | undefined = adminSettings
-      ? {
-          catalogFilterKnivesEnabled: adminSettings.catalogFilterKnivesEnabled,
-          catalogFilterGlovesEnabled: adminSettings.catalogFilterGlovesEnabled,
-          catalogFilterRiflesEnabled: adminSettings.catalogFilterRiflesEnabled,
-          catalogFilterPistolsEnabled: adminSettings.catalogFilterPistolsEnabled,
-          catalogFilterSMGsEnabled: adminSettings.catalogFilterSMGsEnabled,
-          catalogFilterHeavyEnabled: adminSettings.catalogFilterHeavyEnabled,
-          catalogFilterSouvenirEnabled: adminSettings.catalogFilterSouvenirEnabled,
-          catalogFilterStatTrakEnabled: adminSettings.catalogFilterStatTrakEnabled,
-          catalogMinPrice: adminSettings.catalogMinPrice,
-        }
+      ? catalogFiltersFromSettings(adminSettings)
       : undefined;
 
     const result = await this.generateCatalogGlobalUseCase.execute(filters);
