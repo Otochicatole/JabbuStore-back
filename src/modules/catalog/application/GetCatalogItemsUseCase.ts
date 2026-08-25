@@ -6,6 +6,10 @@ import { normalizeDopplerPhaseLabel, getDopplerPhaseLabelByPaintIndex } from '..
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
 import type { CatalogGlobalPayload, CatalogGlobalItemRow } from '../../market/application/GenerateCatalogGlobalUseCase';
 import { CATALOG_GLOBAL_JSON_PATH } from '../../market/application/GenerateCatalogGlobalUseCase';
+import {
+  classifyCatalogItem,
+  type CatalogItemType,
+} from '../domain/CatalogItemCapabilities';
 
 type SortOption =
   | 'price_desc'
@@ -44,11 +48,17 @@ export interface CatalogItem {
   isImmediate: boolean;
   inspectLink: string | null;
   provider: "bot" | "youpin";
+  catalogItemType: CatalogItemType;
+  supportsFloatStock: boolean;
+  priceFilterEligible: boolean;
   variants?: CatalogItem[];
 }
 
 export interface CatalogItemsResult {
   items: CatalogItem[];
+  facets: {
+    categories: Record<string, number>;
+  };
   pagination: {
     page: number;
     limit: number;
@@ -71,37 +81,52 @@ const CONDITION_FLOAT_MAP: Record<string, [number, number]> = {
   battle_scarred: [0.45, 1.01],
 };
 
-const CATEGORY_WEAPON_MAP: Record<string, string[]> = {
-  knives: [
-    'Karambit',
-    'Bayonet',
-    'Knife',
-    'Navaja',
-    'Stiletto',
-    'Ursus',
-    'Talon',
-    'Huntsman',
-    'Falchion',
-    'Shadow',
-    'Gut',
-    'M9',
-    'Flip',
-    'Butterfly',
-    'Skeleton',
-    'Classic',
-  ],
-  gloves: ['Gloves', 'Wraps', 'Glove'],
-  pistols: ['USP', 'Glock', 'P250', 'P2000', 'Desert Eagle', 'Five-SeveN', 'CZ75', 'Tec-9', 'Dual Berettas', 'R8', 'Deagle'],
-  smgs: ['MP5', 'MP7', 'MP9', 'MAC-10', 'PP-Bizon', 'P90', 'UMP-45'],
-  rifles: ['AK-47', 'M4A4', 'M4A1-S', 'FAMAS', 'Galil', 'AUG', 'SG 553'],
-  snipers: ['AWP', 'SSG 08', 'SCAR-20', 'G3SG1'],
-  shotguns: ['Nova', 'XM1014', 'MAG-7', 'Sawed-Off'],
-  machine_guns: ['M249', 'Negev'],
-  agents: ['Agent', 'Commander', 'Officer', 'Operator', 'Master'],
-  containers: ['Case', 'Package', 'Capsule', 'Patch Pack', 'Graffiti Box', 'Souvenir'],
-  music_kits: ['Music Kit'],
-  patches: ['Patch'],
-  stickers: ['Sticker'],
+const CATEGORY_ITEM_TYPES: Record<string, CatalogItemType[]> = {
+  knives: ['knife'],
+  gloves: ['gloves'],
+  pistols: ['pistol'],
+  smgs: ['smg'],
+  rifles: ['rifle'],
+  snipers: ['sniper_rifle'],
+  shotguns: ['shotgun'],
+  machine_guns: ['machinegun'],
+  equipment: ['equipment'],
+  agents: ['agent'],
+  containers: ['container'],
+  charms: ['charm'],
+  graffiti: ['graffiti'],
+  patches: ['patch'],
+  music_kits: ['music_kit'],
+  collectibles: ['collectible'],
+  passes: ['pass'],
+  keys: ['key'],
+  gifts: ['gift'],
+  tools: ['tool'],
+  tags: ['tag'],
+};
+
+const CATEGORY_TOKEN_BY_ITEM_TYPE: Partial<Record<CatalogItemType, string>> = {
+  knife: 'knives',
+  gloves: 'gloves',
+  pistol: 'pistols',
+  smg: 'smgs',
+  rifle: 'rifles',
+  sniper_rifle: 'snipers',
+  shotgun: 'shotguns',
+  machinegun: 'machine_guns',
+  equipment: 'equipment',
+  agent: 'agents',
+  container: 'containers',
+  charm: 'charms',
+  graffiti: 'graffiti',
+  patch: 'patches',
+  music_kit: 'music_kits',
+  collectible: 'collectibles',
+  pass: 'passes',
+  key: 'keys',
+  gift: 'gifts',
+  tool: 'tools',
+  tag: 'tags',
 };
 
 function applyModifier(basePrice: number, enabled: boolean, type: string, value: number): number {
@@ -196,10 +221,7 @@ function matchesCategories(item: InternalCatalogItem, categories: string[]): boo
   if (categories.length === 0) return true;
 
   return categories.some((category) => {
-    const keywords = CATEGORY_WEAPON_MAP[category] ?? [];
-    return keywords.some((keyword) =>
-      item.weapon.toLowerCase().includes(keyword.toLowerCase()),
-    );
+    return (CATEGORY_ITEM_TYPES[category] ?? []).includes(item.catalogItemType);
   });
 }
 
@@ -223,7 +245,12 @@ function getNormalizedCondition(item: InternalCatalogItem): string {
 }
 
 function getGroupKey(item: InternalCatalogItem): string {
+  if (!item.supportsFloatStock) {
+    return [item.catalogItemType, item.id].join('|');
+  }
+
   return [
+    item.catalogItemType,
     item.weapon,
     item.name,
     getNormalizedCondition(item),
@@ -264,33 +291,6 @@ function sortItems(items: InternalCatalogItem[], sort: SortOption): InternalCata
 function stripInternal(item: InternalCatalogItem): CatalogItem {
   const { createdAt: _createdAt, ...publicItem } = item;
   return publicItem;
-}
-
-const VALID_WEAPON_NAMES = [
-  "AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20",
-  "Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000",
-  "MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon",
-  "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
-];
-
-function isSkinOnly(marketHashName: string): boolean {
-  if (!marketHashName || typeof marketHashName !== "string") return false;
-  let name = marketHashName.trim();
-
-  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
-  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
-  
-  if (name.startsWith("Souvenir ")) name = name.slice(9).trim();
-
-  if (name.startsWith("★")) return true;
-
-  for (const weapon of VALID_WEAPON_NAMES) {
-    if (name.startsWith(`${weapon} |`)) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 const DOPPLER_STANDARD_PAINTS = new Set([415, 416, 417, 418, 419, 420, 421, 617, 618, 619, 849, 850, 851, 852, 853, 854, 855]);
@@ -334,6 +334,11 @@ export class GetCatalogItemsUseCase {
       ? []
       : storeItems.map((item) => {
           const parsed = parseName(item.name);
+          const capabilities = classifyCatalogItem({
+            itemgroup: item.type,
+            category: item.category,
+            name: item.name,
+          });
           return {
             id: item.assetId,
             name: parsed.name,
@@ -356,6 +361,9 @@ export class GetCatalogItemsUseCase {
             isImmediate: true,
             inspectLink: item.inspectLink,
             provider: "bot" as const,
+            catalogItemType: capabilities.itemType,
+            supportsFloatStock: capabilities.supportsFloatStock,
+            priceFilterEligible: capabilities.priceFilterEligible,
             createdAt: item.createdAt,
           };
         });
@@ -373,14 +381,24 @@ export class GetCatalogItemsUseCase {
             const name = item.markethashname ?? item.market_hash_name ?? item.marketname;
             if (!name || typeof name !== 'string') return [];
 
-            if (!isSkinOnly(name)) return [];
-
-            const parsed = parseName(name);
-
             const variantPhase = (item as any).variantPhase as string | undefined;
             const variantPaintIndex = (item as any).variantPaintIndex as number | undefined;
             const variantImage = (item as any).variantImage as string | undefined;
 
+            const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
+            const capabilities = classifyCatalogItem({
+              itemgroup: item.itemgroup,
+              itemtype: item.itemtype,
+              category: details.category,
+              name,
+            });
+            const parsed = name.includes(' | ')
+              ? parseName(name)
+              : {
+                  weapon: item.itemtype || capabilities.itemType,
+                  name: item.itemname || name,
+                  phase: null,
+                };
             const paintIndex = variantPaintIndex ?? (item as any).paintindex;
             const dopplerPhase = resolveDopplerPhase(paintIndex);
             const phase = variantPhase ?? parsed.phase ?? dopplerPhase;
@@ -394,8 +412,6 @@ export class GetCatalogItemsUseCase {
               settingsData.marketModifierType,
               settingsData.marketModifierValue,
             );
-
-            const details = PriceEnrichmentService.inferDetailsFromMarketHashName(name);
             const imageUrl = getCatalogIconUrl(item) || '/skin.webp';
             const displayImage = variantImage ? getCatalogIconUrl({ ...item, itemimage: variantImage, image: variantImage }) : imageUrl;
 
@@ -418,6 +434,16 @@ export class GetCatalogItemsUseCase {
               isImmediate: false,
               inspectLink: null,
               provider: "youpin" as const,
+              catalogItemType:
+                capabilities.itemType,
+              supportsFloatStock:
+                typeof item.supportsFloatStock === 'boolean'
+                  ? item.supportsFloatStock
+                  : capabilities.supportsFloatStock,
+              priceFilterEligible:
+                typeof item.priceFilterEligible === 'boolean'
+                  ? item.priceFilterEligible
+                  : capabilities.priceFilterEligible,
               createdAt: new Date(),
             } satisfies InternalCatalogItem];
           });
@@ -429,19 +455,31 @@ export class GetCatalogItemsUseCase {
       marketCatalogItems = catalogGlobalItems;
     }
 
-    const filteredByCatalogFacets = [...storeCatalogItems, ...marketCatalogItems].filter((item) => {
+    const allCatalogItems = [...storeCatalogItems, ...marketCatalogItems];
+    const matchesSearchAndConditions = (item: InternalCatalogItem) => {
       if (normalizedQuery) {
         const haystack = `${item.weapon} ${item.name} ${item.phase ?? ''}`.toLowerCase();
         if (!haystack.includes(normalizedQuery)) return false;
       }
 
-      if (!matchesCategories(item, query.categories)) return false;
       if (!matchesConditions(item, query.conditions)) return false;
 
       return true;
-    });
+    };
+
+    const facetCounts: Record<string, number> = {};
+    for (const item of allCatalogItems) {
+      if (!matchesSearchAndConditions(item)) continue;
+      const categoryToken = CATEGORY_TOKEN_BY_ITEM_TYPE[item.catalogItemType];
+      if (categoryToken) facetCounts[categoryToken] = (facetCounts[categoryToken] ?? 0) + 1;
+    }
+
+    const filteredByCatalogFacets = allCatalogItems.filter((item) =>
+      matchesSearchAndConditions(item) && matchesCategories(item, query.categories),
+    );
 
     const priceMatches = (item: InternalCatalogItem) => {
+      if (!item.priceFilterEligible) return true;
       if (query.minPrice !== undefined && item.price < query.minPrice) return false;
       if (query.maxPrice !== undefined && item.price > query.maxPrice) return false;
       return true;
@@ -462,6 +500,9 @@ export class GetCatalogItemsUseCase {
 
     return {
       items,
+      facets: {
+        categories: facetCounts,
+      },
       pagination: {
         page,
         limit: query.limit,

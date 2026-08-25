@@ -1,9 +1,14 @@
 import { Request, Response } from 'express';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
 import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
+import { GetListingInspectLinkUseCase } from '../application/GetListingInspectLinkUseCase';
+import { SteamWebApiFloatAssetsClient } from './SteamWebApiFloatAssetsClient';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
 import { GenerateCatalogGlobalUseCase } from '../application/GenerateCatalogGlobalUseCase';
-import type { CatalogFilters } from '../application/GenerateCatalogGlobalUseCase';
+import {
+  catalogFiltersFromSettings,
+  type CatalogFilters,
+} from '../application/GenerateCatalogGlobalUseCase';
 import { PrismaMarketRepository } from './PrismaMarketRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
@@ -14,6 +19,9 @@ export class MarketController {
     private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
     private getOrRefreshListingFloatsUseCase: GetOrRefreshListingFloatsUseCase,
     private marketRepository = new PrismaMarketRepository(),
+    private getListingInspectLinkUseCase = new GetListingInspectLinkUseCase(
+      new SteamWebApiFloatAssetsClient(),
+    ),
   ) {}
 
   /** GET /market/listings — catálogo YouPin. */
@@ -56,17 +64,7 @@ export class MarketController {
 
       const adminSettings = await prisma.adminSettings.findFirst();
       const filters: CatalogFilters | undefined = adminSettings
-        ? {
-            catalogFilterKnivesEnabled: adminSettings.catalogFilterKnivesEnabled,
-            catalogFilterGlovesEnabled: adminSettings.catalogFilterGlovesEnabled,
-            catalogFilterRiflesEnabled: adminSettings.catalogFilterRiflesEnabled,
-            catalogFilterPistolsEnabled: adminSettings.catalogFilterPistolsEnabled,
-            catalogFilterSMGsEnabled: adminSettings.catalogFilterSMGsEnabled,
-            catalogFilterHeavyEnabled: adminSettings.catalogFilterHeavyEnabled,
-            catalogFilterSouvenirEnabled: adminSettings.catalogFilterSouvenirEnabled,
-            catalogFilterStatTrakEnabled: adminSettings.catalogFilterStatTrakEnabled,
-            catalogMinPrice: adminSettings.catalogMinPrice,
-          }
+        ? catalogFiltersFromSettings(adminSettings)
         : undefined;
 
       const result = await this.generateCatalogGlobalUseCase.execute(filters);
@@ -108,6 +106,23 @@ export class MarketController {
     } catch (error: any) {
       console.error('[Market Controller] Error obteniendo floats:', error);
       res.status(500).json({ error: error.message || 'Error al obtener los floats del artículo.' });
+    }
+  }
+
+  /** GET /market/listings/:id/inspect — devuelve solo un enlace Steam validado. */
+  async getInspectLink(req: Request, res: Response): Promise<void> {
+    try {
+      const marketHashName = decodeURIComponent(req.params.id as string).trim();
+      if (!marketHashName) {
+        res.status(400).json({ inspectLink: null });
+        return;
+      }
+
+      const inspectLink = await this.getListingInspectLinkUseCase.execute(marketHashName);
+      res.json({ inspectLink });
+    } catch (error: any) {
+      console.error('[Market Controller] Error obteniendo inspect link:', error);
+      res.status(500).json({ inspectLink: null });
     }
   }
 }

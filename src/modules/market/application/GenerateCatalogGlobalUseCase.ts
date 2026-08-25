@@ -2,6 +2,10 @@ import { promises as fs } from "fs";
 import path from "path";
 import { SteamWebApiItemsCatalogStore } from "../../pricing";
 import type { SteamWebApiItemsCatalogRow } from "../../pricing/domain/types";
+import {
+  classifyCatalogItem,
+  type CatalogItemType,
+} from "../../catalog/domain/CatalogItemCapabilities";
 
 export const CATALOG_GLOBAL_JSON_PATH = path.join(
   process.cwd(),
@@ -12,6 +16,9 @@ export const CATALOG_GLOBAL_JSON_PATH = path.join(
 export interface CatalogGlobalItemRow extends SteamWebApiItemsCatalogRow {
   youpinAsk: number;
   youpinVolume: null;
+  catalogItemType: CatalogItemType;
+  supportsFloatStock: boolean;
+  priceFilterEligible: boolean;
   variantPhase?: string;
   variantPaintIndex?: number;
   variantImage?: string;
@@ -32,18 +39,6 @@ export interface GenerateCatalogGlobalResult {
   durationMs: number;
 }
 
-const VALID_WEAPON_NAMES = [
-  "AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20",
-  "Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000",
-  "MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon",
-  "Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"
-];
-
-const RIFLES = ["AK-47", "M4A4", "M4A1-S", "AWP", "SSG 08", "SG 553", "AUG", "FAMAS", "Galil AR", "G3SG1", "SCAR-20"];
-const PISTOLS = ["Glock-18", "USP-S", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto", "Dual Berettas", "R8 Revolver", "P2000"];
-const SMGS = ["MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon"];
-const HEAVY = ["Nova", "XM1014", "MAG-7", "Sawed-Off", "Negev", "M249"];
-
 export interface CatalogFilters {
   catalogFilterKnivesEnabled?: boolean;
   catalogFilterGlovesEnabled?: boolean;
@@ -51,44 +46,70 @@ export interface CatalogFilters {
   catalogFilterPistolsEnabled?: boolean;
   catalogFilterSMGsEnabled?: boolean;
   catalogFilterHeavyEnabled?: boolean;
+  catalogFilterEquipmentEnabled?: boolean;
+  catalogFilterStickersEnabled?: boolean;
+  catalogFilterContainersEnabled?: boolean;
+  catalogFilterAgentsEnabled?: boolean;
+  catalogFilterCharmsEnabled?: boolean;
+  catalogFilterGraffitiEnabled?: boolean;
+  catalogFilterPatchesEnabled?: boolean;
+  catalogFilterMusicKitsEnabled?: boolean;
+  catalogFilterCollectiblesEnabled?: boolean;
+  catalogFilterPassesEnabled?: boolean;
+  catalogFilterKeysEnabled?: boolean;
+  catalogFilterGiftsEnabled?: boolean;
+  catalogFilterToolsEnabled?: boolean;
+  catalogFilterTagsEnabled?: boolean;
   catalogFilterSouvenirEnabled?: boolean;
   catalogFilterStatTrakEnabled?: boolean;
   catalogMinPrice?: number;
 }
 
-type SkinCategory = "knife" | "glove" | "rifle" | "pistol" | "smg" | "heavy";
+export type CatalogFilterSettingsSource = CatalogFilters;
 
-function getSkinCategory(marketHashName: string): SkinCategory | null {
-  if (!marketHashName || typeof marketHashName !== "string") return null;
-  let name = marketHashName.trim();
-
-  if (name.startsWith("Souvenir ")) name = name.replace("Souvenir ", "");
-  if (name.startsWith("★ StatTrak™ ")) name = "★ " + name.slice(15).trim();
-  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
-  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
-
-  if (name.startsWith("★")) {
-    const lower = name.toLowerCase();
-    return (lower.includes("glove") || lower.includes("hand wrap")) ? "glove" : "knife";
-  }
-
-  for (const rifle of RIFLES) {
-    if (name.startsWith(`${rifle} |`)) return "rifle";
-  }
-  for (const pistol of PISTOLS) {
-    if (name.startsWith(`${pistol} |`)) return "pistol";
-  }
-  for (const smg of SMGS) {
-    if (name.startsWith(`${smg} |`)) return "smg";
-  }
-  for (const h of HEAVY) {
-    if (name.startsWith(`${h} |`)) return "heavy";
-  }
-
-  return null;
+export function catalogFiltersFromSettings(
+  settings: CatalogFilterSettingsSource,
+): CatalogFilters {
+  return { ...settings };
 }
 
-function isCategoryAllowed(marketHashName: string, filters?: CatalogFilters): boolean {
+const FILTER_BY_ITEM_TYPE: Partial<Record<CatalogItemType, keyof CatalogFilters>> = {
+  knife: "catalogFilterKnivesEnabled",
+  gloves: "catalogFilterGlovesEnabled",
+  rifle: "catalogFilterRiflesEnabled",
+  sniper_rifle: "catalogFilterRiflesEnabled",
+  pistol: "catalogFilterPistolsEnabled",
+  smg: "catalogFilterSMGsEnabled",
+  shotgun: "catalogFilterHeavyEnabled",
+  machinegun: "catalogFilterHeavyEnabled",
+  equipment: "catalogFilterEquipmentEnabled",
+  sticker: "catalogFilterStickersEnabled",
+  container: "catalogFilterContainersEnabled",
+  agent: "catalogFilterAgentsEnabled",
+  charm: "catalogFilterCharmsEnabled",
+  graffiti: "catalogFilterGraffitiEnabled",
+  patch: "catalogFilterPatchesEnabled",
+  music_kit: "catalogFilterMusicKitsEnabled",
+  collectible: "catalogFilterCollectiblesEnabled",
+  pass: "catalogFilterPassesEnabled",
+  key: "catalogFilterKeysEnabled",
+  gift: "catalogFilterGiftsEnabled",
+  tool: "catalogFilterToolsEnabled",
+  tag: "catalogFilterTagsEnabled",
+};
+
+function isCategoryAllowed(
+  catalogRow: SteamWebApiItemsCatalogRow,
+  marketHashName: string,
+  filters?: CatalogFilters,
+): boolean {
+  const capabilities = classifyCatalogItem({
+    itemgroup: catalogRow.itemgroup,
+    itemtype: catalogRow.itemtype,
+    name: marketHashName,
+  });
+  const filterKey = FILTER_BY_ITEM_TYPE[capabilities.itemType];
+  if (!filterKey) return false;
   if (!filters) return true;
 
   const isSouvenir = marketHashName.startsWith("Souvenir ");
@@ -97,40 +118,7 @@ function isCategoryAllowed(marketHashName: string, filters?: CatalogFilters): bo
   if (filters.catalogFilterSouvenirEnabled === false && isSouvenir) return false;
   if (filters.catalogFilterStatTrakEnabled === false && isStatTrak) return false;
 
-  const category = getSkinCategory(marketHashName);
-  if (!category) return false;
-
-  switch (category) {
-    case "knife": return filters.catalogFilterKnivesEnabled !== false;
-    case "glove": return filters.catalogFilterGlovesEnabled !== false;
-    case "rifle": return filters.catalogFilterRiflesEnabled !== false;
-    case "pistol": return filters.catalogFilterPistolsEnabled !== false;
-    case "smg": return filters.catalogFilterSMGsEnabled !== false;
-    case "heavy": return filters.catalogFilterHeavyEnabled !== false;
-  }
-}
-
-function isSkinOnly(marketHashName: string): boolean {
-  if (!marketHashName || typeof marketHashName !== "string") return false;
-  let name = marketHashName.trim();
-
-  if (name.startsWith("★ StatTrak™ ")) name = "★ " + name.slice(15).trim();
-  if (name.startsWith("StatTrak™ ")) name = name.slice(10).trim();
-  else if (name.startsWith("StatTrak ")) name = name.slice(9).trim();
-  
-  if (name.startsWith("Souvenir ")) name = name.replace("Souvenir ", "");
-
-  // Todos los cuchillos y guantes comienzan con ★
-  if (name.startsWith("★")) return true;
-
-  // Todas las skins de armas deben comenzar con "<NombreArma> |"
-  for (const weapon of VALID_WEAPON_NAMES) {
-    if (name.startsWith(`${weapon} |`)) {
-      return true;
-    }
-  }
-
-  return false;
+  return filterKey ? filters[filterKey] !== false : false;
 }
 
 function getCatalogMarketHashName(row: SteamWebApiItemsCatalogRow): string | null {
@@ -159,7 +147,7 @@ export class GenerateCatalogGlobalUseCase {
       throw new Error("items-catalog.json no esta disponible o esta vacio. Ejecuta el Paso 1 primero.");
     }
 
-    // 2. Filtrar items (solo skins, sin stickers, llaveros ni cajas)
+    // 2. Filtrar por tipo canónico y por los switches administrativos.
     const matchedItems: CatalogGlobalItemRow[] = [];
     const index = new Set<string>(); // para evitar duplicados
 
@@ -167,16 +155,23 @@ export class GenerateCatalogGlobalUseCase {
       const marketHashName = getCatalogMarketHashName(catalogRow);
       if (!marketHashName) continue;
 
-      if (!isSkinOnly(marketHashName)) continue;
+      if (!isCategoryAllowed(catalogRow, marketHashName, filters)) continue;
 
-      if (filters && !isCategoryAllowed(marketHashName, filters)) continue;
+      const capabilities = classifyCatalogItem({
+        itemgroup: catalogRow.itemgroup,
+        itemtype: catalogRow.itemtype,
+        name: marketHashName,
+      });
 
       const variants = Array.isArray(catalogRow.variants) ? catalogRow.variants : [];
 
-      if (variants.length > 0) {
+      if (capabilities.supportsFloatStock && variants.length > 0) {
         for (const variant of variants) {
           const variantPrice = variant.pricereal ?? catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
-          if (variantPrice <= 0 || variantPrice < minPrice) continue;
+          if (
+            variantPrice <= 0 ||
+            (capabilities.priceFilterEligible && variantPrice < minPrice)
+          ) continue;
 
           const variantPaintIndex = variant.paintindex ?? variant.paint_index;
           const dedupKey = variantPaintIndex != null
@@ -191,6 +186,9 @@ export class GenerateCatalogGlobalUseCase {
             markethashname: marketHashName,
             youpinAsk: variantPrice,
             youpinVolume: null as null,
+            catalogItemType: capabilities.itemType,
+            supportsFloatStock: capabilities.supportsFloatStock,
+            priceFilterEligible: capabilities.priceFilterEligible,
           };
           if (variant.phase) (row as any).variantPhase = variant.phase;
           if (variantPaintIndex != null) (row as any).variantPaintIndex = variantPaintIndex;
@@ -205,7 +203,10 @@ export class GenerateCatalogGlobalUseCase {
         if (index.has(dedupKey)) continue;
 
         const youpinAsk = catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
-        if (youpinAsk <= 0 || youpinAsk < minPrice) continue;
+        if (
+          youpinAsk <= 0 ||
+          (capabilities.priceFilterEligible && youpinAsk < minPrice)
+        ) continue;
 
         index.add(dedupKey);
 
@@ -214,6 +215,9 @@ export class GenerateCatalogGlobalUseCase {
           markethashname: marketHashName,
           youpinAsk,
           youpinVolume: null,
+          catalogItemType: capabilities.itemType,
+          supportsFloatStock: capabilities.supportsFloatStock,
+          priceFilterEligible: capabilities.priceFilterEligible,
         });
       }
     }
@@ -228,7 +232,9 @@ export class GenerateCatalogGlobalUseCase {
 
     const dir = path.dirname(this.catalogGlobalPath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(this.catalogGlobalPath, JSON.stringify(payload, null, 2), "utf-8");
+    const tempPath = `${this.catalogGlobalPath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf-8");
+    await fs.rename(tempPath, this.catalogGlobalPath);
 
     const durationMs = Date.now() - start;
     console.log(
