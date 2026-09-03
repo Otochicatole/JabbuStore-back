@@ -1,5 +1,4 @@
 import { promises as fs } from 'fs';
-import path from 'path';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { BotService } from '../../marketplace/application/BotService';
 import { normalizeDopplerPhaseLabel, getDopplerPhaseLabelByPaintIndex } from '../../pricing/domain/DopplerPhase';
@@ -10,6 +9,11 @@ import {
   classifyCatalogItem,
   type CatalogItemType,
 } from '../domain/CatalogItemCapabilities';
+import {
+  createCatalogSearch,
+  createCatalogSearchDocument,
+  type CatalogSearchDocument,
+} from '../domain/CatalogSearch';
 
 type SortOption =
   | 'price_desc'
@@ -69,6 +73,7 @@ export interface CatalogItemsResult {
 
 interface InternalCatalogItem extends CatalogItem {
   createdAt: Date;
+  searchDocument: CatalogSearchDocument | null;
 }
 
 const DEFAULT_SORT: SortOption = 'price_desc';
@@ -289,7 +294,7 @@ function sortItems(items: InternalCatalogItem[], sort: SortOption): InternalCata
 }
 
 function stripInternal(item: InternalCatalogItem): CatalogItem {
-  const { createdAt: _createdAt, ...publicItem } = item;
+  const { createdAt: _createdAt, searchDocument: _searchDocument, ...publicItem } = item;
   return publicItem;
 }
 
@@ -328,7 +333,7 @@ export class GetCatalogItemsUseCase {
       marketModifierValue: 0,
     };
 
-    const normalizedQuery = query.search?.trim().toLowerCase() ?? '';
+    const search = createCatalogSearch(query.search);
 
     const storeCatalogItems: InternalCatalogItem[] = !query.immediate
       ? []
@@ -365,6 +370,13 @@ export class GetCatalogItemsUseCase {
             supportsFloatStock: capabilities.supportsFloatStock,
             priceFilterEligible: capabilities.priceFilterEligible,
             createdAt: item.createdAt,
+            searchDocument: search.isEmpty ? null : createCatalogSearchDocument({
+              fullName: item.name,
+              weapon: parsed.weapon,
+              name: parsed.name,
+              exterior: item.exterior,
+              phase: parsed.phase,
+            }),
           };
         });
 
@@ -445,6 +457,13 @@ export class GetCatalogItemsUseCase {
                   ? item.priceFilterEligible
                   : capabilities.priceFilterEligible,
               createdAt: new Date(),
+              searchDocument: search.isEmpty ? null : createCatalogSearchDocument({
+                fullName: name,
+                weapon: parsed.weapon,
+                name: parsed.name,
+                exterior: details.exterior,
+                phase: finalPhase,
+              }),
             } satisfies InternalCatalogItem];
           });
         }
@@ -456,26 +475,8 @@ export class GetCatalogItemsUseCase {
     }
 
     const allCatalogItems = [...storeCatalogItems, ...marketCatalogItems];
-    const matchesSearchAndConditions = (item: InternalCatalogItem) => {
-      if (normalizedQuery) {
-        const haystack = `${item.weapon} ${item.name} ${item.phase ?? ''}`.toLowerCase();
-        if (!haystack.includes(normalizedQuery)) return false;
-      }
-
-      if (!matchesConditions(item, query.conditions)) return false;
-
-      return true;
-    };
-
-    const facetCounts: Record<string, number> = {};
-    for (const item of allCatalogItems) {
-      if (!matchesSearchAndConditions(item)) continue;
-      const categoryToken = CATEGORY_TOKEN_BY_ITEM_TYPE[item.catalogItemType];
-      if (categoryToken) facetCounts[categoryToken] = (facetCounts[categoryToken] ?? 0) + 1;
-    }
-
-    const filteredByCatalogFacets = allCatalogItems.filter((item) =>
-      matchesSearchAndConditions(item) && matchesCategories(item, query.categories),
+    const conditionMatches = allCatalogItems.filter((item) =>
+      matchesConditions(item, query.conditions),
     );
 
     const priceMatches = (item: InternalCatalogItem) => {
@@ -485,11 +486,33 @@ export class GetCatalogItemsUseCase {
       return true;
     };
 
-    const itemsForSorting = query.group
-      ? this.groupItems(filteredByCatalogFacets).filter(priceMatches)
-      : filteredByCatalogFacets.filter(priceMatches);
+    const filterCatalog = (fuzzy: boolean) => {
+      const searchMatches = conditionMatches.filter((item) =>
+        item.searchDocument === null || search.matches(item.searchDocument, fuzzy),
+      );
+      const categoryMatches = searchMatches.filter((item) =>
+        matchesCategories(item, query.categories),
+      );
+      const items = (query.group ? this.groupItems(categoryMatches) : categoryMatches)
+        .filter(priceMatches);
 
-    const sorted = sortItems(itemsForSorting, query.sort || DEFAULT_SORT);
+      return { searchMatches, items };
+    };
+
+    let filtered = filterCatalog(false);
+    // Decide on the full filtered result, not the requested page. Both passes
+    // use the same snapshot and preserve the existing group/price rules.
+    if (filtered.items.length === 0 && search.canUseFuzzy) {
+      filtered = filterCatalog(true);
+    }
+
+    const facetCounts: Record<string, number> = {};
+    for (const item of filtered.searchMatches) {
+      const categoryToken = CATEGORY_TOKEN_BY_ITEM_TYPE[item.catalogItemType];
+      if (categoryToken) facetCounts[categoryToken] = (facetCounts[categoryToken] ?? 0) + 1;
+    }
+
+    const sorted = sortItems(filtered.items, query.sort || DEFAULT_SORT);
     const itemsForPagination = sorted.map(stripInternal);
 
     const total = itemsForPagination.length;
