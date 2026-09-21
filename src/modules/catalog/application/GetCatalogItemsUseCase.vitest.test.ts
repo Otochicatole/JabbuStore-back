@@ -346,7 +346,7 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
     expect(result.items[0]).toMatchObject({ name: 'Redline', exterior: 'Field-Tested' });
   });
 
-  it('chooses fallback after checking the grouped representative against the price range', async () => {
+  it('retains in-range variants when grouping and only falls back when no variants match the price range', async () => {
     seedCatalog([
       fixture('AK-47 | Redline (Field-Tested)', 'rifle', 10),
       fixture('AK-47 | Redline (Field-Tested)', 'rifle', 50),
@@ -360,18 +360,24 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
       search: 'redline', minPrice: 30, group: false,
     }));
 
-    expect(grouped.items.map((item) => [item.name, item.price])).toEqual([['Redlino', 40]]);
+    // The $50 variant matches minPrice 30, so Redline is returned in both modes
+    expect(grouped.items.map((item) => [item.name, item.price])).toEqual([['Redline', 50]]);
     expect(grouped.pagination.total).toBe(1);
-    expect(grouped.facets.categories).toEqual({ rifles: 3 });
     expect(ungrouped.items.map((item) => [item.name, item.price])).toEqual([['Redline', 50]]);
     expect(ungrouped.pagination.total).toBe(1);
-    expect(ungrouped.facets.categories).toEqual({ rifles: 2 });
+
+    // If minPrice excludes all variants (e.g. minPrice: 60), it falls back to typo match
+    const fallbackResult = await new GetCatalogItemsUseCase().execute(query(true, {
+      search: 'redline', minPrice: 35, maxPrice: 45, group: true,
+    }));
+    expect(fallbackResult.items.map((item) => [item.name, item.price])).toEqual([['Redlino', 40]]);
   });
 
-  it('preserves grouped prices and complete variants without exposing internal search fields', async () => {
+  it('preserves grouped prices and variants within the price range without exposing internal search fields', async () => {
     seedCatalog([
       fixture('AK-47 | Redline (Field-Tested)', 'rifle', 50),
       fixture('AK-47 | Redline (Field-Tested)', 'rifle', 10),
+      fixture('AK-47 | Redline (Field-Tested)', 'rifle', 18),
       fixture('M4A4 | Redline (Field-Tested)', 'rifle', 15),
     ]);
 
@@ -383,9 +389,55 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
       ['M4A4', 15], ['AK-47', 10],
     ]);
     const group = result.items.find((item) => item.weapon === 'AK-47');
-    expect(group?.variants?.map((item) => item.price)).toEqual([10, 50]);
+    // Only variants matching maxPrice (10 and 18, excluding 50) are retained
+    expect(group?.variants?.map((item) => item.price)).toEqual([10, 18]);
     expect(result.pagination.total).toBe(2);
-    expect(result.facets.categories).toEqual({ rifles: 3 });
+    expect(result.facets.categories).toEqual({ rifles: 4 });
     result.items.forEach(expectOnlyPublicFields);
+  });
+
+  it.each([
+    { provider: 'bot', immediate: true },
+    { provider: 'youpin', immediate: false },
+  ] as const)('applies price filtering to non-weapon items like stickers, containers, and agents ($provider)', async ({ provider, immediate }) => {
+    seedCatalog([
+      fixture('Sticker | Cheap', 'sticker', 2),
+      fixture('Sticker | Expensive', 'sticker', 80),
+      fixture('Clutch Case', 'container', 1.5),
+      fixture('Weapon Case', 'container', 95),
+      fixture('AK-47 | Slate (Field-Tested)', 'rifle', 30),
+    ]);
+
+    const useCase = new GetCatalogItemsUseCase();
+
+    // Filter between $10 and $50
+    const inRange = await useCase.execute(query(immediate, {
+      minPrice: 10,
+      maxPrice: 50,
+      group: false,
+    }));
+
+    expect(inRange.items.map((item) => item.name)).toEqual(['Slate']);
+    expect(inRange.items.every((item) => item.price >= 10 && item.price <= 50)).toBe(true);
+
+    // Filter stickers under $10
+    const cheapStickers = await useCase.execute(query(immediate, {
+      categories: ['stickers'],
+      maxPrice: 10,
+      group: false,
+    }));
+
+    expect(cheapStickers.items.map((item) => item.name)).toEqual(['Cheap']);
+    expect(cheapStickers.items[0]?.price).toBe(2);
+
+    // Filter containers over $50
+    const expensiveCases = await useCase.execute(query(immediate, {
+      categories: ['containers'],
+      minPrice: 50,
+      group: false,
+    }));
+
+    expect(expensiveCases.items.map((item) => item.name)).toEqual(['Weapon Case']);
+    expect(expensiveCases.items[0]?.price).toBe(95);
   });
 });

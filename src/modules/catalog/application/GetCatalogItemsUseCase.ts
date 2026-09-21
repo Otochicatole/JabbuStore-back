@@ -98,6 +98,7 @@ const CATEGORY_ITEM_TYPES: Record<string, CatalogItemType[]> = {
   equipment: ['equipment'],
   agents: ['agent'],
   containers: ['container'],
+  stickers: ['sticker'],
   charms: ['charm'],
   graffiti: ['graffiti'],
   patches: ['patch'],
@@ -122,6 +123,7 @@ const CATEGORY_TOKEN_BY_ITEM_TYPE: Partial<Record<CatalogItemType, string>> = {
   equipment: 'equipment',
   agent: 'agents',
   container: 'containers',
+  sticker: 'stickers',
   charm: 'charms',
   graffiti: 'graffiti',
   patch: 'patches',
@@ -480,7 +482,6 @@ export class GetCatalogItemsUseCase {
     );
 
     const priceMatches = (item: InternalCatalogItem) => {
-      if (!item.priceFilterEligible) return true;
       if (query.minPrice !== undefined && item.price < query.minPrice) return false;
       if (query.maxPrice !== undefined && item.price > query.maxPrice) return false;
       return true;
@@ -493,8 +494,8 @@ export class GetCatalogItemsUseCase {
       const categoryMatches = searchMatches.filter((item) =>
         matchesCategories(item, query.categories),
       );
-      const items = (query.group ? this.groupItems(categoryMatches) : categoryMatches)
-        .filter(priceMatches);
+      const priceMatched = categoryMatches.filter(priceMatches);
+      const items = query.group ? this.groupItems(priceMatched) : priceMatched;
 
       return { searchMatches, items };
     };

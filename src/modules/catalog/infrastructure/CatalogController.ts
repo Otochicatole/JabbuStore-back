@@ -107,10 +107,10 @@ function parseCatalogQuery(req: Request): CatalogItemsQuery {
   if (search) parsed.search = search;
 
   const min = parseNumber(req.query.minPrice ?? req.query.min);
-  if (min !== undefined) parsed.minPrice = min;
+  if (min !== undefined) parsed.minPrice = Math.max(0, min);
 
   const max = parseNumber(req.query.maxPrice ?? req.query.max);
-  if (max !== undefined) parsed.maxPrice = max;
+  if (max !== undefined) parsed.maxPrice = Math.max(0, max);
 
   return parsed;
 }
