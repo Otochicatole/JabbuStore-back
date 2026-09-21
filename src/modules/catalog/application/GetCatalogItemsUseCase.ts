@@ -476,7 +476,24 @@ export class GetCatalogItemsUseCase {
       marketCatalogItems = catalogGlobalItems;
     }
 
-    const allCatalogItems = [...storeCatalogItems, ...marketCatalogItems];
+    const adminMinPrice =
+      typeof settings?.catalogMinPrice === 'number' &&
+      Number.isFinite(settings.catalogMinPrice) &&
+      settings.catalogMinPrice > 0
+        ? settings.catalogMinPrice
+        : 0;
+
+    const matchesAdminMinPrice = (item: InternalCatalogItem): boolean => {
+      if (adminMinPrice <= 0) return true;
+      if (item.priceFilterEligible && item.price < adminMinPrice) return false;
+      return true;
+    };
+
+    const allCatalogItems = [
+      ...storeCatalogItems,
+      ...marketCatalogItems,
+    ].filter(matchesAdminMinPrice);
+
     const conditionMatches = allCatalogItems.filter((item) =>
       matchesConditions(item, query.conditions),
     );

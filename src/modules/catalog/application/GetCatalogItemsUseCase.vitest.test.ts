@@ -440,4 +440,36 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
     expect(expensiveCases.items.map((item) => item.name)).toEqual(['Weapon Case']);
     expect(expensiveCases.items[0]?.price).toBe(95);
   });
+
+  it.each([
+    { provider: 'bot', immediate: true },
+    { provider: 'youpin', immediate: false },
+  ] as const)('applies admin settings catalogMinPrice in $provider catalog', async ({ provider, immediate }) => {
+    mocks.findSettings.mockResolvedValue({
+      catalogMinPrice: 15,
+      globalPriceModifierEnabled: false,
+      marketModifierEnabled: false,
+    });
+
+    seedCatalog([
+      fixture('AK-47 | Safari Mesh (Field-Tested)', 'rifle', 5),
+      fixture('AK-47 | Redline (Field-Tested)', 'rifle', 25),
+      fixture('★ Karambit | Lore (Field-Tested)', 'knife', 400),
+      fixture('Sticker | Cheap', 'sticker', 2),
+      fixture('Danger Zone Case', 'container', 3),
+    ]);
+
+    const useCase = new GetCatalogItemsUseCase();
+    const result = await useCase.execute(query(immediate, { group: false }));
+
+    // Weapons below $15 are filtered out; weapons >= $15 and non-weapon commodities are preserved
+    const names = result.items.map((item) => item.name);
+    expect(names).toContain('Redline');
+    expect(names).toContain('Lore');
+    expect(names).toContain('Cheap');
+    expect(names).toContain('Danger Zone Case');
+    expect(names).not.toContain('Safari Mesh');
+    expect(result.items.find((item) => item.name === 'Safari Mesh')).toBeUndefined();
+  });
 });
+
