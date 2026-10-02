@@ -211,7 +211,17 @@ export class ParticipationDrawController {
 
   async draw(req: Request, res: Response) {
     try {
-      const draw = await this.drawUseCase.execute(req.params.id as string);
+      const assignments = Array.isArray(req.body?.assignments)
+        ? req.body.assignments.map((item: { prizeId: string; winnerId: string }) => ({
+            prizeId: item.prizeId,
+            winnerId: item.winnerId,
+          }))
+        : undefined;
+
+      const draw = await this.drawUseCase.execute(
+        req.params.id as string,
+        assignments ? { assignments } : undefined,
+      );
       return res.json(this.toAdminDto(draw));
     } catch (error: any) {
       return this.handleMutationError(error, res, "No se pudo ejecutar el sorteo.");

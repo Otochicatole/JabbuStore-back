@@ -35,3 +35,19 @@ export const updateParticipationDrawSchema = z.object({
     prizes: z.array(prizeSchema).min(1).optional(),
   }),
 });
+
+export const manualDrawParticipationDrawSchema = z.object({
+  params: z.object({
+    id: z.string().min(1),
+  }),
+  body: z.object({
+    assignments: z
+      .array(
+        z.object({
+          prizeId: z.string().min(1),
+          winnerId: z.string().min(1),
+        }),
+      )
+      .min(1),
+  }),
+});

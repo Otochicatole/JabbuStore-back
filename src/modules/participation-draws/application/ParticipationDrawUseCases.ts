@@ -284,7 +284,10 @@ export class DeleteParticipationDrawUseCase {
 export class DrawParticipationDrawUseCase {
   constructor(private repository: IParticipationDrawRepository) {}
 
-  async execute(id: string): Promise<ParticipationDraw> {
+  async execute(
+    id: string,
+    options?: { assignments?: { prizeId: string; winnerId: string }[] },
+  ): Promise<ParticipationDraw> {
     const draw = await this.repository.findById(id);
     if (!draw) {
       throw new Error("DRAW_NOT_FOUND");
@@ -303,49 +306,92 @@ export class DrawParticipationDrawUseCase {
       return this.repository.finishWithoutWinners(id);
     }
 
-    const pool: EligibleUser[] = [];
-    for (const user of eligibleUsers) {
-      const weight = Math.max(1, user.chances || 1);
-      for (let i = 0; i < weight; i++) {
-        pool.push(user);
-      }
-    }
-
+    const eligibleById = new Map(eligibleUsers.map((user) => [user.id, user]));
     const prizeWinners: { prizeId: string; winnerId: string; prizeName: string; isBot: boolean }[] =
       [];
     const winnerUserIds = new Set<string>();
 
-    const positionsMap = new Map<number, typeof prizes>();
-    for (const prize of prizes) {
-      const pos = prize.position || 1;
-      if (!positionsMap.has(pos)) positionsMap.set(pos, []);
-      positionsMap.get(pos)!.push(prize);
-    }
+    if (options?.assignments && options.assignments.length > 0) {
+      const prizeById = new Map(prizes.map((prize) => [prize.id, prize]));
+      const assignedPrizeIds = new Set<string>();
 
-    const sortedPositions = Array.from(positionsMap.keys()).sort((a, b) => a - b);
+      if (options.assignments.length !== prizes.length) {
+        throw new Error("Debés asignar un ganador para cada premio.");
+      }
 
-    for (const pos of sortedPositions) {
-      if (pool.length === 0) break;
+      for (const assignment of options.assignments) {
+        if (assignedPrizeIds.has(assignment.prizeId)) {
+          throw new Error("Hay premios duplicados en la asignación manual.");
+        }
+        assignedPrizeIds.add(assignment.prizeId);
 
-      const posPrizes = positionsMap.get(pos)!;
-      const randomIndex = Math.floor(Math.random() * pool.length);
-      const winningUser = pool[randomIndex]!;
+        const prize = prizeById.get(assignment.prizeId);
+        if (!prize) {
+          throw new Error("Uno de los premios asignados no pertenece a este sorteo.");
+        }
 
-      for (const prize of posPrizes) {
+        const winner = eligibleById.get(assignment.winnerId);
+        if (!winner) {
+          throw new Error("Uno de los ganadores elegidos no es elegible para este sorteo.");
+        }
+
+        if (winnerUserIds.has(assignment.winnerId)) {
+          throw new Error("Un mismo participante no puede ganar más de un premio.");
+        }
+
+        winnerUserIds.add(assignment.winnerId);
         prizeWinners.push({
           prizeId: prize.id,
-          winnerId: winningUser.id,
+          winnerId: winner.id,
           prizeName: prize.name,
-          isBot: Boolean(winningUser.isBot),
+          isBot: Boolean(winner.isBot),
         });
       }
-
-      winnerUserIds.add(winningUser.id);
-      for (let i = pool.length - 1; i >= 0; i--) {
-        if (pool[i]?.id === winningUser.id) {
-          pool.splice(i, 1);
+    } else {
+      const pool: EligibleUser[] = [];
+      for (const user of eligibleUsers) {
+        const weight = Math.max(1, user.chances || 1);
+        for (let i = 0; i < weight; i++) {
+          pool.push(user);
         }
       }
+
+      const positionsMap = new Map<number, typeof prizes>();
+      for (const prize of prizes) {
+        const pos = prize.position || 1;
+        if (!positionsMap.has(pos)) positionsMap.set(pos, []);
+        positionsMap.get(pos)!.push(prize);
+      }
+
+      const sortedPositions = Array.from(positionsMap.keys()).sort((a, b) => a - b);
+
+      for (const pos of sortedPositions) {
+        if (pool.length === 0) break;
+
+        const posPrizes = positionsMap.get(pos)!;
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        const winningUser = pool[randomIndex]!;
+
+        for (const prize of posPrizes) {
+          prizeWinners.push({
+            prizeId: prize.id,
+            winnerId: winningUser.id,
+            prizeName: prize.name,
+            isBot: Boolean(winningUser.isBot),
+          });
+        }
+
+        winnerUserIds.add(winningUser.id);
+        for (let i = pool.length - 1; i >= 0; i--) {
+          if (pool[i]?.id === winningUser.id) {
+            pool.splice(i, 1);
+          }
+        }
+      }
+    }
+
+    if (prizeWinners.length === 0) {
+      return this.repository.finishWithoutWinners(id);
     }
 
     const finished = await this.repository.finishDraw(
@@ -377,7 +423,6 @@ export class DrawParticipationDrawUseCase {
             },
           }),
           type: "SYSTEM",
-          // Link único por premio para no agrupar/pisar notificaciones de distintos premios
           link: `/participation-draws/${draw.id}?prize=${winnerInfo.prizeId}`,
         });
       }

@@ -23,6 +23,7 @@ import { PrismaParticipationDrawRepository } from "./PrismaParticipationDrawRepo
 import {
   createParticipationDrawSchema,
   drawIdParamsSchema,
+  manualDrawParticipationDrawSchema,
   updateParticipationDrawSchema,
 } from "./participationDrawSchemas";
 
@@ -91,6 +92,13 @@ router.post(
   authMiddleware,
   adminOnly,
   validate(drawIdParamsSchema),
+  (req, res) => controller.draw(req, res),
+);
+router.post(
+  "/admin/:id/draw-manual",
+  authMiddleware,
+  adminOnly,
+  validate(manualDrawParticipationDrawSchema),
   (req, res) => controller.draw(req, res),
 );
 router.post(
