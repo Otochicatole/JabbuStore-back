@@ -38,6 +38,7 @@ model User {
   reviews        Review[]
   participationDrawPrizeWins ParticipationDrawPrize[] @relation("ParticipationDrawPrizeWinner")
   participationDrawEntries   ParticipationDrawEntry[]
+  participationDrawBotEntries ParticipationDrawBotEntry[]
   isFake         Boolean  @default(false)
 }
 
@@ -560,12 +561,28 @@ model ParticipationDraw {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  prizes  ParticipationDrawPrize[]
-  entries ParticipationDrawEntry[]
+  prizes     ParticipationDrawPrize[]
+  entries    ParticipationDrawEntry[]
+  botEntries ParticipationDrawBotEntry[]
 
   @@index([status])
   @@index([isPublic, status])
   @@index([status, drawDate])
+}
+
+model ParticipationDrawBotEntry {
+  id        String   @id @default(uuid())
+  drawId    String
+  draw      ParticipationDraw @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chances   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([drawId, userId])
+  @@index([drawId])
+  @@index([userId])
 }
 
 model ParticipationDrawPrize {

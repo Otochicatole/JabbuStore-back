@@ -4,6 +4,7 @@ import { PrismaNotificationRepository } from "../../notifications/infrastructure
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
 import type {
   CreateParticipationDrawInput,
+  EligibleUser,
   IParticipationDrawRepository,
   ParticipationDraw,
   ResolvedPrizeData,
@@ -297,13 +298,21 @@ export class DrawParticipationDrawUseCase {
       throw new Error("El sorteo no tiene premios asignados.");
     }
 
-    const eligibleUsers = await this.repository.findEligibleUsers(draw.minRaffles);
+    const eligibleUsers = await this.repository.findEligibleUsersForDraw(id, draw.minRaffles);
     if (eligibleUsers.length === 0) {
       return this.repository.finishWithoutWinners(id);
     }
 
-    const pool = [...eligibleUsers];
-    const prizeWinners: { prizeId: string; winnerId: string; prizeName: string }[] = [];
+    const pool: EligibleUser[] = [];
+    for (const user of eligibleUsers) {
+      const weight = Math.max(1, user.chances || 1);
+      for (let i = 0; i < weight; i++) {
+        pool.push(user);
+      }
+    }
+
+    const prizeWinners: { prizeId: string; winnerId: string; prizeName: string; isBot: boolean }[] =
+      [];
     const winnerUserIds = new Set<string>();
 
     const positionsMap = new Map<number, typeof prizes>();
@@ -327,11 +336,16 @@ export class DrawParticipationDrawUseCase {
           prizeId: prize.id,
           winnerId: winningUser.id,
           prizeName: prize.name,
+          isBot: Boolean(winningUser.isBot),
         });
       }
 
       winnerUserIds.add(winningUser.id);
-      pool.splice(randomIndex, 1);
+      for (let i = pool.length - 1; i >= 0; i--) {
+        if (pool[i]?.id === winningUser.id) {
+          pool.splice(i, 1);
+        }
+      }
     }
 
     const finished = await this.repository.finishDraw(
@@ -349,6 +363,8 @@ export class DrawParticipationDrawUseCase {
       const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
 
       for (const winnerInfo of prizeWinners) {
+        if (winnerInfo.isBot) continue;
+
         await notificationUseCase.execute({
           userId: winnerInfo.winnerId,
           adminId: null,
@@ -373,5 +389,54 @@ export class DrawParticipationDrawUseCase {
     }
 
     return finished;
+  }
+}
+
+export class AddFakeParticipantsToParticipationDrawUseCase {
+  constructor(private repository: IParticipationDrawRepository) {}
+
+  async execute(
+    id: string,
+    mode: "new" | "existing",
+    chances: number,
+    botData?: { name?: string; avatar?: string; botId?: string },
+  ): Promise<void> {
+    if (!Number.isFinite(chances) || chances < 1) {
+      throw new Error("La cantidad de chances debe ser al menos 1.");
+    }
+
+    const draw = await this.repository.findById(id);
+    if (!draw) {
+      throw new Error("DRAW_NOT_FOUND");
+    }
+    if (draw.status !== "OPEN") {
+      throw new Error("Solo se pueden agregar bots a sorteos abiertos.");
+    }
+
+    let fakeUser: { id: string; isFake: boolean } | null = null;
+
+    if (mode === "new") {
+      const name = botData?.name || `Bot_${Math.floor(Math.random() * 1000)}`;
+      const avatar =
+        botData?.avatar ||
+        "https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg";
+      const steamId = `FAKE_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+      fakeUser = await prisma.user.create({
+        data: {
+          isFake: true,
+          name,
+          avatar,
+          steamId,
+        },
+      });
+    } else {
+      if (!botData?.botId) throw new Error("ID de bot no proporcionado.");
+      const existing = await prisma.user.findUnique({ where: { id: botData.botId } });
+      if (!existing || !existing.isFake) throw new Error("Bot no encontrado o inválido.");
+      fakeUser = existing;
+    }
+
+    await this.repository.addBotEntry(id, fakeUser.id, Math.floor(chances));
   }
 }

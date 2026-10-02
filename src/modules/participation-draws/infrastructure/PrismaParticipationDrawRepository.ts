@@ -12,6 +12,7 @@ const winnerSelect = {
   id: true,
   name: true,
   avatar: true,
+  isFake: true,
 } as const;
 
 const prizeInclude = {
@@ -46,7 +47,7 @@ export class PrismaParticipationDrawRepository implements IParticipationDrawRepo
       return mapDraw({ ...draw, eligibleCount });
     }
 
-    const eligibleUsers = await this.findEligibleUsers(draw.minRaffles);
+    const eligibleUsers = await this.findEligibleUsersForDraw(draw.id, draw.minRaffles);
     return mapDraw({
       ...draw,
       eligibleUsers,
@@ -96,6 +97,8 @@ export class PrismaParticipationDrawRepository implements IParticipationDrawRepo
         name: entry.user?.name ?? null,
         avatar: entry.user?.avatar ?? null,
         raffleCount: entry.raffleCount,
+        isBot: Boolean((entry.user as { isFake?: boolean } | null)?.isFake),
+        chances: 1,
       }));
       return mapDraw({
         ...draw,
@@ -104,7 +107,7 @@ export class PrismaParticipationDrawRepository implements IParticipationDrawRepo
       });
     }
 
-    const eligibleUsers = await this.findEligibleUsers(draw.minRaffles);
+    const eligibleUsers = await this.findEligibleUsersForDraw(draw.id, draw.minRaffles);
     return mapDraw({
       ...draw,
       eligibleUsers,
@@ -256,12 +259,85 @@ export class PrismaParticipationDrawRepository implements IParticipationDrawRepo
         name: data.name,
         avatar: data.avatar,
         raffleCount: data.raffleIds.size,
+        isBot: false,
+        chances: 1,
       }))
       .filter((user) => user.raffleCount >= minRaffles)
       .sort((a, b) => {
         if (b.raffleCount !== a.raffleCount) return b.raffleCount - a.raffleCount;
         return (a.name || "").localeCompare(b.name || "");
       });
+  }
+
+  async findEligibleUsersForDraw(drawId: string, minRaffles: number): Promise<EligibleUser[]> {
+    const realUsers = await this.findEligibleUsers(minRaffles);
+    const botEntries = await prisma.participationDrawBotEntry.findMany({
+      where: { drawId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatar: true,
+            isFake: true,
+          },
+        },
+      },
+    });
+
+    const merged = [...realUsers];
+    const seen = new Set(realUsers.map((user) => user.id));
+
+    for (const entry of botEntries) {
+      if (seen.has(entry.userId)) {
+        const existing = merged.find((user) => user.id === entry.userId);
+        if (existing) {
+          existing.chances = (existing.chances || 1) + entry.chances;
+          existing.isBot = true;
+        }
+        continue;
+      }
+
+      seen.add(entry.userId);
+      merged.push({
+        id: entry.userId,
+        name: entry.user.name,
+        avatar: entry.user.avatar,
+        raffleCount: minRaffles,
+        isBot: true,
+        chances: entry.chances,
+      });
+    }
+
+    return merged.sort((a, b) => {
+      if (Boolean(a.isBot) !== Boolean(b.isBot)) return a.isBot ? 1 : -1;
+      if (b.raffleCount !== a.raffleCount) return b.raffleCount - a.raffleCount;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }
+
+  async addBotEntry(drawId: string, userId: string, chances: number): Promise<void> {
+    const existing = await prisma.participationDrawBotEntry.findUnique({
+      where: {
+        drawId_userId: { drawId, userId },
+      },
+    });
+
+    if (existing) {
+      await prisma.participationDrawBotEntry.update({
+        where: { id: existing.id },
+        data: { chances: existing.chances + chances },
+      });
+      return;
+    }
+
+    await prisma.participationDrawBotEntry.create({
+      data: {
+        drawId,
+        userId,
+        chances,
+      },
+    });
   }
 
   async getUserRaffleCount(userId: string): Promise<number> {

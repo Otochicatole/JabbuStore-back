@@ -3,6 +3,8 @@ export interface EligibleUser {
   name: string | null;
   avatar: string | null;
   raffleCount: number;
+  isBot?: boolean;
+  chances?: number;
 }
 
 export interface ParticipationDrawWinner {
@@ -106,7 +108,9 @@ export interface IParticipationDrawRepository {
   cancel(id: string): Promise<ParticipationDraw>;
   delete(id: string): Promise<ParticipationDraw | null>;
   findEligibleUsers(minRaffles: number): Promise<EligibleUser[]>;
+  findEligibleUsersForDraw(drawId: string, minRaffles: number): Promise<EligibleUser[]>;
   getUserRaffleCount(userId: string): Promise<number>;
+  addBotEntry(drawId: string, userId: string, chances: number): Promise<void>;
   finishDraw(
     id: string,
     prizeWinners: PrizeWinnerAssignment[],

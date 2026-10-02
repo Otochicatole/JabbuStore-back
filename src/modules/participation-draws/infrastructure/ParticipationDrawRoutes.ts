@@ -1,4 +1,5 @@
 import { Router } from "express";
+import multer from "multer";
 import {
   authMiddleware,
   adminOnly,
@@ -6,6 +7,7 @@ import {
 } from "../../../shared/infrastructure/middlewares/authMiddleware";
 import { validate } from "../../../shared/infrastructure/middlewares/validationMiddleware";
 import {
+  AddFakeParticipantsToParticipationDrawUseCase,
   CancelParticipationDrawUseCase,
   CreateParticipationDrawUseCase,
   DeleteParticipationDrawUseCase,
@@ -26,6 +28,11 @@ import {
 
 const router = Router();
 
+const uploadAvatar = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+});
+
 const repository = new PrismaParticipationDrawRepository();
 const controller = new ParticipationDrawController(
   new ListPublicParticipationDrawsUseCase(repository),
@@ -37,6 +44,7 @@ const controller = new ParticipationDrawController(
   new CancelParticipationDrawUseCase(repository),
   new DeleteParticipationDrawUseCase(repository),
   new DrawParticipationDrawUseCase(repository),
+  new AddFakeParticipantsToParticipationDrawUseCase(repository),
 );
 
 // Admin (before /:id routes)
@@ -84,6 +92,13 @@ router.post(
   adminOnly,
   validate(drawIdParamsSchema),
   (req, res) => controller.draw(req, res),
+);
+router.post(
+  "/admin/:id/fake-participants",
+  authMiddleware,
+  adminOnly,
+  uploadAvatar.single("avatarFile"),
+  (req, res) => controller.addFakeParticipants(req, res),
 );
 
 // Public
