@@ -59,6 +59,7 @@ router.post('/trades/:purchaseId/process', AdminMarketplaceController.processTra
 
 // Store Manual Pricing Overrides
 router.patch('/store/items/:assetId/price', AdminMarketplaceController.updateStoreItemPrice);
+router.patch('/store/items/marketable', AdminMarketplaceController.updateStoreItemsMarketableBulk);
 router.patch('/store/items/:assetId/marketable', AdminMarketplaceController.updateStoreItemMarketable);
 
 // Skin details lookup by assetId for historical items

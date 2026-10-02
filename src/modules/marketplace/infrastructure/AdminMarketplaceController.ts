@@ -574,6 +574,33 @@ export class AdminMarketplaceController {
     }
   }
 
+  static async updateStoreItemsMarketableBulk(req: Request, res: Response) {
+    try {
+      const { assetIds, marketable } = req.body;
+
+      if (!Array.isArray(assetIds) || assetIds.length === 0) {
+        return res.status(400).json({ error: 'Debes enviar al menos un assetId.' });
+      }
+
+      if (!assetIds.every((id: unknown) => typeof id === 'string' && id.length > 0)) {
+        return res.status(400).json({ error: 'Todos los assetIds deben ser strings válidos.' });
+      }
+
+      if (typeof marketable !== 'boolean') {
+        return res.status(400).json({ error: 'El campo marketable debe ser un booleano válido.' });
+      }
+
+      const result = await (prisma as any).storeItem.updateMany({
+        where: { assetId: { in: assetIds } },
+        data: { marketable },
+      });
+
+      res.json({ updated: result.count, marketable, assetIds });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   static async getItemDetailsByAssetId(req: Request, res: Response) {
     try {
       const assetId = req.params.assetId as string;
