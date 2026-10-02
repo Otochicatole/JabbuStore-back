@@ -31,6 +31,8 @@ export interface ParticipationDrawPrize {
   provider: string;
   winnerId: string | null;
   winner?: ParticipationDrawWinner | null;
+  scheduledWinnerId?: string | null;
+  scheduledWinner?: ParticipationDrawWinner | null;
 }
 
 export interface ParticipationDrawEntry {
@@ -114,6 +116,10 @@ export interface IParticipationDrawRepository {
   findEligibleUsersForDraw(drawId: string, minRaffles: number): Promise<EligibleUser[]>;
   getUserRaffleCount(userId: string): Promise<number>;
   addBotEntry(drawId: string, userId: string, chances: number): Promise<void>;
+  scheduleWinners(
+    id: string,
+    assignments: { prizeId: string; winnerId: string | null }[],
+  ): Promise<ParticipationDraw>;
   finishDraw(
     id: string,
     prizeWinners: PrizeWinnerAssignment[],

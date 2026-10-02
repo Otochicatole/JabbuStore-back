@@ -37,6 +37,7 @@ model User {
   wonPrizes      RafflePrize[]
   reviews        Review[]
   participationDrawPrizeWins ParticipationDrawPrize[] @relation("ParticipationDrawPrizeWinner")
+  participationDrawPrizeSchedules ParticipationDrawPrize[] @relation("ParticipationDrawPrizeScheduledWinner")
   participationDrawEntries   ParticipationDrawEntry[]
   participationDrawBotEntries ParticipationDrawBotEntry[]
   isFake         Boolean  @default(false)
@@ -604,8 +605,12 @@ model ParticipationDrawPrize {
   winnerId String?
   winner   User?   @relation("ParticipationDrawPrizeWinner", fields: [winnerId], references: [id], onDelete: SetNull)
 
+  scheduledWinnerId String?
+  scheduledWinner   User?   @relation("ParticipationDrawPrizeScheduledWinner", fields: [scheduledWinnerId], references: [id], onDelete: SetNull)
+
   @@index([drawId])
   @@index([winnerId])
+  @@index([scheduledWinnerId])
 }
 
 model ParticipationDrawEntry {

@@ -284,10 +284,7 @@ export class DeleteParticipationDrawUseCase {
 export class DrawParticipationDrawUseCase {
   constructor(private repository: IParticipationDrawRepository) {}
 
-  async execute(
-    id: string,
-    options?: { assignments?: { prizeId: string; winnerId: string }[] },
-  ): Promise<ParticipationDraw> {
+  async execute(id: string): Promise<ParticipationDraw> {
     const draw = await this.repository.findById(id);
     if (!draw) {
       throw new Error("DRAW_NOT_FOUND");
@@ -311,53 +308,47 @@ export class DrawParticipationDrawUseCase {
       [];
     const winnerUserIds = new Set<string>();
 
-    if (options?.assignments && options.assignments.length > 0) {
-      const prizeById = new Map(prizes.map((prize) => [prize.id, prize]));
-      const assignedPrizeIds = new Set<string>();
-
-      if (options.assignments.length !== prizes.length) {
-        throw new Error("Debés asignar un ganador para cada premio.");
+    // Premios con ganador agendado: se respetan (no aleatorio)
+    const remainingPrizes: typeof prizes = [];
+    for (const prize of prizes) {
+      const scheduledId = prize.scheduledWinnerId || null;
+      if (!scheduledId) {
+        remainingPrizes.push(prize);
+        continue;
       }
 
-      for (const assignment of options.assignments) {
-        if (assignedPrizeIds.has(assignment.prizeId)) {
-          throw new Error("Hay premios duplicados en la asignación manual.");
-        }
-        assignedPrizeIds.add(assignment.prizeId);
-
-        const prize = prizeById.get(assignment.prizeId);
-        if (!prize) {
-          throw new Error("Uno de los premios asignados no pertenece a este sorteo.");
-        }
-
-        const winner = eligibleById.get(assignment.winnerId);
-        if (!winner) {
-          throw new Error("Uno de los ganadores elegidos no es elegible para este sorteo.");
-        }
-
-        if (winnerUserIds.has(assignment.winnerId)) {
-          throw new Error("Un mismo participante no puede ganar más de un premio.");
-        }
-
-        winnerUserIds.add(assignment.winnerId);
-        prizeWinners.push({
-          prizeId: prize.id,
-          winnerId: winner.id,
-          prizeName: prize.name,
-          isBot: Boolean(winner.isBot),
-        });
+      const winner = eligibleById.get(scheduledId);
+      if (!winner) {
+        throw new Error(
+          `El ganador agendado para "${prize.name}" ya no es elegible. Reasignalo o quitá la agenda.`,
+        );
       }
-    } else {
+      if (winnerUserIds.has(scheduledId)) {
+        throw new Error("Hay ganadores agendados duplicados entre premios.");
+      }
+
+      winnerUserIds.add(scheduledId);
+      prizeWinners.push({
+        prizeId: prize.id,
+        winnerId: winner.id,
+        prizeName: prize.name,
+        isBot: Boolean(winner.isBot),
+      });
+    }
+
+    // Premios sin agenda: sorteo aleatorio con el resto del pool
+    if (remainingPrizes.length > 0) {
       const pool: EligibleUser[] = [];
       for (const user of eligibleUsers) {
+        if (winnerUserIds.has(user.id)) continue;
         const weight = Math.max(1, user.chances || 1);
         for (let i = 0; i < weight; i++) {
           pool.push(user);
         }
       }
 
-      const positionsMap = new Map<number, typeof prizes>();
-      for (const prize of prizes) {
+      const positionsMap = new Map<number, typeof remainingPrizes>();
+      for (const prize of remainingPrizes) {
         const pos = prize.position || 1;
         if (!positionsMap.has(pos)) positionsMap.set(pos, []);
         positionsMap.get(pos)!.push(prize);
@@ -434,6 +425,67 @@ export class DrawParticipationDrawUseCase {
     }
 
     return finished;
+  }
+}
+
+export class ScheduleParticipationDrawWinnersUseCase {
+  constructor(private repository: IParticipationDrawRepository) {}
+
+  async execute(
+    id: string,
+    assignments: { prizeId: string; winnerId: string | null }[],
+  ): Promise<ParticipationDraw> {
+    const draw = await this.repository.findById(id);
+    if (!draw) {
+      throw new Error("DRAW_NOT_FOUND");
+    }
+    if (draw.status !== "OPEN") {
+      throw new Error("Solo se pueden agendar ganadores en sorteos abiertos.");
+    }
+
+    const prizes = draw.prizes || [];
+    if (prizes.length === 0) {
+      throw new Error("El sorteo no tiene premios asignados.");
+    }
+
+    const eligibleUsers = await this.repository.findEligibleUsersForDraw(id, draw.minRaffles);
+    const eligibleById = new Map(eligibleUsers.map((user) => [user.id, user]));
+    const prizeById = new Map(prizes.map((prize) => [prize.id, prize]));
+    const seenWinners = new Set<string>();
+
+    // Completar con null para premios no enviados: no tocarlos. Solo actualizar los del payload.
+    const normalized = assignments.map((assignment) => {
+      if (!prizeById.has(assignment.prizeId)) {
+        throw new Error("Uno de los premios asignados no pertenece a este sorteo.");
+      }
+      if (!assignment.winnerId) {
+        return { prizeId: assignment.prizeId, winnerId: null };
+      }
+      if (!eligibleById.has(assignment.winnerId)) {
+        throw new Error("Uno de los ganadores elegidos no es elegible para este sorteo.");
+      }
+      if (seenWinners.has(assignment.winnerId)) {
+        throw new Error("Un mismo participante no puede estar agendado en más de un premio.");
+      }
+      seenWinners.add(assignment.winnerId);
+      return { prizeId: assignment.prizeId, winnerId: assignment.winnerId };
+    });
+
+    // También validar contra agendas existentes que no se están cambiando
+    for (const prize of prizes) {
+      const incoming = normalized.find((item) => item.prizeId === prize.id);
+      const effectiveWinnerId =
+        incoming !== undefined ? incoming.winnerId : prize.scheduledWinnerId || null;
+      if (!effectiveWinnerId) continue;
+      if (incoming === undefined && seenWinners.has(effectiveWinnerId)) {
+        throw new Error("Un mismo participante no puede estar agendado en más de un premio.");
+      }
+      if (incoming === undefined) {
+        seenWinners.add(effectiveWinnerId);
+      }
+    }
+
+    return this.repository.scheduleWinners(id, normalized);
   }
 }
 

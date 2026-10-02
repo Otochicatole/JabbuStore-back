@@ -36,7 +36,7 @@ export const updateParticipationDrawSchema = z.object({
   }),
 });
 
-export const manualDrawParticipationDrawSchema = z.object({
+export const scheduleWinnersParticipationDrawSchema = z.object({
   params: z.object({
     id: z.string().min(1),
   }),
@@ -45,7 +45,7 @@ export const manualDrawParticipationDrawSchema = z.object({
       .array(
         z.object({
           prizeId: z.string().min(1),
-          winnerId: z.string().min(1),
+          winnerId: z.string().min(1).nullable(),
         }),
       )
       .min(1),

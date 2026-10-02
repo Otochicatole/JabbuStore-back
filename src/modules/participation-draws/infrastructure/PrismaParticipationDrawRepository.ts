@@ -19,6 +19,7 @@ const winnerSelect = {
 
 const prizeInclude = {
   winner: { select: winnerSelect },
+  scheduledWinner: { select: winnerSelect },
 } as const;
 
 const entryInclude = {
@@ -340,6 +341,44 @@ export class PrismaParticipationDrawRepository implements IParticipationDrawRepo
         chances,
       },
     });
+  }
+
+  async scheduleWinners(
+    id: string,
+    assignments: { prizeId: string; winnerId: string | null }[],
+  ): Promise<ParticipationDraw> {
+    const draw = await prisma.participationDraw.findUnique({
+      where: { id },
+      include: { prizes: true },
+    });
+    if (!draw) {
+      throw new Error("DRAW_NOT_FOUND");
+    }
+    if (draw.status !== "OPEN") {
+      throw new Error("Solo se pueden agendar ganadores en sorteos abiertos.");
+    }
+
+    const prizeIds = new Set(draw.prizes.map((prize) => prize.id));
+    for (const assignment of assignments) {
+      if (!prizeIds.has(assignment.prizeId)) {
+        throw new Error("Uno de los premios asignados no pertenece a este sorteo.");
+      }
+    }
+
+    await prisma.$transaction(
+      assignments.map((assignment) =>
+        prisma.participationDrawPrize.update({
+          where: { id: assignment.prizeId },
+          data: { scheduledWinnerId: assignment.winnerId },
+        }),
+      ),
+    );
+
+    const updated = await this.findById(id);
+    if (!updated) {
+      throw new Error("DRAW_NOT_FOUND");
+    }
+    return updated;
   }
 
   async getUserRaffleCount(userId: string): Promise<number> {

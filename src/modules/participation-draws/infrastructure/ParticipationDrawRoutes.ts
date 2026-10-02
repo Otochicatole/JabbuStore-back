@@ -16,6 +16,7 @@ import {
   GetParticipationDrawDetailsUseCase,
   ListAdminParticipationDrawsUseCase,
   ListPublicParticipationDrawsUseCase,
+  ScheduleParticipationDrawWinnersUseCase,
   UpdateParticipationDrawUseCase,
 } from "../application/ParticipationDrawUseCases";
 import { ParticipationDrawController } from "./ParticipationDrawController";
@@ -23,7 +24,7 @@ import { PrismaParticipationDrawRepository } from "./PrismaParticipationDrawRepo
 import {
   createParticipationDrawSchema,
   drawIdParamsSchema,
-  manualDrawParticipationDrawSchema,
+  scheduleWinnersParticipationDrawSchema,
   updateParticipationDrawSchema,
 } from "./participationDrawSchemas";
 
@@ -46,6 +47,7 @@ const controller = new ParticipationDrawController(
   new DeleteParticipationDrawUseCase(repository),
   new DrawParticipationDrawUseCase(repository),
   new AddFakeParticipantsToParticipationDrawUseCase(repository),
+  new ScheduleParticipationDrawWinnersUseCase(repository),
 );
 
 // Admin (before /:id routes)
@@ -95,11 +97,11 @@ router.post(
   (req, res) => controller.draw(req, res),
 );
 router.post(
-  "/admin/:id/draw-manual",
+  "/admin/:id/schedule-winners",
   authMiddleware,
   adminOnly,
-  validate(manualDrawParticipationDrawSchema),
-  (req, res) => controller.draw(req, res),
+  validate(scheduleWinnersParticipationDrawSchema),
+  (req, res) => controller.scheduleWinners(req, res),
 );
 router.post(
   "/admin/:id/fake-participants",

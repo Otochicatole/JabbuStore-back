@@ -13,6 +13,7 @@ import {
   GetParticipationDrawDetailsUseCase,
   ListAdminParticipationDrawsUseCase,
   ListPublicParticipationDrawsUseCase,
+  ScheduleParticipationDrawWinnersUseCase,
   UpdateParticipationDrawUseCase,
 } from "../application/ParticipationDrawUseCases";
 
@@ -83,6 +84,7 @@ export class ParticipationDrawController {
     private deleteUseCase: DeleteParticipationDrawUseCase,
     private drawUseCase: DrawParticipationDrawUseCase,
     private addFakeParticipantsUseCase: AddFakeParticipantsToParticipationDrawUseCase,
+    private scheduleWinnersUseCase: ScheduleParticipationDrawWinnersUseCase,
   ) {}
 
   async listPublic(_req: Request, res: Response) {
@@ -211,20 +213,29 @@ export class ParticipationDrawController {
 
   async draw(req: Request, res: Response) {
     try {
-      const assignments = Array.isArray(req.body?.assignments)
-        ? req.body.assignments.map((item: { prizeId: string; winnerId: string }) => ({
-            prizeId: item.prizeId,
-            winnerId: item.winnerId,
-          }))
-        : undefined;
-
-      const draw = await this.drawUseCase.execute(
-        req.params.id as string,
-        assignments ? { assignments } : undefined,
-      );
+      const draw = await this.drawUseCase.execute(req.params.id as string);
       return res.json(this.toAdminDto(draw));
     } catch (error: any) {
       return this.handleMutationError(error, res, "No se pudo ejecutar el sorteo.");
+    }
+  }
+
+  async scheduleWinners(req: Request, res: Response) {
+    try {
+      const assignments = (req.body?.assignments || []).map(
+        (item: { prizeId: string; winnerId: string | null }) => ({
+          prizeId: item.prizeId,
+          winnerId: item.winnerId ?? null,
+        }),
+      );
+
+      const draw = await this.scheduleWinnersUseCase.execute(
+        req.params.id as string,
+        assignments,
+      );
+      return res.json(this.toAdminDto(draw));
+    } catch (error: any) {
+      return this.handleMutationError(error, res, "No se pudieron agendar los ganadores.");
     }
   }
 
@@ -268,7 +279,21 @@ export class ParticipationDrawController {
     return res.status(400).json({ error: error?.message || fallbackMessage });
   }
 
-  private mapPrize(prize: NonNullable<ParticipationDraw["prizes"]>[number]) {
+  private mapUser(user: NonNullable<NonNullable<ParticipationDraw["prizes"]>[number]["winner"]>) {
+    return {
+      id: user.id,
+      name: user.name,
+      avatar: user.avatar,
+      steamId: user.steamId ?? null,
+      tradeUrl: user.tradeUrl ?? null,
+      isFake: Boolean(user.isFake),
+    };
+  }
+
+  private mapPrize(
+    prize: NonNullable<ParticipationDraw["prizes"]>[number],
+    options?: { includeScheduled?: boolean },
+  ) {
     return {
       id: prize.id,
       position: prize.position,
@@ -282,16 +307,15 @@ export class ParticipationDrawController {
       pattern: prize.pattern,
       provider: prize.provider,
       winnerId: prize.winnerId,
-      winner: prize.winner
+      winner: prize.winner ? this.mapUser(prize.winner) : null,
+      ...(options?.includeScheduled
         ? {
-            id: prize.winner.id,
-            name: prize.winner.name,
-            avatar: prize.winner.avatar,
-            steamId: prize.winner.steamId ?? null,
-            tradeUrl: prize.winner.tradeUrl ?? null,
-            isFake: Boolean(prize.winner.isFake),
+            scheduledWinnerId: prize.scheduledWinnerId ?? null,
+            scheduledWinner: prize.scheduledWinner
+              ? this.mapUser(prize.scheduledWinner)
+              : null,
           }
-        : null,
+        : {}),
     };
   }
 
@@ -325,7 +349,9 @@ export class ParticipationDrawController {
   }
 
   private toAdminDto(draw: ParticipationDraw) {
-    const prizes = (draw.prizes || []).map((prize) => this.mapPrize(prize));
+    const prizes = (draw.prizes || []).map((prize) =>
+      this.mapPrize(prize, { includeScheduled: true }),
+    );
     return {
       id: draw.id,
       name: draw.name,
@@ -352,6 +378,15 @@ export class ParticipationDrawController {
           prizeName: prize.name,
           prizeIconUrl: prize.iconUrl,
           winner: prize.winner,
+        })),
+      scheduledWinners: prizes
+        .filter((prize) => prize.scheduledWinner)
+        .map((prize) => ({
+          prizeId: prize.id,
+          position: prize.position,
+          prizeName: prize.name,
+          prizeIconUrl: prize.iconUrl,
+          winner: prize.scheduledWinner,
         })),
       createdAt: draw.createdAt,
       updatedAt: draw.updatedAt,
