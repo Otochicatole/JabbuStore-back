@@ -36,6 +36,8 @@ model User {
   raffleTickets  RaffleTicket[]
   wonPrizes      RafflePrize[]
   reviews        Review[]
+  participationDrawPrizeWins ParticipationDrawPrize[] @relation("ParticipationDrawPrizeWinner")
+  participationDrawEntries   ParticipationDrawEntry[]
   isFake         Boolean  @default(false)
 }
 
@@ -545,6 +547,63 @@ model RaffleTicket {
   purchaseDate DateTime @default(now())
   
   wonPrizes    RafflePrize[] @relation("WinningTicket")
+}
+
+model ParticipationDraw {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  minRaffles  Int
+  drawDate    DateTime
+  status      String   @default("OPEN") // OPEN, FINISHED, CANCELLED
+  isPublic    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  prizes  ParticipationDrawPrize[]
+  entries ParticipationDrawEntry[]
+
+  @@index([status])
+  @@index([isPublic, status])
+  @@index([status, drawDate])
+}
+
+model ParticipationDrawPrize {
+  id       String @id @default(uuid())
+  drawId   String
+  draw     ParticipationDraw @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  position Int    @default(1)
+
+  assetId  String
+  name     String
+  price    Float
+  iconUrl  String?
+  rarity   String?
+  exterior String?
+  float    Float?
+  pattern  Int?
+  provider String // 'bot' or 'youpin'
+
+  winnerId String?
+  winner   User?   @relation("ParticipationDrawPrizeWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+
+  @@index([drawId])
+  @@index([winnerId])
+}
+
+model ParticipationDrawEntry {
+  id          String   @id @default(uuid())
+  drawId      String
+  draw        ParticipationDraw @relation(fields: [drawId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  raffleCount Int
+  isWinner    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@unique([drawId, userId])
+  @@index([drawId])
+  @@index([userId])
 }
 
 

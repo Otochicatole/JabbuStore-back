@@ -343,6 +343,7 @@ export class GetCatalogItemsUseCase {
           const parsed = parseName(item.name);
           const capabilities = classifyCatalogItem({
             itemgroup: item.type,
+            itemtype: item.type,
             category: item.category,
             name: item.name,
           });

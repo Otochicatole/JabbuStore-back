@@ -471,5 +471,35 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
     expect(names).not.toContain('Safari Mesh');
     expect(result.items.find((item) => item.name === 'Safari Mesh')).toBeUndefined();
   });
+
+  it('correctly categorizes and filters agents and non-weapon items in store inventory', async () => {
+    seedCatalog([
+      fixture('Getaway Sally | The Professionals', 'Exceptional Agent', 60, { exterior: null, float: null }),
+      fixture('Sir Bloody Loudmouth Darryl | The Professionals', 'Master Agent', 90, { exterior: null, float: null }),
+      fixture('AK-47 | Redline (Field-Tested)', 'Classified Rifle', 25),
+      fixture('Nova | Predator (Field-Tested)', 'Consumer Grade Shotgun', 2),
+      fixture('AWP | Atheris (Field-Tested)', 'Restricted Sniper Rifle', 15),
+    ]);
+
+    const useCase = new GetCatalogItemsUseCase();
+
+    // 1. Filter by agents
+    const agentsResult = await useCase.execute(query(true, { categories: ['agents'] }));
+    expect(agentsResult.items).toHaveLength(2);
+    expect(agentsResult.items.map((i) => i.name)).toEqual(
+      expect.arrayContaining(['The Professionals']),
+    );
+    expect(agentsResult.facets.categories.agents).toBe(2);
+
+    // 2. Filter by shotguns
+    const shotgunsResult = await useCase.execute(query(true, { categories: ['shotguns'] }));
+    expect(shotgunsResult.items).toHaveLength(1);
+    expect(shotgunsResult.items[0]?.weapon).toBe('Nova');
+
+    // 3. Filter by snipers
+    const snipersResult = await useCase.execute(query(true, { categories: ['snipers'] }));
+    expect(snipersResult.items).toHaveLength(1);
+    expect(snipersResult.items[0]?.weapon).toBe('AWP');
+  });
 });
 

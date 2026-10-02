@@ -25,6 +25,7 @@ import quoteRoutes from './modules/quotes/infrastructure/QuoteRoutes';
 import raffleRoutes from './modules/raffles/infrastructure/RaffleRoutes';
 import reviewRoutes from './modules/reviews/infrastructure/ReviewRoutes';
 import sponsorRoutes from './modules/sponsors/infrastructure/SponsorRoutes';
+import participationDrawRoutes from './modules/participation-draws/infrastructure/ParticipationDrawRoutes';
 import currencyConversionRoutes from './modules/currency-conversion/infrastructure/CurrencyConversionRoutes';
 import { initializeTicketSocket } from './modules/tickets/infrastructure/TicketSocket';
 
@@ -162,6 +163,7 @@ app.use('/api/quotes', quoteRoutes);
 app.use('/api/raffles', raffleRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/sponsors', sponsorRoutes);
+app.use('/api/participation-draws', participationDrawRoutes);
 app.use('/api/currency-conversion', currencyConversionRoutes);
 
 
@@ -177,6 +179,7 @@ app.get('/', (req, res) => {
 });
 
 import { startRaffleScheduler } from './modules/raffles/infrastructure/RaffleScheduler';
+import { startParticipationDrawScheduler } from './modules/participation-draws/infrastructure/ParticipationDrawScheduler';
 import { startRetentionScheduler } from './modules/orders/infrastructure/RetentionScheduler';
 import { autoSyncService } from './modules/market/application/AutoSyncService';
 
@@ -198,6 +201,7 @@ async function bootstrap() {
     console.log(`Server is running on http://localhost:${PORT}`);
     // Ejecución automática de sorteos programados vencidos
     startRaffleScheduler();
+    startParticipationDrawScheduler();
     // Verificación periódica de retenciones de venta vencidas (8 días)
     startRetentionScheduler();
     // Auto sync del catálogo global
