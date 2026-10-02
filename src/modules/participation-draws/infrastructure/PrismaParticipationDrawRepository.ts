@@ -12,6 +12,8 @@ const winnerSelect = {
   id: true,
   name: true,
   avatar: true,
+  steamId: true,
+  tradeUrl: true,
   isFake: true,
 } as const;
 

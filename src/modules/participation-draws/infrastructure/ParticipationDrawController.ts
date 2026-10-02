@@ -277,6 +277,9 @@ export class ParticipationDrawController {
             id: prize.winner.id,
             name: prize.winner.name,
             avatar: prize.winner.avatar,
+            steamId: prize.winner.steamId ?? null,
+            tradeUrl: prize.winner.tradeUrl ?? null,
+            isFake: Boolean(prize.winner.isFake),
           }
         : null,
     };

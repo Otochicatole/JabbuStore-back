@@ -11,6 +11,9 @@ export interface ParticipationDrawWinner {
   id: string;
   name: string | null;
   avatar: string | null;
+  steamId?: string | null;
+  tradeUrl?: string | null;
+  isFake?: boolean;
 }
 
 export interface ParticipationDrawPrize {
