@@ -411,37 +411,77 @@ export class PriceEnrichmentService {
     let category = "other";
     let type = "Weapon";
 
-    const isKnife =
-      name.includes("★") ||
-      [
-        "knife",
-        "bayonet",
-        "karambit",
-        "flip",
-        "gut",
-        "falchion",
-        "bowie",
-        "huntsman",
-        "talon",
-        "ursus",
-        "stiletto",
-        "navaja",
-        "nomad",
-        "survival",
-        "paracord",
-        "skeleton",
-      ].some((k) => nameLower.includes(k));
-    const isGloves = ["gloves", "wraps"].some((g) => nameLower.includes(g));
-
-    if (isKnife) {
-      rarity = "ancient";
-      category = "knife";
-      type = "★ Knife";
-    } else if (isGloves) {
-      rarity = "ancient";
-      category = "gloves";
-      type = "★ Gloves";
+    // 0. Non-weapon cosmetics & utility items (checked first to prevent false matches with skins/knives)
+    if (
+      nameLower.startsWith("sealed graffiti |") ||
+      nameLower.startsWith("graffiti |") ||
+      nameLower.includes("graffiti")
+    ) {
+      category = "graffiti";
+      type = "Graffiti";
+      rarity = "common";
+    } else if (
+      nameLower.startsWith("sticker |") ||
+      nameLower.startsWith("sticker slab |")
+    ) {
+      category = "sticker";
+      type = "Sticker";
+      rarity = "common";
+    } else if (nameLower.startsWith("patch |")) {
+      category = "patch";
+      type = "Patch";
+      rarity = "common";
+    } else if (nameLower.startsWith("charm |")) {
+      category = "charm";
+      type = "Charm";
+      rarity = "common";
+    } else if (nameLower.startsWith("music kit |")) {
+      category = "music_kit";
+      type = "Music Kit";
+      rarity = "common";
+    } else if (
+      nameLower.endsWith(" case") ||
+      nameLower.endsWith(" capsule") ||
+      nameLower.endsWith(" package")
+    ) {
+      category = "container";
+      type = "Container";
+      rarity = "common";
+    } else if (nameLower.endsWith(" pin") || nameLower.includes("collectible")) {
+      category = "collectible";
+      type = "Collectible";
+      rarity = "common";
+    } else if (nameLower.endsWith(" pass") || nameLower.endsWith(" ticket")) {
+      category = "pass";
+      type = "Pass";
+      rarity = "common";
+    } else if (nameLower.endsWith(" key") || nameLower === "key") {
+      category = "key";
+      type = "Key";
+      rarity = "common";
     } else {
+      const isGloves =
+        name.includes("★") &&
+        ["gloves", "wraps", "hand wraps"].some((g) => nameLower.includes(g));
+
+      const isKnife =
+        (name.includes("★") && !isGloves) ||
+        [
+          "knife",
+          "bayonet",
+          "karambit",
+          "shadow daggers",
+        ].some((k) => nameLower.includes(k));
+
+      if (isGloves) {
+        rarity = "ancient";
+        category = "gloves";
+        type = "★ Gloves";
+      } else if (isKnife) {
+        rarity = "ancient";
+        category = "knife";
+        type = "★ Knife";
+      } else {
       if (
         [
           "ak-47",
@@ -504,6 +544,7 @@ export class PriceEnrichmentService {
         rarity = "uncommon";
       }
     }
+  }
 
     const isStatTrak = name.includes("StatTrak™") || name.includes("StatTrak");
     const isSouvenir = name.includes("Souvenir");

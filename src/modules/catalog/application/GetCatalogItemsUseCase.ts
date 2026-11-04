@@ -431,6 +431,11 @@ export class GetCatalogItemsUseCase {
             const displayImage = variantImage ? getCatalogIconUrl({ ...item, itemimage: variantImage, image: variantImage }) : imageUrl;
 
             const finalPhase = phase ?? parsed.phase;
+            const itemCatalogType = item.catalogItemType || capabilities.itemType;
+            const category =
+              details.category && details.category !== 'other'
+                ? details.category
+                : (CATEGORY_TOKEN_BY_ITEM_TYPE[itemCatalogType] ?? details.category);
 
             return [{
               id: finalPhase ? `${name} | ${finalPhase}` : name,
@@ -442,15 +447,14 @@ export class GetCatalogItemsUseCase {
               float: null,
               pattern: null,
               exterior: details.exterior,
-              category: details.category,
+              category,
               isStatTrak: details.isStatTrak,
               isSouvenir: details.isSouvenir,
               phase: finalPhase,
               isImmediate: false,
               inspectLink: null,
               provider: "youpin" as const,
-              catalogItemType:
-                capabilities.itemType,
+              catalogItemType: itemCatalogType,
               supportsFloatStock:
                 typeof item.supportsFloatStock === 'boolean'
                   ? item.supportsFloatStock

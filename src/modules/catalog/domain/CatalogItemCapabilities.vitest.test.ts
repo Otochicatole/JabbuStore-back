@@ -129,6 +129,26 @@ describe("classifyCatalogItem", () => {
       }),
     ).toEqual({ itemType: "graffiti", supportsFloatStock: false, priceFilterEligible: false });
 
+    // Graffiti with knife in name should still be classified as graffiti
+    expect(
+      classifyCatalogItem({
+        itemgroup: "graffiti",
+        itemtype: "sealed graffiti",
+        category: "knife",
+        name: "Sealed Graffiti | Karambit (Princess Pink)",
+      }),
+    ).toEqual({ itemType: "graffiti", supportsFloatStock: false, priceFilterEligible: false });
+
+    // Sticker with knife in name should still be classified as sticker
+    expect(
+      classifyCatalogItem({
+        itemgroup: "sticker",
+        itemtype: "sticker",
+        category: "knife",
+        name: "Sticker | Knife's Edge",
+      }),
+    ).toEqual({ itemType: "sticker", supportsFloatStock: false, priceFilterEligible: false });
+
     // Passes
     expect(
       classifyCatalogItem({

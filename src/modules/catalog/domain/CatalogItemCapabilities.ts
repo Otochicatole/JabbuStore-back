@@ -124,6 +124,84 @@ export function resolveCatalogItemType(
     .replace(/^souvenir\s*/i, "")
     .trim();
 
+  // 0. Non-weapon cosmetics (Graffiti, Stickers, Patches, Charms, Music Kits, Containers)
+  if (
+    cleanName.startsWith("sealed graffiti |") ||
+    cleanName.startsWith("graffiti |") ||
+    group.includes("graffiti") ||
+    type.includes("graffiti") ||
+    category === "graffiti"
+  ) {
+    return "graffiti";
+  }
+
+  if (
+    cleanName.startsWith("sticker |") ||
+    cleanName.startsWith("sticker slab |") ||
+    group.includes("sticker") ||
+    type.includes("sticker") ||
+    category === "sticker" ||
+    category === "stickers"
+  ) {
+    return "sticker";
+  }
+
+  if (
+    cleanName.startsWith("patch |") ||
+    group.includes("patch") ||
+    type.includes("patch") ||
+    category === "patch" ||
+    category === "patches"
+  ) {
+    return "patch";
+  }
+
+  if (
+    cleanName.startsWith("charm |") ||
+    group.includes("charm") ||
+    type.includes("charm") ||
+    category === "charm" ||
+    category === "charms" ||
+    category === "keychain" ||
+    category === "keychains"
+  ) {
+    return "charm";
+  }
+
+  if (
+    cleanName.startsWith("music kit |") ||
+    group.includes("music kit") ||
+    group.includes("music_kit") ||
+    type.includes("music kit") ||
+    type.includes("music_kit") ||
+    category === "music kit" ||
+    category === "music_kit" ||
+    category === "music kits" ||
+    category === "music_kits"
+  ) {
+    return "music_kit";
+  }
+
+  if (
+    group.includes("container") ||
+    group.includes("case") ||
+    group.includes("capsule") ||
+    group.includes("package") ||
+    type.includes("container") ||
+    type.includes("case") ||
+    type.includes("capsule") ||
+    type.includes("package") ||
+    category === "container" ||
+    category === "containers" ||
+    category === "case" ||
+    category === "cases" ||
+    cleanName.endsWith(" case") ||
+    cleanName.endsWith(" capsule") ||
+    cleanName.endsWith(" package")
+  ) {
+    return "container";
+  }
+
   // 1. Gloves (checked before agents to prevent "Field Agent" gloves matching agent)
   if (
     rawName.startsWith("★") &&

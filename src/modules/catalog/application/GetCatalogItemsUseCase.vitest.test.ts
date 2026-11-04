@@ -237,6 +237,21 @@ describe.each([
     expect(result.pagination.total).toBe(1);
   });
 
+  it('excludes graffitis and stickers containing knife keywords when filtering by knives', async () => {
+    seedCatalog([
+      fixture('Sealed Graffiti | Karambit (Princess Pink)', 'graffiti' as any, 0.01),
+      fixture("Sticker | Knife's Edge", 'sticker', 0.05),
+      fixture('★ Karambit | Doppler (Factory New)', 'knife', 1200),
+    ]);
+
+    const result = await new GetCatalogItemsUseCase().execute(query(immediate, {
+      categories: ['knives'],
+    }));
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ weapon: '★ Karambit', provider });
+  });
+
   it('allows typo fallback after category filtering removes all normalized matches', async () => {
     seedCatalog([
       fixture('Sticker | FaZe Clan (Holo) | Antwerp 2022', 'sticker'),
