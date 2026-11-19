@@ -115,14 +115,30 @@ const getLast4 = (value: string) => {
   return value.length <= 4 ? value : value.slice(-4);
 };
 
+const stripWrappingQuotes = (value: string) => {
+  const trimmed = value.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+};
+
 const envFallback = (key: SecretKey) => {
   if (key === "PAYPAL_CLIENT_ID") {
-    return process.env.PAYPAL_CLIENT_ID || process.env.PAYPAY_CLIENT_ID || "";
+    return stripWrappingQuotes(
+      process.env.PAYPAL_CLIENT_ID || process.env.PAYPAY_CLIENT_ID || "",
+    );
   }
   if (key === "PAYPAL_CLIENT_SECRET") {
-    return process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAY_CLIENT_SECRET || "";
+    return stripWrappingQuotes(
+      process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAY_CLIENT_SECRET || "",
+    );
   }
-  return process.env[key] || "";
+  return stripWrappingQuotes(process.env[key] || "");
 };
 
 const audit = async (adminId: string | undefined, action: string, target: string) => {
@@ -155,22 +171,23 @@ export class AdminSecureConfigService {
   static async upsertSecret(key: string, value: string, password: string | undefined, adminId?: string) {
     if (!isSecretKey(key)) throw new Error("Secret key inválida.");
     assertMasterPassword(password);
-    if (!value || value.trim().length === 0) {
+    const normalizedValue = stripWrappingQuotes(value || "");
+    if (!normalizedValue) {
       throw new Error("El valor del secreto no puede estar vacío.");
     }
 
-    const encrypted = encryptValue(value.trim());
+    const encrypted = encryptValue(normalizedValue);
     const setting = await prisma.encryptedSetting.upsert({
       where: { key },
       create: {
         key,
         ...encrypted,
-        last4: getLast4(value.trim()),
+        last4: getLast4(normalizedValue),
         updatedByAdminId: adminId ?? null,
       },
       update: {
         ...encrypted,
-        last4: getLast4(value.trim()),
+        last4: getLast4(normalizedValue),
         updatedByAdminId: adminId ?? null,
       },
     });
@@ -207,7 +224,17 @@ export class AdminSecureConfigService {
 
   static async getSecretValue(key: SecretKey) {
     const setting = await prisma.encryptedSetting.findUnique({ where: { key } });
-    if (setting) return decryptValue(setting);
+    if (setting) {
+      try {
+        return stripWrappingQuotes(decryptValue(setting));
+      } catch (err) {
+        console.error(
+          `[AdminSecureConfigService] No se pudo descifrar ${key} desde la base de datos. Se usará el valor de entorno si existe.`,
+          err,
+        );
+        return envFallback(key);
+      }
+    }
     return envFallback(key);
   }
 

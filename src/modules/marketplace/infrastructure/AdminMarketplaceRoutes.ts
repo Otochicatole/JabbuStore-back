@@ -30,6 +30,7 @@ router.patch('/settings/auto-sync', AdminMarketplaceController.updateAutoSyncSet
 router.get('/settings/auto-sync/status', AdminMarketplaceController.getAutoSyncStatus);
 router.post('/settings/auto-sync/run-now', AdminMarketplaceController.runAutoSyncNow);
 router.get('/settings/secrets/status', AdminMarketplaceController.getSecretsStatus);
+router.post('/settings/resend/test', secretsLimiter, AdminMarketplaceController.testResendEmail);
 router.post('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.upsertSecret);
 router.post('/settings/secrets/:key/reveal', secretsLimiter, AdminMarketplaceController.revealSecret);
 router.delete('/settings/secrets/:key', secretsLimiter, AdminMarketplaceController.deleteSecret);

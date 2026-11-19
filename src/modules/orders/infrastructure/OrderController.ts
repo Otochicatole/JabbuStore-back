@@ -136,22 +136,100 @@ export class OrderController {
     }
 
     const isRaffleOrder = Boolean(currentMetadata.raffleId);
+    const updatedMetadata = {
+      ...currentMetadata,
+      [metadataKey]: String(paymentId),
+      paymentProvider: provider,
+      paidAt: new Date().toISOString(),
+    };
 
-    await prisma.order.update({
-      where: { id: orderId },
+    const claimed = await prisma.order.updateMany({
+      where: {
+        id: orderId,
+        status: "PENDING_PAYMENT",
+      },
       data: {
-        ...(isRaffleOrder ? {} : { status: "TRADE_PENDING" }),
-        metadata: {
-          ...currentMetadata,
-          [metadataKey]: String(paymentId),
-          paymentProvider: provider,
-          paidAt: new Date().toISOString(),
-        },
+        status: "PAID",
+        metadata: updatedMetadata,
       },
     });
 
-    if (isRaffleOrder) {
-      await this.updateOrderStatusUseCase.execute(orderId, OrderStatus.TRADE_PENDING);
+    if (claimed.count === 0) {
+      console.warn(
+        `[Payment Confirm] Orden ${orderId} ya fue procesada concurrentemente; no se confirma de nuevo.`,
+      );
+      return { updated: false, reason: "invalid_status" };
+    }
+
+    await this.updateOrderStatusUseCase.execute(orderId, OrderStatus.TRADE_PENDING);
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: order.userId },
+        select: { name: true },
+      });
+      const notificationRepository = new PrismaNotificationRepository();
+      const notificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepository);
+      const providerLabels: Record<ConfirmPaymentOptions["provider"], string> = {
+        mercadopago: "Mercado Pago",
+        paypal: "PayPal",
+        nowpayments: "NOWPayments",
+      };
+      const providerLabel = providerLabels[provider];
+
+      if (isRaffleOrder) {
+        const raffleId = String(currentMetadata.raffleId);
+        let raffleName =
+          typeof currentMetadata.raffleName === "string"
+            ? currentMetadata.raffleName
+            : undefined;
+        if (!raffleName) {
+          const raffle = await prisma.raffle.findUnique({
+            where: { id: raffleId },
+            select: { name: true },
+          });
+          raffleName = raffle?.name;
+        }
+        const ticketsCount = Number(currentMetadata.ticketsCount || 1);
+
+        await notificationUseCase.execute({
+          userId: null,
+          adminId: null,
+          title: "notifications.rafflePaymentConfirmedAdmin.title",
+          content: JSON.stringify({
+            key: "notifications.rafflePaymentConfirmedAdmin.content",
+            params: {
+              orderId: order.id.slice(0, 8),
+              userName: user?.name || "Steam User",
+              raffleName: raffleName || "Rifa",
+              ticketsCount,
+              totalPrice: Number(order.totalPrice).toLocaleString(),
+              provider: providerLabel,
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: `/admin/panel/raffle-purchases/${raffleId}/${order.id}`,
+        });
+      } else {
+        await notificationUseCase.execute({
+          userId: null,
+          adminId: null,
+          title: "notifications.orderPaymentConfirmedAdmin.title",
+          content: JSON.stringify({
+            key: "notifications.orderPaymentConfirmedAdmin.content",
+            params: {
+              orderId: order.id.slice(0, 8),
+              userName: user?.name || "Steam User",
+              totalPrice: Number(order.totalPrice).toLocaleString(),
+              provider: providerLabel,
+            },
+          }),
+          type: "ORDER_STATUS",
+          link: `/admin/panel/orders/purchase?id=${order.id}`,
+        });
+      }
+    } catch (notifyErr) {
+      console.error("[Payment Confirm] Error sending admin payment notification:", notifyErr);
     }
 
     return { updated: true };
@@ -950,7 +1028,12 @@ export class OrderController {
         const order = await prisma.order.findUnique({
           where: { id: dbOrderIdFromPayload },
         });
-        if (order && (order.status === "TRADE_PENDING" || order.status === "PAID")) {
+        if (
+          order &&
+          (order.status === "TRADE_PENDING" ||
+            order.status === "PAID" ||
+            order.status === "COMPLETED")
+        ) {
           console.log(
             `[PayPal Webhook] La orden ${dbOrderIdFromPayload} ya está transicionada a ${order.status}. Retornando éxito sin re-capturar.`
           );
@@ -978,7 +1061,12 @@ export class OrderController {
             const order = await prisma.order.findUnique({
               where: { id: orderIdToFind },
             });
-            if (order && (order.status === "TRADE_PENDING" || order.status === "PAID")) {
+            if (
+          order &&
+          (order.status === "TRADE_PENDING" ||
+            order.status === "PAID" ||
+            order.status === "COMPLETED")
+        ) {
               console.log(`[PayPal Webhook] Confirmado: Orden ${orderIdToFind} ya capturada previamente. Retornando éxito.`);
               return res.json({ success: true, orderId: orderIdToFind });
             }

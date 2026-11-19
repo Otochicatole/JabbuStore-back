@@ -9,6 +9,7 @@ import { PrismaStoreRepository } from '../../store/infrastructure/PrismaStoreRep
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 import { AdminSecureConfigService } from '../application/AdminSecureConfigService';
 import { autoSyncService } from '../../market/application/AutoSyncService';
+import { ResendService } from '../../../shared/infrastructure/ResendService';
 
 const syncStoreItemsUseCase = new SyncStoreItemsUseCase(new PrismaStoreRepository());
 let botInventorySyncRunning = false;
@@ -227,6 +228,23 @@ export class AdminMarketplaceController {
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
+    }
+  }
+
+  static async testResendEmail(req: Request, res: Response) {
+    try {
+      const user = (req as any).user;
+      if (user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Solo SUPER_ADMIN puede probar el envío de emails.' });
+      }
+
+      const result = await ResendService.sendTestEmail();
+      if (!result.ok) {
+        return res.status(400).json(result);
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Error probando el envío de email.' });
     }
   }
 

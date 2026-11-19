@@ -95,7 +95,7 @@ export class CreateQuoteUseCase {
         title: "notifications.newQuote.title",
         content: JSON.stringify({ key: "notifications.newQuote.content", params: { userName: user?.name || "Steam User", itemCount: quote.items.length } }),
         type: "ORDER_STATUS",
-        link: "/admin/panel/dashboard?tab=quotes",
+        link: "/admin/panel/quotes",
         userId: null,
         adminId: null,
       });

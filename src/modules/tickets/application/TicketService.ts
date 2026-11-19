@@ -52,9 +52,9 @@ async function ticketDto(ticket: any, actor: TicketActor) {
 
 export class TicketService {
   static async create(actor: TicketActor, input: { orderId: string; subject: string; message: string }) {
-    return prisma.$transaction(async (tx) => {
-      const isActorAdmin = actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN';
+    const isActorAdmin = actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN';
 
+    const { result, userId, ticket } = await prisma.$transaction(async (tx) => {
       // Find the order
       const order = isActorAdmin
         ? await tx.order.findUnique({ where: { id: input.orderId } })
@@ -62,17 +62,17 @@ export class TicketService {
 
       if (!order) throw new Error('ORDER_NOT_FOUND');
 
-      const userId = order.userId; // Ticket belongs to the order owner
+      const orderUserId = order.userId; // Ticket belongs to the order owner
 
       const openCount = await tx.orderTicket.count({
-        where: { orderId: input.orderId, userId, status: 'OPEN' },
+        where: { orderId: input.orderId, userId: orderUserId, status: 'OPEN' },
       });
       if (openCount >= 3) throw new Error('OPEN_TICKET_LIMIT');
 
-      const ticket = await tx.orderTicket.create({
+      const createdTicket = await tx.orderTicket.create({
         data: {
           orderId: input.orderId,
-          userId,
+          userId: orderUserId,
           subject: input.subject,
           userLastReadAt: isActorAdmin ? null : new Date(),
           adminLastReadAt: isActorAdmin ? new Date() : null,
@@ -92,45 +92,46 @@ export class TicketService {
           messages: { orderBy: { createdAt: 'desc' }, take: 1 },
         },
       });
-      const result = await ticketDto(ticket, actor);
-
-      // Crear notificación
-      try {
-        const notificationRepo = new PrismaNotificationRepository();
-        const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepo);
-        if (isActorAdmin) {
-          // Notify client user
-          await createNotificationUseCase.execute({
-            userId,
-            adminId: null,
-            title: 'notifications.newTicket.title',
-            content: input.message.slice(0, 160),
-            type: 'TICKET_MESSAGE',
-            link: `/tickets?ticket=${ticket.id}`,
-          });
-        } else {
-          // Notify admins
-          await createNotificationUseCase.execute({
-            userId: null,
-            adminId: null,
-            title: 'notifications.newTicket.title',
-            content: JSON.stringify({
-              key: 'notifications.newTicket.content',
-              params: {
-                userName: ticket.user?.name || 'Steam User',
-                subject: input.subject,
-              },
-            }),
-            type: 'TICKET_MESSAGE',
-            link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
-          });
-        }
-      } catch (err) {
-        console.error('[TicketService.create] Error creating database notification:', err);
-      }
-
-      return result;
+      const dto = await ticketDto(createdTicket, actor);
+      return { result: dto, userId: orderUserId, ticket: createdTicket };
     });
+
+    // Crear notificación después de confirmar la transacción en DB
+    try {
+      const notificationRepo = new PrismaNotificationRepository();
+      const createNotificationUseCase = new CreateOrUpdateNotificationUseCase(notificationRepo);
+      if (isActorAdmin) {
+        // Notify client user
+        await createNotificationUseCase.execute({
+          userId,
+          adminId: null,
+          title: 'notifications.newTicket.title',
+          content: input.message.slice(0, 160),
+          type: 'TICKET_MESSAGE',
+          link: `/tickets?ticket=${ticket.id}`,
+        });
+      } else {
+        // Notify admins
+        await createNotificationUseCase.execute({
+          userId: null,
+          adminId: null,
+          title: 'notifications.newTicket.title',
+          content: JSON.stringify({
+            key: 'notifications.newTicket.content',
+            params: {
+              userName: ticket.user?.name || 'Steam User',
+              subject: input.subject,
+            },
+          }),
+          type: 'TICKET_MESSAGE',
+          link: `/admin/panel/tickets?ticket=${ticket.id}`,
+        });
+      }
+    } catch (err) {
+      console.error('[TicketService.create] Error creating database notification:', err);
+    }
+
+    return result;
   }
 
   static async list(actor: TicketActor, options: { orderId?: string; status?: string; search?: string }) {
@@ -280,7 +281,7 @@ export class TicketService {
             },
           }),
           type: 'TICKET_MESSAGE',
-          link: `/admin/panel/dashboard?tab=tickets&ticket=${ticket.id}`,
+          link: `/admin/panel/tickets?ticket=${ticket.id}`,
         });
       }
     } catch (err) {

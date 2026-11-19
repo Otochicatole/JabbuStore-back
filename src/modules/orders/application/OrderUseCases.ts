@@ -124,7 +124,7 @@ export class CreatePurchaseOrderUseCase {
             },
           }),
           type: "ORDER_STATUS",
-          link: `/admin/panel/raffle-purchases/${raffleId}`,
+          link: `/admin/panel/raffle-purchases/${raffleId}/${order.id}`,
           userId: null,
           adminId: null,
         });
@@ -426,7 +426,7 @@ export class CreatePurchaseOrderUseCase {
         title: "notifications.newBuyOrder.title",
         content: JSON.stringify({ key: "notifications.newBuyOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
         type: "ORDER_STATUS",
-        link: "/admin/panel/dashboard?tab=purchases",
+        link: `/admin/panel/orders/purchase?id=${order.id}`,
         userId: null,
         adminId: null,
       });
@@ -625,7 +625,7 @@ export class CreateSellOrderUseCase {
         title: "notifications.newSellOrder.title",
         content: JSON.stringify({ key: "notifications.newSellOrder.content", params: { userName: user?.name || "Steam User", totalPrice: totalPrice.toLocaleString() } }),
         type: "ORDER_STATUS",
-        link: "/admin/panel/dashboard?tab=listings",
+        link: `/admin/panel/orders/listing?id=${order.id}`,
         userId: null,
         adminId: null,
       });
