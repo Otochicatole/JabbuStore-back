@@ -9,8 +9,8 @@ vi.mock("../../../tickets/infrastructure/TicketSocket", () => ({
   sendDbNotification: mockSendDbNotification,
 }));
 
-vi.mock("../../../../shared/infrastructure/ResendService", () => ({
-  ResendService: {
+vi.mock("../../../../shared/infrastructure/SendGridService", () => ({
+  SendGridService: {
     sendNotificationEmail: mockSendNotificationEmail,
   },
 }));
@@ -65,7 +65,7 @@ describe("CreateOrUpdateNotificationUseCase", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
-  it("dispatches Resend email for new admin notifications (userId === null)", async () => {
+  it("dispatches SendGrid email for new admin notifications (userId === null)", async () => {
     const repo = buildRepo(null);
     const useCase = new CreateOrUpdateNotificationUseCase(repo);
 
@@ -82,7 +82,7 @@ describe("CreateOrUpdateNotificationUseCase", () => {
     expect(mockSendNotificationEmail).toHaveBeenCalledTimes(1);
   });
 
-  it("dispatches Resend email when an unread admin notification is updated", async () => {
+  it("dispatches SendGrid email when an unread admin notification is updated", async () => {
     const existing: Notification = {
       id: "notif-existing",
       userId: null,
@@ -111,7 +111,7 @@ describe("CreateOrUpdateNotificationUseCase", () => {
     expect(mockSendNotificationEmail).toHaveBeenCalledTimes(1);
   });
 
-  it("does not dispatch Resend admin email for customer notifications (userId !== null)", async () => {
+  it("does not dispatch SendGrid admin email for customer notifications (userId !== null)", async () => {
     const repo = buildRepo(null);
     const useCase = new CreateOrUpdateNotificationUseCase(repo);
 

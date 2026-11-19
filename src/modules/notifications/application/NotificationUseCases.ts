@@ -1,6 +1,6 @@
 import { INotificationRepository, Notification } from '../domain/Notification';
 import { sendDbNotification } from '../../tickets/infrastructure/TicketSocket';
-import { ResendService } from '../../../shared/infrastructure/ResendService';
+import { SendGridService } from '../../../shared/infrastructure/SendGridService';
 
 const isAdminNotification = (notification: Notification) => {
   return notification.userId === null;
@@ -56,7 +56,7 @@ export class CreateOrUpdateNotificationUseCase {
       console.log(
         `[CreateOrUpdateNotificationUseCase] Despachando email para notificación admin: title=${notification.title} type=${notification.type} link=${notification.link}`,
       );
-      void ResendService.sendNotificationEmail(notification);
+      void SendGridService.sendNotificationEmail(notification);
     }
 
     return notification;

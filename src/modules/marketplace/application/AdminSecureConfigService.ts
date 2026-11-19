@@ -11,9 +11,9 @@ export const SECRET_KEYS = [
   "PAYPAL_CLIENT_ID",
   "PAYPAL_CLIENT_SECRET",
   "PAYPAL_SANDBOX",
-  "RESEND_TOKEN",
-  "RESEND_FROM",
-  "RESEND_TO",
+  "SENDGRID_API_KEY",
+  "SENDGRID_FROM",
+  "SENDGRID_TO",
 ] as const;
 
 export type SecretKey = (typeof SECRET_KEYS)[number];
@@ -155,13 +155,13 @@ export class AdminSecureConfigService {
   static listSecretStatus() {
     return Promise.all(
       SECRET_KEYS.map(async (key) => {
+        const envValue = envFallback(key);
         const setting = await prisma.encryptedSetting.findUnique({ where: { key } });
-        const fallback = envFallback(key);
         return {
           key,
-          configured: Boolean(setting || fallback),
-          source: setting ? "database" : fallback ? "env" : "missing",
-          last4: setting?.last4 || (fallback ? getLast4(fallback) : null),
+          configured: Boolean(envValue || setting),
+          source: envValue ? "env" : setting ? "database" : "missing",
+          last4: envValue ? getLast4(envValue) : setting?.last4 || null,
           updatedAt: setting?.updatedAt || null,
         };
       }),
@@ -206,12 +206,18 @@ export class AdminSecureConfigService {
     if (!isSecretKey(key)) throw new Error("Secret key inválida.");
     assertMasterPassword(password);
 
+    const envValue = envFallback(key);
+    if (envValue) {
+      await audit(adminId, "secret.reveal", key);
+      return { key, value: envValue, source: "env" as const };
+    }
+
     const setting = await prisma.encryptedSetting.findUnique({ where: { key } });
-    const value = setting ? decryptValue(setting) : envFallback(key);
+    const value = setting ? stripWrappingQuotes(decryptValue(setting)) : "";
     if (!value) throw new Error("Secreto no configurado.");
 
     await audit(adminId, "secret.reveal", key);
-    return { key, value, source: setting ? "database" : "env" };
+    return { key, value, source: "database" as const };
   }
 
   static async deleteSecret(key: string, password: string | undefined, adminId?: string) {
@@ -223,19 +229,24 @@ export class AdminSecureConfigService {
   }
 
   static async getSecretValue(key: SecretKey) {
+    const envValue = envFallback(key);
+    if (envValue) {
+      return envValue;
+    }
+
     const setting = await prisma.encryptedSetting.findUnique({ where: { key } });
     if (setting) {
       try {
         return stripWrappingQuotes(decryptValue(setting));
       } catch (err) {
         console.error(
-          `[AdminSecureConfigService] No se pudo descifrar ${key} desde la base de datos. Se usará el valor de entorno si existe.`,
+          `[AdminSecureConfigService] No se pudo descifrar ${key} desde la base de datos.`,
           err,
         );
-        return envFallback(key);
+        return "";
       }
     }
-    return envFallback(key);
+    return "";
   }
 
   static async getRuntimeSettings() {

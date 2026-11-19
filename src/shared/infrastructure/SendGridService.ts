@@ -1,3 +1,4 @@
+import type { MailDataRequired, MailService } from "@sendgrid/mail";
 import { config } from "../config";
 import { AdminSecureConfigService } from "../../modules/marketplace/application/AdminSecureConfigService";
 
@@ -16,6 +17,11 @@ export interface SendNotificationEmailResult {
   error?: string | undefined;
   statusCode?: number | null | undefined;
   skipped?: boolean | undefined;
+}
+
+export interface SendGridSenderIdentity {
+  email: string;
+  name: string;
 }
 
 const NOTIFICATION_TITLES: Record<string, string> = {
@@ -133,8 +139,10 @@ const NOTIFICATION_CONTENTS: Record<string, string> = {
 };
 
 const EMAIL_ADDRESS_REGEX = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
-const MIN_SEND_INTERVAL_MS = 550;
+const MIN_SEND_INTERVAL_MS = 250;
 const MAX_RETRY_ATTEMPTS = 3;
+const MAX_RETRY_DELAY_MS = 15000;
+const REQUEST_TIMEOUT_MS = 15000;
 
 let sendQueue: Promise<unknown> = Promise.resolve();
 let lastSendStartedAt = 0;
@@ -168,10 +176,37 @@ export function extractEmailAddress(raw: string): string | null {
   return candidate;
 }
 
+export function parseFromIdentity(from: string): SendGridSenderIdentity | null {
+  const cleaned = stripWrappingQuotes(from);
+  if (!cleaned) return null;
+
+  const bracketMatch = cleaned.match(/^(.*?)<([^<>]+)>$/);
+  if (bracketMatch) {
+    const email = stripWrappingQuotes(bracketMatch[2] ?? "");
+    if (!EMAIL_ADDRESS_REGEX.test(email)) {
+      return null;
+    }
+    const rawName = stripWrappingQuotes(bracketMatch[1] ?? "");
+    return {
+      email,
+      name: rawName || "JabbuStore",
+    };
+  }
+
+  if (!EMAIL_ADDRESS_REGEX.test(cleaned)) {
+    return null;
+  }
+
+  return {
+    email: cleaned,
+    name: "JabbuStore",
+  };
+}
+
 export function resolveFromEmail(from: string): string | null {
-  const email = extractEmailAddress(from);
-  if (!email) return null;
-  return `JabbuStore <${email}>`;
+  const identity = parseFromIdentity(from);
+  if (!identity) return null;
+  return `${identity.name} <${identity.email}>`;
 }
 
 export function parseRecipients(rawTo: string): string[] {
@@ -281,17 +316,89 @@ function buildEmailHtml(notification: NotificationLike): string {
   ].join("");
 }
 
-function isRetryableResendError(error: {
-  name?: string;
-  statusCode?: number | null;
-}): boolean {
-  if (error.statusCode === 429 || error.name === "rate_limit_exceeded") {
-    return true;
+interface ParsedSendGridError {
+  statusCode: number | null;
+  message: string;
+  retryAfterMs: number | null;
+}
+
+function parseRetryAfterMs(headers: Record<string, unknown> | undefined): number | null {
+  if (!headers) return null;
+
+  const retryAfter = headers["retry-after"];
+  if (typeof retryAfter === "string" || typeof retryAfter === "number") {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, MAX_RETRY_DELAY_MS);
+    }
   }
-  if (typeof error.statusCode === "number" && error.statusCode >= 500) {
-    return true;
+
+  const rateLimitReset = headers["x-ratelimit-reset"];
+  if (typeof rateLimitReset === "string" || typeof rateLimitReset === "number") {
+    const resetEpochSec = Number(rateLimitReset);
+    if (Number.isFinite(resetEpochSec) && resetEpochSec > 0) {
+      const waitMs = resetEpochSec * 1000 - Date.now();
+      if (waitMs > 0) {
+        return Math.min(waitMs, MAX_RETRY_DELAY_MS);
+      }
+    }
   }
-  return false;
+
+  return null;
+}
+
+function extractSendGridError(error: unknown): ParsedSendGridError {
+  const errObj = error as {
+    code?: unknown;
+    message?: unknown;
+    response?: {
+      statusCode?: unknown;
+      headers?: Record<string, unknown>;
+      body?: unknown;
+    };
+  };
+
+  const statusCode =
+    typeof errObj?.code === "number"
+      ? errObj.code
+      : typeof errObj?.response?.statusCode === "number"
+        ? errObj.response.statusCode
+        : null;
+
+  const retryAfterMs = parseRetryAfterMs(errObj?.response?.headers);
+  const body = errObj?.response?.body;
+
+  if (body && typeof body === "object" && "errors" in body && Array.isArray((body as { errors?: unknown }).errors)) {
+    const parts = (body as { errors: Array<{ message?: unknown; field?: unknown }> }).errors
+      .map((item) => {
+        const msg = typeof item?.message === "string" ? item.message.trim() : "";
+        const field = typeof item?.field === "string" && item.field.trim() ? ` (${item.field.trim()})` : "";
+        return msg ? `${msg}${field}` : "";
+      })
+      .filter(Boolean);
+
+    if (parts.length > 0) {
+      return { statusCode, message: parts.join(" | "), retryAfterMs };
+    }
+  }
+
+  if (typeof body === "string" && body.trim()) {
+    return { statusCode, message: body.trim(), retryAfterMs };
+  }
+
+  const fallbackMessage =
+    error instanceof Error && error.message
+      ? error.message
+      : typeof errObj?.message === "string" && errObj.message
+        ? errObj.message
+        : "Error devuelto por SendGrid.";
+
+  return { statusCode, message: fallbackMessage, retryAfterMs };
+}
+
+function isRetryableSendGridStatus(statusCode: number | null): boolean {
+  if (statusCode === null) return true;
+  return statusCode === 429 || statusCode >= 500;
 }
 
 function scheduleSerialized<T>(task: () => Promise<T>): Promise<T> {
@@ -308,135 +415,157 @@ function scheduleSerialized<T>(task: () => Promise<T>): Promise<T> {
   return next;
 }
 
+async function createSendGridClient(apiKey: string): Promise<MailService> {
+  const sgMailModule = await import("@sendgrid/mail");
+  const MailServiceCtor =
+    (sgMailModule as unknown as { MailService?: new () => MailService }).MailService ??
+    (sgMailModule.default as unknown as { MailService?: new () => MailService })?.MailService;
+
+  const client = MailServiceCtor ? new MailServiceCtor() : sgMailModule.default;
+  client.setApiKey(apiKey);
+  client.setTimeout?.(REQUEST_TIMEOUT_MS);
+  return client;
+}
+
 async function readSecretSafe(
-  key: "RESEND_TOKEN" | "RESEND_FROM" | "RESEND_TO",
+  key: "SENDGRID_API_KEY" | "SENDGRID_FROM" | "SENDGRID_TO",
 ): Promise<{ value: string; error?: string | undefined }> {
   try {
     const value = stripWrappingQuotes(await AdminSecureConfigService.getSecretValue(key));
     return { value };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[ResendService] Error leyendo ${key}:`, err);
+    console.error(`[SendGridService] Error leyendo ${key}:`, err);
     return { value: "", error: message };
   }
 }
 
-export class ResendService {
+export class SendGridService {
+  /**
+   * Sends a notification email through Twilio SendGrid v3 Mail Send API.
+   * Respects AdminSecureConfigService priority (.env first, DB fallback).
+   */
   static async sendNotificationEmail(
     notification: NotificationLike,
   ): Promise<SendNotificationEmailResult> {
     try {
-      const [tokenSecret, fromSecret, toSecret] = await Promise.all([
-        readSecretSafe("RESEND_TOKEN"),
-        readSecretSafe("RESEND_FROM"),
-        readSecretSafe("RESEND_TO"),
+      const [apiKeySecret, fromSecret, toSecret] = await Promise.all([
+        readSecretSafe("SENDGRID_API_KEY"),
+        readSecretSafe("SENDGRID_FROM"),
+        readSecretSafe("SENDGRID_TO"),
       ]);
 
-      const token = tokenSecret.value;
+      const apiKey = apiKeySecret.value;
       const rawFrom = fromSecret.value;
       const rawTo = toSecret.value;
 
-      console.log("[ResendService] Configuración leída:", {
-        tokenConfigured: Boolean(token),
-        tokenLast4: token ? token.slice(-4) : null,
+      console.log("[SendGridService] Configuración leída:", {
+        apiKeyConfigured: Boolean(apiKey),
+        apiKeyLast4: apiKey ? apiKey.slice(-4) : null,
         fromConfigured: Boolean(rawFrom),
         from: rawFrom || null,
         toConfigured: Boolean(rawTo),
         to: rawTo || null,
       });
 
-      if (!token) {
-        const message = tokenSecret.error
-          ? `Error leyendo RESEND_TOKEN: ${tokenSecret.error}`
-          : "RESEND_TOKEN no está configurado.";
-        console.warn(`[ResendService] ${message} Email omitido.`);
+      if (!apiKey) {
+        const message = apiKeySecret.error
+          ? `Error leyendo SENDGRID_API_KEY: ${apiKeySecret.error}`
+          : "SENDGRID_API_KEY no está configurado.";
+        console.warn(`[SendGridService] ${message} Email omitido.`);
         return { ok: false, skipped: true, error: message };
       }
 
       if (!rawFrom) {
         const message = fromSecret.error
-          ? `Error leyendo RESEND_FROM: ${fromSecret.error}`
-          : "RESEND_FROM no está configurado.";
-        console.warn(`[ResendService] ${message} Email omitido.`);
+          ? `Error leyendo SENDGRID_FROM: ${fromSecret.error}`
+          : "SENDGRID_FROM no está configurado.";
+        console.warn(`[SendGridService] ${message} Email omitido.`);
         return { ok: false, skipped: true, error: message };
       }
 
-      const formattedFrom = resolveFromEmail(rawFrom);
-      if (!formattedFrom) {
-        const message = `RESEND_FROM tiene un formato de email inválido: "${rawFrom}".`;
-        console.warn(`[ResendService] ${message} Email omitido.`);
+      const fromIdentity = parseFromIdentity(rawFrom);
+      if (!fromIdentity) {
+        const message = `SENDGRID_FROM tiene un formato de email inválido: "${rawFrom}".`;
+        console.warn(`[SendGridService] ${message} Email omitido.`);
         return { ok: false, skipped: true, error: message };
       }
+      const formattedFrom = `${fromIdentity.name} <${fromIdentity.email}>`;
 
       if (!rawTo) {
         const message = toSecret.error
-          ? `Error leyendo RESEND_TO: ${toSecret.error}`
-          : "RESEND_TO no está configurado.";
-        console.warn(`[ResendService] ${message} Email omitido.`);
+          ? `Error leyendo SENDGRID_TO: ${toSecret.error}`
+          : "SENDGRID_TO no está configurado.";
+        console.warn(`[SendGridService] ${message} Email omitido.`);
         return { ok: false, skipped: true, error: message };
       }
 
       const recipients = parseRecipients(rawTo);
       if (recipients.length === 0) {
-        const message = `RESEND_TO no contiene ningún email válido: "${rawTo}".`;
-        console.warn(`[ResendService] ${message} Email omitido.`);
+        const message = `SENDGRID_TO no contiene ningún email válido: "${rawTo}".`;
+        console.warn(`[SendGridService] ${message} Email omitido.`);
         return { ok: false, skipped: true, error: message };
       }
 
-      const resendModule = await import("resend");
-      const resend = new resendModule.Resend(token);
       const subject = `JabbuStore - ${resolveTitle(notification)}`;
       const text = buildEmailText(notification);
       const html = buildEmailHtml(notification);
+      const isMultiple = recipients.length > 1;
+      const msg: MailDataRequired = {
+        to: isMultiple ? recipients : recipients[0]!,
+        from: fromIdentity,
+        subject,
+        text,
+        html,
+      };
 
       return await scheduleSerialized(async () => {
+        const client = await createSendGridClient(apiKey);
+
         for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
           try {
-            const result = await resend.emails.send({
+            const [response] = await client.send(msg, isMultiple);
+            const rawHeaderId = response?.headers?.["x-message-id"];
+            const messageId = typeof rawHeaderId === "string" ? rawHeaderId : undefined;
+
+            console.log("[SendGridService] Email enviado:", {
+              statusCode: response?.statusCode ?? 202,
+              id: messageId ?? null,
               from: formattedFrom,
               to: recipients,
-              subject,
-              text,
-              html,
             });
 
-            if (result.error) {
-              if (attempt < MAX_RETRY_ATTEMPTS && isRetryableResendError(result.error)) {
-                console.warn(
-                  `[ResendService] Error transitorio de Resend (intento ${attempt}/${MAX_RETRY_ATTEMPTS}):`,
-                  result.error,
-                );
-                await sleep(1000 * attempt);
-                continue;
-              }
-
-              console.error("[ResendService] Resend devolvió error:", result.error);
-              return {
-                ok: false,
-                from: formattedFrom,
-                to: recipients,
-                error: result.error.message || "Error devuelto por Resend.",
-                statusCode: result.error.statusCode ?? null,
-              };
-            }
-
-            console.log("[ResendService] Email enviado:", result.data);
             return {
               ok: true,
-              id: result.data?.id,
+              id: messageId,
               from: formattedFrom,
               to: recipients,
+              statusCode: response?.statusCode ?? 202,
             };
           } catch (attemptError) {
-            if (attempt < MAX_RETRY_ATTEMPTS) {
+            const parsedError = extractSendGridError(attemptError);
+            const retryable = isRetryableSendGridStatus(parsedError.statusCode);
+
+            if (attempt < MAX_RETRY_ATTEMPTS && retryable) {
+              const delayMs = parsedError.retryAfterMs ?? 1000 * attempt;
               console.warn(
-                `[ResendService] Excepción enviando email (intento ${attempt}/${MAX_RETRY_ATTEMPTS}):`,
-                attemptError,
+                `[SendGridService] Error transitorio de SendGrid (status=${parsedError.statusCode ?? "network"}, intento ${attempt}/${MAX_RETRY_ATTEMPTS}): ${parsedError.message}`,
               );
-              await sleep(1000 * attempt);
+              await sleep(delayMs);
               continue;
             }
-            throw attemptError;
+
+            console.error("[SendGridService] SendGrid devolvió error:", {
+              statusCode: parsedError.statusCode,
+              message: parsedError.message,
+            });
+            return {
+              ok: false,
+              from: formattedFrom,
+              to: recipients,
+              error: parsedError.message,
+              statusCode: parsedError.statusCode,
+            };
           }
         }
 
@@ -448,17 +577,24 @@ export class ResendService {
         };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[ResendService] Error enviando email de notificación:", error);
-      return { ok: false, error: message };
+      const parsedError = extractSendGridError(error);
+      console.error("[SendGridService] Error enviando email de notificación:", parsedError.message);
+      return {
+        ok: false,
+        error: parsedError.message,
+        statusCode: parsedError.statusCode,
+      };
     }
   }
 
+  /**
+   * Dispatches a verification email to validate the current SendGrid setup.
+   */
   static async sendTestEmail(): Promise<SendNotificationEmailResult> {
     return this.sendNotificationEmail({
       title: "Prueba de Notificaciones por Email",
       content:
-        "Si recibiste este mensaje, la configuración de Resend en JabbuStore está funcionando correctamente.",
+        "Si recibiste este mensaje, la configuración de SendGrid en JabbuStore está funcionando correctamente.",
       type: "SYSTEM",
       link: "/admin/panel/settings",
     });
