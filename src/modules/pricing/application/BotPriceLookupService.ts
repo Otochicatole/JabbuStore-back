@@ -370,12 +370,36 @@ export class BotPriceLookupService {
       );
     }
 
+    if (variantName || paintIndex != null) {
+      const variantWithPrice = this.catalogVariantWithPrice(
+        candidates,
+        variantName,
+        paintIndex,
+      );
+      if (variantWithPrice) {
+        return this.buildResult(
+          variantWithPrice.price,
+          variantWithPrice.lookupKey,
+          variantWithPrice.variantKey,
+          "steamwebapi_items_catalog_variant",
+          classification,
+          true,
+          currency,
+        );
+      }
+    }
+
+    const nonVariantCandidates = candidates.filter(
+      (row) => !Array.isArray(row.variants) || row.variants.length === 0,
+    );
     const byPaintIndex =
       paintIndex != null
-        ? candidates.find((row) => rowPaintIndex(row) === paintIndex)
+        ? nonVariantCandidates.find((row) => rowPaintIndex(row) === paintIndex)
         : undefined;
     const byPhase = variantName
-      ? candidates.find((row) => phaseMatches(variantName, phaseForPaintIndex(rowPaintIndex(row))))
+      ? nonVariantCandidates.find((row) =>
+          phaseMatches(variantName, phaseForPaintIndex(rowPaintIndex(row))),
+        )
       : undefined;
     const selected = byPaintIndex ?? byPhase;
 
@@ -395,23 +419,6 @@ export class BotPriceLookupService {
     }
 
     if (variantName || paintIndex != null) {
-      const variantWithPrice = this.catalogVariantWithPrice(
-        candidates,
-        variantName,
-        paintIndex,
-      );
-      if (variantWithPrice) {
-        return this.buildResult(
-          variantWithPrice.price,
-          variantWithPrice.lookupKey,
-          variantWithPrice.variantKey,
-          "steamwebapi_items_catalog_variant",
-          classification,
-          true,
-          currency,
-        );
-      }
-
       classification.warnings.push(
         `Catálogo local sin precio de variant para "${variantName ?? paintIndex}" en "${pricingMarketHashName}"`,
       );

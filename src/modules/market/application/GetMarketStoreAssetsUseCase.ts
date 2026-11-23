@@ -50,6 +50,8 @@ export class GetMarketStoreAssetsUseCase {
 
           const canonicalName = resolveListingNameFromAsset({
             market_hash_name: name,
+            phase: (item as any).variantPhase,
+            paintindex: (item as any).variantPaintIndex ?? item.paintindex,
           });
           if (!canonicalName) return [];
 

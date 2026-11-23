@@ -2,7 +2,10 @@ import type { FloatItem } from '../domain/FloatItem';
 import { SteamWebApiFloatAssetsClient } from '../infrastructure/SteamWebApiFloatAssetsClient';
 import { assetToFloatItem } from './floatCatalogMapper';
 import { PriceEnrichmentService } from '../../../shared/infrastructure/PriceEnrichmentService';
-import { toSteamWebApiPhaseParam } from './floatSyncHelpers';
+import {
+  resolvePaintIndexForPhase,
+  toSteamWebApiPhaseParam,
+} from './floatSyncHelpers';
 
 export interface FloatDownloadConfig {
   pageSize: number;
@@ -69,9 +72,17 @@ export class YoupinFloatAssetsDownloader {
     phase?: string,
   ): Promise<FloatDownloadResult> {
     const start = Date.now();
-    const { baseName } = PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
+    const { baseName, phase: extractedPhase } =
+      PriceEnrichmentService.getBaseNameAndPhase(marketHashName);
     const queryName = baseName || marketHashName;
-    const phaseParam = toSteamWebApiPhaseParam(phase ?? null) ?? undefined;
+    const effectivePhase = phase ?? extractedPhase ?? null;
+    const paintIndex = effectivePhase
+      ? (resolvePaintIndexForPhase(effectivePhase, queryName) ?? undefined)
+      : undefined;
+    const phaseParam =
+      paintIndex == null
+        ? (toSteamWebApiPhaseParam(effectivePhase) ?? undefined)
+        : undefined;
 
     const seenAssetIds = new Set<string>();
     const floats: Omit<FloatItem, 'resaleItemId'>[] = [];
@@ -87,7 +98,12 @@ export class YoupinFloatAssetsDownloader {
     );
 
     for (let page = 0; page < this.config.maxPages; page++) {
-      const pageResult = await this.fetchPageWithRetry(queryName, offset, phaseParam);
+      const pageResult = await this.fetchPageWithRetry(
+        queryName,
+        offset,
+        phaseParam,
+        paintIndex,
+      );
 
       if (!pageResult.ok) {
         lastError = pageResult.error ?? `HTTP ${pageResult.status}`;
@@ -173,6 +189,7 @@ export class YoupinFloatAssetsDownloader {
     marketHashName: string,
     offset: number,
     phase?: string,
+    paintIndex?: number,
   ): Promise<any> {
     let lastResult: any = null;
 
@@ -184,7 +201,7 @@ export class YoupinFloatAssetsDownloader {
         withItems: true,
         limit: this.config.pageSize,
         offset,
-        ...(phase ? { phase } : {}),
+        ...(paintIndex != null ? { paintIndex } : phase ? { phase } : {}),
         rateLimitPriority: 'normal',
         bypassRateLimiter: true,
         requestTimeoutMs: this.config.requestTimeoutMs,

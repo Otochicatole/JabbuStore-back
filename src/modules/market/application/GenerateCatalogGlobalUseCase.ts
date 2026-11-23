@@ -1,7 +1,10 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { SteamWebApiItemsCatalogStore } from "../../pricing";
-import type { SteamWebApiItemsCatalogRow } from "../../pricing/domain/types";
+import type {
+  SteamWebApiItemsCatalogRow,
+  SteamWebApiItemVariant,
+} from "../../pricing/domain/types";
 import {
   classifyCatalogItem,
   type CatalogItemType,
@@ -130,6 +133,54 @@ function getCatalogMarketHashName(row: SteamWebApiItemsCatalogRow): string | nul
   return typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
 }
 
+function readMarketVariantEntryPrice(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (value && typeof value === "object" && "price" in value) {
+    const price = Number((value as { price?: unknown }).price);
+    if (Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+/**
+ * Resuelve el precio específico de una variante de fase (Doppler / Gamma Doppler).
+ * Según el contrato de SteamWebAPI (`variants` y `marketplace price variants`),
+ * `variant.pricereal` puede ser `null` cuando esa fase no tiene oferta activa,
+ * mientras que `catalogRow.pricereal` contiene el precio más bajo de cualquier
+ * otra fase disponible. Nunca se debe usar `catalogRow.pricereal` ni
+ * `catalogRow.pricesafe` como fallback de una variante, porque repetiría el
+ * precio de la fase más barata en todas las demás fases (incluyendo Emerald,
+ * Ruby, Sapphire y Black Pearl).
+ */
+export function resolveCatalogVariantPrice(
+  catalogRow: SteamWebApiItemsCatalogRow,
+  variant: SteamWebApiItemVariant,
+): number {
+  const direct = variant.pricereal ?? variant.pricemix ?? variant.pricelatest;
+  if (typeof direct === "number" && Number.isFinite(direct) && direct > 0) {
+    return direct;
+  }
+
+  const phaseKey =
+    typeof variant.phase === "string" ? variant.phase.trim().toLowerCase() : "";
+  if (phaseKey && Array.isArray(catalogRow.prices)) {
+    for (const marketEntry of catalogRow.prices) {
+      const variantsMap = marketEntry?.variants;
+      if (!variantsMap || typeof variantsMap !== "object") continue;
+      for (const [candidatePhase, candidateValue] of Object.entries(variantsMap)) {
+        if (candidatePhase.trim().toLowerCase() === phaseKey) {
+          const marketPhasePrice = readMarketVariantEntryPrice(candidateValue);
+          if (marketPhasePrice != null) return marketPhasePrice;
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
 export class GenerateCatalogGlobalUseCase {
   constructor(
     private readonly catalogStore = new SteamWebApiItemsCatalogStore(),
@@ -167,7 +218,7 @@ export class GenerateCatalogGlobalUseCase {
 
       if (capabilities.supportsFloatStock && variants.length > 0) {
         for (const variant of variants) {
-          const variantPrice = variant.pricereal ?? catalogRow.pricesafe ?? catalogRow.pricereal ?? 0;
+          const variantPrice = resolveCatalogVariantPrice(catalogRow, variant);
           if (
             variantPrice <= 0 ||
             (capabilities.priceFilterEligible && variantPrice < minPrice)

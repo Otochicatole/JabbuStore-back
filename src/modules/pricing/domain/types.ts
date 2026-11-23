@@ -133,15 +133,16 @@ export interface SteamWebApiItemMarketPrice {
   quantity?: number;
   createdat?: string;
   created_at?: string;
+  variants?: Record<string, YoupinVariantValue> | null;
 }
 
 export interface SteamWebApiItemVariant {
   phase?: string;
   paintindex?: number;
   paint_index?: number;
-  pricereal?: number;
-  pricemix?: number;
-  pricelatest?: number;
+  pricereal?: number | null;
+  pricemix?: number | null;
+  pricelatest?: number | null;
   image?: string;
 }
 
@@ -149,9 +150,9 @@ export interface SteamWebApiItemDetailsRow {
   markethashname?: string;
   market_hash_name?: string;
   marketname?: string;
-  pricereal?: number;
-  pricemix?: number;
-  pricelatest?: number;
+  pricereal?: number | null;
+  pricemix?: number | null;
+  pricelatest?: number | null;
   paintindex?: number;
   prices?: SteamWebApiItemMarketPrice[];
   variants?: SteamWebApiItemVariant[];
@@ -170,7 +171,7 @@ export interface SteamWebApiItemsCatalogRow extends SteamWebApiItemDetailsRow {
   marketname?: string;
   image?: string;
   itemimage?: string;
-  pricesafe?: number;
+  pricesafe?: number | null;
   pricereal24h?: number;
   pricereal7d?: number;
   pricereal30d?: number;

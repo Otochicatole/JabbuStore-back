@@ -55,8 +55,6 @@ export class MarketCatalogService {
             provider: 'youpin',
           };
 
-          newCache.set(baseName, info);
-
           const variantPhase = (item as any).variantPhase as string | undefined;
           if (variantPhase) {
             newCache.set(`${baseName} | ${variantPhase}`, {
@@ -64,6 +62,8 @@ export class MarketCatalogService {
               name: baseName,
               price: item.youpinAsk ?? 0,
             });
+          } else {
+            newCache.set(baseName, info);
           }
         }
       }
@@ -79,7 +79,12 @@ export class MarketCatalogService {
 
   static async getListingByName(name: string): Promise<MarketCatalogItemInfo | null> {
     const map = await this.getCatalogMap();
-    return map.get(name) ?? map.get(stripDopplerPhase(name)) ?? null;
+    const direct = map.get(name);
+    if (direct) return direct;
+    if (DOPPLER_PHASE_SUFFIX.test(name)) {
+      return null;
+    }
+    return map.get(stripDopplerPhase(name)) ?? null;
   }
 
   private static getCatalogIconUrl(row: CatalogGlobalItemRow): string | null {

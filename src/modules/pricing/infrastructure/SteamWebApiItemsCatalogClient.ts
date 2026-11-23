@@ -80,7 +80,6 @@ export class SteamWebApiItemsCatalogClient {
         currency: this.currency,
         production: "1",
         select: this.select,
-        grouped: "0",
       });
       if (this.market) {
         params.set("markets", this.market);
@@ -138,6 +137,19 @@ export class SteamWebApiItemsCatalogClient {
       };
     }
 
+    if (
+      complete &&
+      errors.length === 0 &&
+      this.market &&
+      items.some(
+        (row) =>
+          Array.isArray(row.variants) &&
+          row.variants.some((v) => v.pricereal == null || v.pricereal <= 0),
+      )
+    ) {
+      await this.enrichMissingVariantPrices(apiKey, items);
+    }
+
     const sourceParams = new URLSearchParams({
       game: "cs2",
       max: String(this.pageSize),
@@ -162,6 +174,90 @@ export class SteamWebApiItemsCatalogClient {
         items,
       },
     };
+  }
+
+  /**
+   * Cuando `GET /steam/api/items` se consulta con `markets=youpin`, SteamWebAPI
+   * filtra `variants[].pricereal` exclusivamente al mapa `variants` de YouPin.
+   * Dado que el scraper de YouPin en SteamWebAPI no asigna `phase` a las gemas
+   * (`Emerald`, `Ruby`, `Sapphire`, `Black Pearl` quedan con `pricereal: null`)
+   * y en varias fases `Phase 1–4` devuelve `null`, enriquecemos únicamente las
+   * variantes cuyo `pricereal` sea `null` con una consulta focalizada de items
+   * Doppler sin filtro `markets`, preservando el precio de YouPin siempre que exista.
+   */
+  private async enrichMissingVariantPrices(
+    apiKey: string,
+    items: SteamWebApiItemsCatalogRow[],
+  ): Promise<void> {
+    try {
+      const params = new URLSearchParams({
+        key: apiKey,
+        game: "cs2",
+        search: "Doppler",
+        max: "500",
+        currency: this.currency,
+        production: "1",
+        select: "markethashname,marketname,normalizedname,variants",
+      });
+      const res = await fetch(`${STEAMWEBAPI_ITEMS_CATALOG_URL}?${params.toString()}`);
+      if (!res.ok) return;
+
+      const fallbackRows = rowsFromPayload(await res.json());
+      const fallbackByName = new Map<string, SteamWebApiItemsCatalogRow>();
+      for (const row of fallbackRows) {
+        const key = (
+          row.markethashname ??
+          row.market_hash_name ??
+          row.marketname ??
+          row.normalizedname ??
+          ""
+        ).trim();
+        if (key) fallbackByName.set(key, row);
+      }
+
+      for (const item of items) {
+        if (!Array.isArray(item.variants) || item.variants.length === 0) continue;
+        const key = (
+          item.markethashname ??
+          item.market_hash_name ??
+          item.marketname ??
+          item.normalizedname ??
+          ""
+        ).trim();
+        const fallbackRow = key ? fallbackByName.get(key) : undefined;
+        if (!fallbackRow || !Array.isArray(fallbackRow.variants)) continue;
+
+        for (const variant of item.variants) {
+          if (typeof variant.pricereal === "number" && variant.pricereal > 0) {
+            continue;
+          }
+          const vPaint = variant.paintindex ?? variant.paint_index;
+          const vPhase = variant.phase?.trim().toLowerCase();
+          const match = fallbackRow.variants.find((candidate) => {
+            const cPaint = candidate.paintindex ?? candidate.paint_index;
+            if (vPaint != null && cPaint != null && vPaint === cPaint) return true;
+            return Boolean(
+              vPhase &&
+                candidate.phase &&
+                candidate.phase.trim().toLowerCase() === vPhase,
+            );
+          });
+          if (
+            match &&
+            typeof match.pricereal === "number" &&
+            Number.isFinite(match.pricereal) &&
+            match.pricereal > 0
+          ) {
+            variant.pricereal = match.pricereal;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[SteamWebApiItemsCatalogClient] No se pudo enriquecer precios de variantes Doppler:",
+        err,
+      );
+    }
   }
 
   private extractErrorMessage(body: string): string {

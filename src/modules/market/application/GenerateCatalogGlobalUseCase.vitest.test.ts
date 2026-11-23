@@ -129,4 +129,42 @@ describe('GenerateCatalogGlobalUseCase', () => {
 
     expect(payload.items.map((item) => item.catalogItemType)).toEqual(['container']);
   });
+
+  it('uses only phase-specific prices for Doppler/Gamma Doppler variants and never repeats parent pricereal on null phases', async () => {
+    const payload = await generate([
+      row('★ StatTrak™ Karambit | Gamma Doppler (Minimal Wear)', 'knife', 3830.48, {
+        itemtype: 'karambit',
+        itemname: 'gamma doppler',
+        paintindex: 569,
+        pricesafe: undefined,
+        pricereal: 3830.48,
+        prices: [
+          {
+            source: 'youpin',
+            price: 3830.48,
+            variants: {
+              'Phase 2': 3830.48,
+            },
+          },
+        ],
+        variants: [
+          { phase: 'Emerald', paintindex: 568, pricereal: null },
+          { phase: 'Phase 1', paintindex: 569, pricereal: null },
+          { phase: 'Phase 2', paintindex: 570, pricereal: 3830.48 },
+          { phase: 'Phase 3', paintindex: 571, pricereal: null },
+          { phase: 'Phase 4', paintindex: 572, pricereal: 3025.24 },
+        ],
+      }),
+    ], allFilters());
+
+    expect(
+      payload.items.map((item: any) => ({
+        phase: item.variantPhase,
+        youpinAsk: item.youpinAsk,
+      })),
+    ).toEqual([
+      { phase: 'Phase 2', youpinAsk: 3830.48 },
+      { phase: 'Phase 4', youpinAsk: 3025.24 },
+    ]);
+  });
 });

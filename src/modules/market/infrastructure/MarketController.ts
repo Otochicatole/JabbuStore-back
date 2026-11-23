@@ -91,7 +91,7 @@ export class MarketController {
       const dopplerPhaseSuffix = /\s*\|\s*(Phase [1-4]|Ruby|Sapphire|Black Pearl|Emerald)\s*$/i;
       const phaseMatch = rawId.match(dopplerPhaseSuffix);
       const phase = phaseMatch ? phaseMatch[1] : undefined;
-      const listingId = rawId.replace(dopplerPhaseSuffix, '').trim();
+      const listingId = rawId.trim();
       
       const options = {
         ...(phase ? { phase } : {}),
