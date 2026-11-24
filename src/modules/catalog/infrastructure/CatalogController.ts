@@ -101,6 +101,7 @@ function parseCatalogQuery(req: Request): CatalogItemsQuery {
     sort: parseSort(req.query.sort),
     immediate: parseBoolean(req.query.immediate, req.query.instant),
     group: req.query.group === '1' || req.query.group === 'true',
+    excludeStatTrak: parseBoolean(req.query.excludeStatTrak, req.query.noSt),
   };
 
   const search = String(req.query.search ?? req.query.q ?? '').trim();

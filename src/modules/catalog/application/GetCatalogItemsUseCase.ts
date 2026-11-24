@@ -33,6 +33,7 @@ export interface CatalogItemsQuery {
   sort: SortOption;
   immediate: boolean;
   group: boolean;
+  excludeStatTrak?: boolean;
 }
 
 export interface CatalogItem {
@@ -503,6 +504,12 @@ export class GetCatalogItemsUseCase {
       matchesConditions(item, query.conditions),
     );
 
+    const statTrakMatches = !query.excludeStatTrak
+      ? conditionMatches
+      : conditionMatches.filter(
+          (item) => !item.isStatTrak && !item.name.toLowerCase().includes('stattrak'),
+        );
+
     const priceMatches = (item: InternalCatalogItem) => {
       if (query.minPrice !== undefined && item.price < query.minPrice) return false;
       if (query.maxPrice !== undefined && item.price > query.maxPrice) return false;
@@ -510,7 +517,7 @@ export class GetCatalogItemsUseCase {
     };
 
     const filterCatalog = (fuzzy: boolean) => {
-      const searchMatches = conditionMatches.filter((item) =>
+      const searchMatches = statTrakMatches.filter((item) =>
         item.searchDocument === null || search.matches(item.searchDocument, fuzzy),
       );
       const categoryMatches = searchMatches.filter((item) =>
