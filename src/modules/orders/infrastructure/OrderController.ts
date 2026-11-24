@@ -716,17 +716,20 @@ export class OrderController {
 
       const existingOrder = await prisma.order.findUnique({
         where: { id: id as string },
-        select: { id: true },
+        select: { id: true, type: true },
       });
 
       if (!existingOrder) {
         return res.status(404).json({ error: "Order not found" });
       }
 
+      // En órdenes de compra no se asigna bot desde admin (el envío puede provenir de distintos bots).
+      const effectiveBotId = existingOrder.type === OrderType.BUY ? undefined : botId;
+
       const order = await this.updateOrderStatusUseCase.execute(
         id as string,
         status as OrderStatus,
-        botId,
+        effectiveBotId,
       );
       res.json(order);
     } catch (error: any) {

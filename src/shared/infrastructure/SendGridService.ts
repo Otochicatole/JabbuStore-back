@@ -61,6 +61,7 @@ const NOTIFICATION_TITLES: Record<string, string> = {
   "notifications.sellRequoteApprovedAdmin.title": "Re-tasa Aprobada por Cliente",
   "notifications.sellRequoteRejectedAdmin.title": "Re-tasa Rechazada por Cliente",
   "notifications.botAssigned.title": "Seguridad de Trade: Bot Asignado",
+  "notifications.botAssigned.buyTitle": "Seguridad de Trade: Bot Oficial",
 };
 
 const NOTIFICATION_CONTENTS: Record<string, string> = {
@@ -133,7 +134,7 @@ const NOTIFICATION_CONTENTS: Record<string, string> = {
   "notifications.sellRequoteRejectedAdmin.content":
     "El cliente rechazó la propuesta para la orden #{orderId} y canceló la venta.",
   "notifications.botAssigned.buyContent":
-    "Tu trade será enviado por el bot oficial '{botName}' (Steam ID: {botSteamId}). Asegúrate de verificarlo.",
+    "Tu trade será enviado por uno de nuestros bots oficiales de JabbuStore. Verifica los ítems de la oferta en Steam antes de aceptar.",
   "notifications.botAssigned.sellContent":
     "Por favor, envía el trade únicamente al bot oficial '{botName}' (Steam ID: {botSteamId}).",
 };

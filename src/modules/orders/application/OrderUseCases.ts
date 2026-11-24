@@ -950,23 +950,35 @@ export class UpdateOrderStatusUseCase {
           });
         }
 
-        if (status === OrderStatus.TRADE_PENDING && order.bot && !isRaffleOrder) {
-          const botTitle = 'notifications.botAssigned.title';
-          const botContent = JSON.stringify({
-            key: isSell ? 'notifications.botAssigned.sellContent' : 'notifications.botAssigned.buyContent',
-            params: {
-              botName: order.bot.name,
-              botSteamId: order.bot.steamId,
-            }
-          });
-          await createNotificationUseCase.execute({
-            userId: order.userId,
-            adminId: null,
-            title: botTitle,
-            content: botContent,
-            type: 'ORDER_STATUS',
-            link: isSell ? '/listings' : '/purchases',
-          });
+        if (status === OrderStatus.TRADE_PENDING && !isRaffleOrder) {
+          if (isSell && order.bot) {
+            await createNotificationUseCase.execute({
+              userId: order.userId,
+              adminId: null,
+              title: 'notifications.botAssigned.title',
+              content: JSON.stringify({
+                key: 'notifications.botAssigned.sellContent',
+                params: {
+                  botName: order.bot.name,
+                  botSteamId: order.bot.steamId,
+                }
+              }),
+              type: 'ORDER_STATUS',
+              link: '/listings',
+            });
+          } else if (!isSell) {
+            await createNotificationUseCase.execute({
+              userId: order.userId,
+              adminId: null,
+              title: 'notifications.botAssigned.buyTitle',
+              content: JSON.stringify({
+                key: 'notifications.botAssigned.buyContent',
+                params: {},
+              }),
+              type: 'ORDER_STATUS',
+              link: '/purchases',
+            });
+          }
         }
       } catch (err) {
         console.error('[UpdateOrderStatusUseCase] Error creating database notification:', err);
