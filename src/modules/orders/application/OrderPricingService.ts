@@ -49,6 +49,14 @@ const isModifierType = (type: string): type is ModifierType => {
   );
 };
 
+export const MAX_MARKET_ITEM_QUANTITY = 99;
+
+export function resolveOrderItemQuantity(rawQuantity: unknown): number {
+  const num = Number(rawQuantity);
+  if (!Number.isFinite(num) || num < 1) return 1;
+  return Math.min(MAX_MARKET_ITEM_QUANTITY, Math.trunc(num));
+}
+
 export const roundMoney = (value: number) => {
   return Math.round(value * 100) / 100;
 };

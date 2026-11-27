@@ -21,6 +21,7 @@ import {
   getBotCheckoutPrice,
   getMarketCheckoutPrice,
   getUserSellCheckoutPrice,
+  resolveOrderItemQuantity,
   roundMoney,
 } from "../application/OrderPricingService";
 import { MarketCatalogService } from "../../market/application/MarketCatalogService";
@@ -1482,6 +1483,14 @@ export class OrderController {
               throw new Error(`El listing de mercado "${name}" no existe en el catálogo.`);
             }
             const override = overridesMap.get(`market-${name}`);
+            const isSpecificOverride =
+              override?.isSpecific === true &&
+              override?.float !== undefined &&
+              override?.float !== null;
+            const quantity = isSpecificOverride
+              ? 1
+              : resolveOrderItemQuantity(override?.quantity);
+
             if (override && override.float !== undefined && override.float !== null) {
               const floatQueryWhere: any = {
                 listingId: item.name,
@@ -1500,7 +1509,9 @@ export class OrderController {
                 return {
                   assetId: `market-${name}`,
                   name: item.name,
-                  price: floatPrice,
+                  price: roundMoney(floatPrice * quantity),
+                  unitPrice: floatPrice,
+                  quantity,
                   iconUrl: item.iconUrl || null,
                   provider: 'youpin',
                   float: dbFloat.floatValue,
@@ -1511,10 +1522,13 @@ export class OrderController {
               }
             }
 
+            const unitPrice = getMarketCheckoutPrice(item.price, settingsData);
             return {
               assetId: `market-${name}`,
               name: item.name,
-              price: getMarketCheckoutPrice(item.price, settingsData),
+              price: roundMoney(unitPrice * quantity),
+              unitPrice,
+              quantity,
               iconUrl: item.iconUrl || null,
               provider: 'youpin',
               float: null,

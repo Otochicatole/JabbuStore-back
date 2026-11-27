@@ -16,6 +16,7 @@ import {
   getBotCheckoutPrice,
   getMarketCheckoutPrice,
   getUserSellCheckoutPrice,
+  resolveOrderItemQuantity,
   roundMoney,
 } from "./OrderPricingService";
 import { MarketCatalogService } from "../../market/application/MarketCatalogService";
@@ -316,6 +317,13 @@ export class CreatePurchaseOrderUseCase {
         throw new Error(`The market listing ${name} is no longer available.`);
       }
       const override = overridesMap.get(`market-${name}`);
+      const isSpecificOverride =
+        override?.isSpecific === true &&
+        override?.float !== undefined &&
+        override?.float !== null;
+      const quantity = isSpecificOverride
+        ? 1
+        : resolveOrderItemQuantity(override?.quantity);
       let itemPrice: number;
       let itemFloat: number | null = null;
       let itemPattern: number | null = null;
@@ -346,18 +354,20 @@ export class CreatePurchaseOrderUseCase {
         throw new Error(`The market listing ${name} has an invalid checkout price.`);
       }
 
-      totalPrice += itemPrice;
-      orderItemsData.push({
-        assetId: `market-${name}`,
-        name: name,
-        price: itemPrice,
-        iconUrl: item.iconUrl || null,
-        rarity: item.rarity || "common",
-        exterior: item.exterior || null,
-        float: override?.isSpecific === true ? itemFloat : null,
-        pattern: override?.isSpecific === true ? itemPattern : null,
-        provider: itemProvider,
-      });
+      totalPrice += roundMoney(itemPrice * quantity);
+      for (let q = 0; q < quantity; q += 1) {
+        orderItemsData.push({
+          assetId: `market-${name}`,
+          name: name,
+          price: itemPrice,
+          iconUrl: item.iconUrl || null,
+          rarity: item.rarity || "common",
+          exterior: item.exterior || null,
+          float: override?.isSpecific === true ? itemFloat : null,
+          pattern: override?.isSpecific === true ? itemPattern : null,
+          provider: itemProvider,
+        });
+      }
     }
 
     for (const floatId of youpinFloatIds) {

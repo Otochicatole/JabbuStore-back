@@ -4,6 +4,7 @@ import {
   getAdminSettingsOrDefaults,
   getBotCheckoutPrice,
   getMarketCheckoutPrice,
+  resolveOrderItemQuantity,
   roundMoney,
 } from "../../orders/application/OrderPricingService";
 import { MarketCatalogService } from "../../market/application/MarketCatalogService";
@@ -181,6 +182,13 @@ export class CheckoutBaseAmountResolver {
         throw new Error(`El listing de mercado "${name}" no está disponible.`);
       }
       const override = overridesMap.get(`market-${name}`);
+      const isSpecificOverride =
+        override?.isSpecific === true &&
+        override?.float !== undefined &&
+        override?.float !== null;
+      const quantity = isSpecificOverride
+        ? 1
+        : resolveOrderItemQuantity(override?.quantity);
       let itemPrice = getMarketCheckoutPrice(item.price, settingsData);
 
       if (override?.float !== undefined && override.float !== null) {
@@ -200,7 +208,7 @@ export class CheckoutBaseAmountResolver {
       if (!Number.isFinite(itemPrice) || itemPrice <= 0) {
         throw new Error(`El listing "${name}" no tiene un precio válido para checkout.`);
       }
-      totalPrice += itemPrice;
+      totalPrice += roundMoney(itemPrice * quantity);
     }
 
     for (const floatId of youpinFloatIds) {
