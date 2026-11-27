@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { GetMarketStoreAssetsUseCase } from '../application/GetMarketStoreAssetsUseCase';
-import { GetOrRefreshListingFloatsUseCase } from '../application/GetOrRefreshListingFloatsUseCase';
 import { GetListingInspectLinkUseCase } from '../application/GetListingInspectLinkUseCase';
 import { SteamWebApiFloatAssetsClient } from './SteamWebApiFloatAssetsClient';
 import { itemsCatalogRefreshService } from '../../pricing/application/ItemsCatalogRefreshService';
@@ -9,7 +8,6 @@ import {
   catalogFiltersFromSettings,
   type CatalogFilters,
 } from '../application/GenerateCatalogGlobalUseCase';
-import { PrismaMarketRepository } from './PrismaMarketRepository';
 import { prisma } from '../../../shared/infrastructure/PrismaClient';
 
 export class MarketController {
@@ -17,8 +15,6 @@ export class MarketController {
 
   constructor(
     private getMarketStoreAssetsUseCase: GetMarketStoreAssetsUseCase,
-    private getOrRefreshListingFloatsUseCase: GetOrRefreshListingFloatsUseCase,
-    private marketRepository = new PrismaMarketRepository(),
     private getListingInspectLinkUseCase = new GetListingInspectLinkUseCase(
       new SteamWebApiFloatAssetsClient(),
     ),
@@ -76,36 +72,6 @@ export class MarketController {
     } catch (error: any) {
       console.error('[Market Controller] Error en Paso 3:', error);
       res.status(500).json({ error: error.message || 'Error al generar catalog-global.json' });
-    }
-  }
-
-  /** GET /market/listings/:id/floats — devuelve floats para un resale item con displayPrice */
-  async getFloats(req: Request, res: Response): Promise<void> {
-    try {
-      const rawId = decodeURIComponent(req.params.id as string);
-      if (!rawId) {
-        res.status(400).json({ error: 'Falta el ID del artículo de reventa.' });
-        return;
-      }
-
-      const dopplerPhaseSuffix = /\s*\|\s*(Phase [1-4]|Ruby|Sapphire|Black Pearl|Emerald)\s*$/i;
-      const phaseMatch = rawId.match(dopplerPhaseSuffix);
-      const phase = phaseMatch ? phaseMatch[1] : undefined;
-      const listingId = rawId.trim();
-      
-      const options = {
-        ...(phase ? { phase } : {}),
-        limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 20,
-        offset: req.query.offset ? parseInt(req.query.offset as string, 10) : 0,
-        sortBy: (req.query.sortBy as 'float_asc' | 'float_desc' | 'price_asc' | 'price_desc') || 'float_asc',
-        forceRefresh: req.query.forceRefresh === 'true',
-      };
-      
-      const result = await this.getOrRefreshListingFloatsUseCase.execute(listingId, options);
-      res.json(result.floats);
-    } catch (error: any) {
-      console.error('[Market Controller] Error obteniendo floats:', error);
-      res.status(500).json({ error: error.message || 'Error al obtener los floats del artículo.' });
     }
   }
 
