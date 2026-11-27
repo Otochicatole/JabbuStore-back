@@ -487,6 +487,45 @@ describe('GetCatalogItemsUseCase search with bot variants', () => {
     expect(result.items.find((item) => item.name === 'Safari Mesh')).toBeUndefined();
   });
 
+  it('groups different exteriors and StatTrak variants of the same skin into a single item while keeping phases separate', async () => {
+    seedCatalog([
+      fixture('★ Sport Gloves | Pandora\'s Box (Factory New)', 'gloves' as FixtureType, 19485, {
+        float: 0.03,
+        exterior: 'Factory New',
+      }),
+      fixture('★ Sport Gloves | Pandora\'s Box (Minimal Wear)', 'gloves' as FixtureType, 3192, {
+        float: 0.11,
+        exterior: 'Minimal Wear',
+      }),
+      fixture('★ Sport Gloves | Pandora\'s Box (Field-Tested)', 'gloves' as FixtureType, 2044, {
+        float: 0.25,
+        exterior: 'Field-Tested',
+      }),
+      fixture('AK-47 | Redline (Field-Tested)', 'rifle', 20, { float: 0.25, exterior: 'Field-Tested' }),
+      fixture('StatTrak™ AK-47 | Redline (Minimal Wear)', 'rifle', 85, { float: 0.11, exterior: 'Minimal Wear' }),
+      fixture('★ Karambit | Doppler (Factory New)', 'knife', 1000, { float: 0.01, exterior: 'Factory New', phase: 'Phase 1' }),
+      fixture('★ Karambit | Doppler (Factory New)', 'knife', 1400, { float: 0.02, exterior: 'Factory New', phase: 'Phase 2' }),
+    ]);
+
+    const result = await new GetCatalogItemsUseCase().execute(query(false, { group: true }));
+
+    expect(result.pagination.total).toBe(4);
+    const pandoras = result.items.find((item) => item.name === "Pandora's Box");
+    expect(pandoras).toBeDefined();
+    expect(pandoras?.price).toBe(2044);
+    expect(pandoras?.variants?.map((v) => v.exterior)).toEqual([
+      'Field-Tested',
+      'Minimal Wear',
+      'Factory New',
+    ]);
+
+    const redline = result.items.find((item) => item.name === 'Redline');
+    expect(redline).toBeDefined();
+    expect(redline?.variants).toHaveLength(2);
+    expect(redline?.variants?.map((v) => v.isStatTrak)).toEqual([false, true]);
+    result.items.forEach(expectOnlyPublicFields);
+  });
+
   it('correctly categorizes and filters agents and non-weapon items in store inventory', async () => {
     seedCatalog([
       fixture('Getaway Sally | The Professionals', 'Exceptional Agent', 60, { exterior: null, float: null }),

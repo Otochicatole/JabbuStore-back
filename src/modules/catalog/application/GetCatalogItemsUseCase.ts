@@ -257,12 +257,15 @@ function getGroupKey(item: InternalCatalogItem): string {
     return [item.catalogItemType, item.id].join('|');
   }
 
+  const baseWeapon = item.weapon
+    .replace(/StatTrak™?\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   return [
     item.catalogItemType,
-    item.weapon,
+    baseWeapon,
     item.name,
-    getNormalizedCondition(item),
-    item.isStatTrak ? 'st' : '',
     item.isSouvenir ? 'sv' : '',
     item.phase ?? '',
   ].join('|');
