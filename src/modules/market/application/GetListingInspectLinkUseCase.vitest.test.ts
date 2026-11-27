@@ -63,4 +63,27 @@ describe('GetListingInspectLinkUseCase', () => {
     expect(blackPearl).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
     expect(emerald).not.toBe(blackPearl);
   });
+
+  it('skips short non-hex YouPin marketid certificates instead of emitting invalid M-links', async () => {
+    const fetchPage = vi.fn().mockResolvedValue({
+      ok: true,
+      assets: [
+        {
+          markethashname: 'AK-47 | Redline (Field-Tested)',
+          marketid: '999999',
+          assetid: '888888',
+          certificate: '1234567890',
+        },
+        {
+          markethashname: 'AK-47 | Redline (Field-Tested)',
+          certificate: 'abcdef0123456789abcdef0123456789',
+        },
+      ],
+    });
+    const useCase = new GetListingInspectLinkUseCase({ fetchPage });
+
+    const result = await useCase.execute('AK-47 | Redline (Field-Tested)');
+
+    expect(result).toBe('steam://run/730//+csgo_econ_action_preview%20abcdef0123456789abcdef0123456789');
+  });
 });

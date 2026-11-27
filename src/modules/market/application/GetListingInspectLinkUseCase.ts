@@ -199,7 +199,6 @@ export class GetListingInspectLinkUseCase {
           if (!certificate) continue;
 
           const candidate = buildInspectLinkFromCertificate(certificate, {
-            marketid: asset?.marketid,
             assetid: asset?.assetid ?? asset?.asset_id ?? asset?.id,
             steamid: asset?.steamid,
           });
