@@ -27,4 +27,40 @@ describe('GetListingInspectLinkUseCase', () => {
 
     await expect(useCase.execute('Case | Test')).resolves.toBeNull();
   });
+
+  it('queries Doppler phases using defIndex + paintIndex instead of appending | Phase to marketHashName', async () => {
+    const fetchPage = vi.fn().mockResolvedValue({
+      ok: true,
+      assets: [{
+        markethashname: '★ Butterfly Knife | Doppler (Factory New)',
+        paintindex: 415,
+        phase: 'ruby',
+        certificate: 'abcdef0123456789abcdef0123456789',
+      }],
+    });
+    const useCase = new GetListingInspectLinkUseCase({ fetchPage });
+
+    const result = await useCase.execute('★ Butterfly Knife | Doppler (Factory New) | Ruby');
+
+    expect(result).toBe('steam://run/730//+csgo_econ_action_preview%20abcdef0123456789abcdef0123456789');
+    expect(fetchPage).toHaveBeenCalledWith(expect.objectContaining({
+      defIndex: 515,
+      paintIndex: 415,
+      wear: 'fn',
+      isStatTrak: false,
+      isSouvenir: false,
+    }));
+  });
+
+  it('synthesizes a valid phase inspect certificate for Ruby, Emerald, and Black Pearl when YouPin has no cached assets', async () => {
+    const fetchPage = vi.fn().mockResolvedValue({ ok: true, assets: [] });
+    const useCase = new GetListingInspectLinkUseCase({ fetchPage });
+
+    const emerald = await useCase.execute('★ M9 Bayonet | Gamma Doppler (Factory New) | Emerald');
+    const blackPearl = await useCase.execute('★ Karambit | Doppler (Minimal Wear) | Black Pearl');
+
+    expect(emerald).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
+    expect(blackPearl).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
+    expect(emerald).not.toBe(blackPearl);
+  });
 });

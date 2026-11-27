@@ -59,3 +59,100 @@ export function normalizeSteamWebApiInspectLink(
   if (!link?.trim() || !isValidInspectLink(link)) return null;
   return link.trim();
 }
+
+const CS2_CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let crc = i;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+    table[i] = crc >>> 0;
+  }
+  return table;
+})();
+
+function computeMaskedInspectChecksum(protoBytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  crc = CS2_CRC32_TABLE[(crc ^ 0) & 0xff]! ^ (crc >>> 8);
+  for (let i = 0; i < protoBytes.length; i += 1) {
+    crc = CS2_CRC32_TABLE[(crc ^ protoBytes[i]!) & 0xff]! ^ (crc >>> 8);
+  }
+  crc = (0xffffffff ^ crc) >>> 0;
+  const mul = Math.imul(protoBytes.length, crc) >>> 0;
+  return ((0xffff & crc) ^ mul) >>> 0;
+}
+
+function encodeVarint(value: number): number[] {
+  const out: number[] = [];
+  let v = Math.max(0, Math.floor(value));
+  do {
+    const byte = v % 128;
+    v = Math.floor(v / 128);
+    out.push(v > 0 ? byte | 0x80 : byte);
+  } while (v > 0);
+  return out;
+}
+
+/**
+ * Generates a self-contained CS2 inspect link without stickers or charms
+ * from canonical item indices (`defIndex`, `paintIndex`, `floatValue`).
+ */
+export function buildMaskedInspectLinkFromParams(input: {
+  defIndex: number;
+  paintIndex: number;
+  floatValue: number;
+  paintSeed?: number;
+  rarity?: number;
+  isStatTrak?: boolean;
+  isSouvenir?: boolean;
+}): string | null {
+  if (
+    !Number.isSafeInteger(input.defIndex) ||
+    input.defIndex < 1 ||
+    !Number.isSafeInteger(input.paintIndex) ||
+    input.paintIndex < 0 ||
+    !Number.isFinite(input.floatValue)
+  ) {
+    return null;
+  }
+
+  const clampedFloat = Math.min(1, Math.max(0, input.floatValue));
+  const floatView = new DataView(new ArrayBuffer(4));
+  floatView.setFloat32(0, clampedFloat, false);
+  const paintWearBits = floatView.getUint32(0, false);
+
+  const rarity = Number.isSafeInteger(input.rarity) ? input.rarity! : 6;
+  const quality = input.isStatTrak ? 9 : input.isSouvenir ? 12 : 4;
+  const paintSeed = Number.isSafeInteger(input.paintSeed) ? input.paintSeed! : 0;
+
+  const protoBytes = new Uint8Array([
+    ...encodeVarint((3 << 3) | 0),
+    ...encodeVarint(input.defIndex),
+    ...encodeVarint((4 << 3) | 0),
+    ...encodeVarint(input.paintIndex),
+    ...encodeVarint((5 << 3) | 0),
+    ...encodeVarint(rarity),
+    ...encodeVarint((6 << 3) | 0),
+    ...encodeVarint(quality),
+    ...encodeVarint((7 << 3) | 0),
+    ...encodeVarint(paintWearBits),
+    ...encodeVarint((8 << 3) | 0),
+    ...encodeVarint(paintSeed),
+  ]);
+
+  const checksum = computeMaskedInspectChecksum(protoBytes);
+  const fullBytes = new Uint8Array(1 + protoBytes.length + 4);
+  fullBytes[0] = 0;
+  fullBytes.set(protoBytes, 1);
+  fullBytes[1 + protoBytes.length] = (checksum >>> 24) & 0xff;
+  fullBytes[2 + protoBytes.length] = (checksum >>> 16) & 0xff;
+  fullBytes[3 + protoBytes.length] = (checksum >>> 8) & 0xff;
+  fullBytes[4 + protoBytes.length] = checksum & 0xff;
+
+  const hex = Array.from(fullBytes, (b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+
+  return `steam://run/730/+csgo_econ_action_preview+${hex}`;
+}
