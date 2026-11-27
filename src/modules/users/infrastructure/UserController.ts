@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { CreateUserUseCase, GetUsersUseCase, LoginUserUseCase, GetUserInventoryUseCase, GetUserProfileUseCase, UpdateUserProfileUseCase } from '../application/UserUseCases';
+import { SteamWebApiInventoryError } from '../../../shared/infrastructure/SteamWebApiInventoryClient';
 
 export class UserController {
   constructor(
@@ -82,6 +83,10 @@ export class UserController {
     } catch (error: any) {
       if (error.message === 'User not found') {
         return res.status(401).json({ error: 'User not found or deleted' });
+      }
+      if (error instanceof SteamWebApiInventoryError) {
+        const httpStatus = error.status === 451 || error.status >= 500 ? 503 : error.status;
+        return res.status(httpStatus).json({ error: error.message, code: error.code });
       }
       res.status(400).json({ error: error.message });
     }
