@@ -151,7 +151,7 @@ export class TicketService {
 
     const tickets = await prisma.orderTicket.findMany({
       where,
-      orderBy: { updatedAt: 'desc' },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       take: 100,
       include: {
         order: { select: { id: true, type: true, status: true, totalPrice: true } },
@@ -201,12 +201,38 @@ export class TicketService {
     };
   }
 
-  static async markRead(ticketId: string, actor: TicketActor) {
-    await this.assertAccess(ticketId, actor);
-    return prisma.orderTicket.update({
-      where: { id: ticketId },
-      data: isAdmin(actor) ? { adminLastReadAt: new Date() } : { userLastReadAt: new Date() },
+  static async markRead(
+    ticketId: string,
+    actor: TicketActor,
+  ): Promise<{ ticket: Awaited<ReturnType<typeof TicketService.assertAccess>>; changed: boolean }> {
+    const ticket = await this.assertAccess(ticketId, actor);
+    const actorIsAdmin = isAdmin(actor);
+    const lastReadAt = actorIsAdmin ? ticket.adminLastReadAt : ticket.userLastReadAt;
+    const oppositeSender = actorIsAdmin ? 'USER' : 'ADMIN';
+
+    const unreadCount = await prisma.ticketMessage.count({
+      where: {
+        ticketId,
+        senderType: oppositeSender,
+        ...(lastReadAt ? { createdAt: { gt: lastReadAt } } : {}),
+      },
     });
+
+    if (unreadCount === 0) {
+      return { ticket, changed: false };
+    }
+
+    const now = new Date();
+    const updated = await prisma.orderTicket.update({
+      where: { id: ticketId },
+      data: {
+        ...(actorIsAdmin ? { adminLastReadAt: now } : { userLastReadAt: now }),
+        // Preservar updatedAt explícitamente para que abrir/leer un ticket jamás altere su orden en la lista
+        updatedAt: ticket.updatedAt,
+      },
+    });
+
+    return { ticket: updated, changed: true };
   }
 
   static async sendMessage(
@@ -297,8 +323,8 @@ export class TicketService {
     return prisma.orderTicket.update({
       where: { id: ticketId },
       data: status === 'CLOSED'
-        ? { status, closedAt: new Date(), closedByAdminId: adminId }
-        : { status, closedAt: null, closedByAdminId: null },
+        ? { status, closedAt: new Date(), closedByAdminId: adminId, updatedAt: ticket.updatedAt }
+        : { status, closedAt: null, closedByAdminId: null, updatedAt: ticket.updatedAt },
     });
   }
 

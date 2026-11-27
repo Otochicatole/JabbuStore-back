@@ -84,10 +84,14 @@ export function initializeTicketSocket(server: HttpServer) {
         if (!parsed.success) throw new Error('INVALID_TICKET');
         await TicketService.assertAccess(parsed.data, actor);
         await socket.join(`ticket:${parsed.data}`);
-        const ticket = await TicketService.markRead(parsed.data, actor);
-        io?.to('ticket-admins').to(`user:${ticket.userId}`).emit('ticket:updated', {
-          ticketId: parsed.data,
-        });
+        const { ticket, changed } = await TicketService.markRead(parsed.data, actor);
+        if (changed) {
+          const readerActor = actor.role === 'USER' ? 'USER' : 'ADMIN';
+          io?.to(actorRoom(actor)).emit('ticket:read_state', {
+            ticketId: ticket.id,
+            actor: readerActor,
+          });
+        }
         ack?.({ ok: true });
       } catch (error) {
         ack?.({ ok: false, error: error instanceof Error ? error.message : 'JOIN_FAILED' });
@@ -105,14 +109,18 @@ export function initializeTicketSocket(server: HttpServer) {
       try {
         const parsed = ticketIdSchema.safeParse((payload as any)?.ticketId);
         if (!parsed.success) throw new Error('INVALID_TICKET');
-        const ticket = await TicketService.markRead(parsed.data, actor);
-        io?.to(`ticket:${parsed.data}`).emit('ticket:read', {
-          ticketId: parsed.data,
-          actor: actor.role === 'USER' ? 'USER' : 'ADMIN',
-        });
-        io?.to('ticket-admins').to(`user:${ticket.userId}`).emit('ticket:updated', {
-          ticketId: parsed.data,
-        });
+        const { ticket, changed } = await TicketService.markRead(parsed.data, actor);
+        const readerActor = actor.role === 'USER' ? 'USER' : 'ADMIN';
+        if (changed) {
+          io?.to(`ticket:${parsed.data}`).emit('ticket:read', {
+            ticketId: ticket.id,
+            actor: readerActor,
+          });
+          io?.to(actorRoom(actor)).emit('ticket:read_state', {
+            ticketId: ticket.id,
+            actor: readerActor,
+          });
+        }
         ack?.({ ok: true });
       } catch (error) {
         ack?.({ ok: false, error: error instanceof Error ? error.message : 'READ_FAILED' });
