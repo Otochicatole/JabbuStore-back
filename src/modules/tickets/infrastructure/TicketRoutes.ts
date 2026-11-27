@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { AuthService } from '../../../shared/infrastructure/AuthService';
@@ -7,8 +8,14 @@ import {
   ticketUserAuth,
 } from '../../../shared/infrastructure/middlewares/authMiddleware';
 import { TicketService, type TicketActor } from '../application/TicketService';
-import { createTicketSchema, ticketIdSchema, ticketStatusSchema } from './ticketSchemas';
 import {
+  createTicketSchema,
+  ticketIdSchema,
+  ticketMessageSchema,
+  ticketStatusSchema,
+} from './ticketSchemas';
+import {
+  emitNewTicketMessage,
   emitTicketCreatedNotification,
   emitTicketStatus,
   emitTicketUpdated,
@@ -101,6 +108,27 @@ router.get('/:id/messages', ticketActorAuth, async (req, res) => {
   const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
   try {
     return res.json(await TicketService.messages(parsed.data, actorFrom(req), cursor));
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+});
+
+router.post('/:id/messages', ticketActorAuth, async (req, res) => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const parsed = ticketMessageSchema.safeParse({
+    ticketId: id,
+    clientMessageId:
+      typeof req.body?.clientMessageId === 'string'
+        ? req.body.clientMessageId
+        : randomUUID(),
+    body: req.body?.body,
+  });
+  if (!parsed.success) return res.status(400).json({ error: 'INVALID_MESSAGE' });
+  try {
+    const actor = actorFrom(req);
+    const message = await TicketService.sendMessage(actor, parsed.data);
+    await emitNewTicketMessage(actor, message);
+    return res.status(201).json(message);
   } catch (error) {
     return errorResponse(res, error);
   }
