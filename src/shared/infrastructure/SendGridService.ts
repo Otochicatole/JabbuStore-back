@@ -112,7 +112,7 @@ const NOTIFICATION_CONTENTS: Record<string, string> = {
   "notifications.orderUpdated.content":
     "El estado de tu orden #{orderId} cambió a {status}.",
   "notifications.sellRetention.content":
-    "Tu orden de venta #{orderId} ha ingresado al período de retención de seguridad de 8 días antes del pago.",
+    "Tu orden de venta #{orderId} ha ingresado al período de retención de seguridad de 7 días antes del pago.",
   "notifications.sellRequoted.content":
     "Tu orden de venta #{orderId} fue re-tasada de {originalPrice} USD a {newPrice} USD debido al mercado. Aprobá o rechazá el nuevo valor.",
   "notifications.sellRequoteApproved.content":
@@ -122,11 +122,11 @@ const NOTIFICATION_CONTENTS: Record<string, string> = {
   "notifications.newTicket.content": "{userName}: {subject}",
   "notifications.newTicketMessage.content": "{senderName}: {message}",
   "notifications.retentionExpiredAdmin.content":
-    'La retención de 8 días de la orden #{orderId} de {sellerName} ha finalizado. Debe realizarse la transferencia de {amount} USD por "{itemName}".',
+    'La retención de 7 días de la orden #{orderId} de {sellerName} ha finalizado. Debe realizarse la transferencia de {amount} USD por "{itemName}".',
   "notifications.retentionExpiredUser.content":
-    "Los 8 días de retención de tu venta #{orderId} han terminado. El administrador procesará el pago de {amount} USD en breve.",
+    "Los 7 días de retención de tu venta #{orderId} han terminado. El administrador procesará el pago de {amount} USD en breve.",
   "notifications.sellRetentionAdmin.content":
-    "Orden de venta #{orderId} cambió a retención. Se inició el contador de 8 días.",
+    "Orden de venta #{orderId} cambió a retención. Se inició el contador de 7 días.",
   "notifications.sellRequotedAdmin.content":
     "Se envió una nueva propuesta de cotización de {newPrice} USD para la orden #{orderId}.",
   "notifications.sellRequoteApprovedAdmin.content":

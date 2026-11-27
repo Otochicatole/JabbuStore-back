@@ -2,11 +2,11 @@ import { prisma } from "../../../shared/infrastructure/PrismaClient";
 import { PrismaNotificationRepository } from "../../notifications/infrastructure/PrismaNotificationRepository";
 import { CreateOrUpdateNotificationUseCase } from "../../notifications/application/NotificationUseCases";
 
-const RETENTION_DAYS = 8;
+const RETENTION_DAYS = 7;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 /**
- * Checks sell orders in RETENTION state. When the 8-day retention period
+ * Checks sell orders in RETENTION state. When the 7-day retention period
  * has expired, it sends an admin notification alerting them to make the transfer.
  * Runs every 5 minutes.
  */
@@ -52,7 +52,7 @@ async function checkExpiredRetentions() {
       const startMs = new Date(retentionStartedAt as string).getTime();
       const elapsed = now - startMs;
 
-      // Check if 8 days have passed AND we haven't already sent the expiry notification
+      // Check if 7 days have passed AND we haven't already sent the expiry notification
       if (elapsed >= RETENTION_MS && !meta.retentionExpiredNotified) {
         console.log(`[RetentionScheduler] Retention period expired for order ${order.id}. Notifying admin.`);
 

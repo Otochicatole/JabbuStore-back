@@ -202,7 +202,7 @@ async function bootstrap() {
     // Ejecución automática de sorteos programados vencidos
     startRaffleScheduler();
     startParticipationDrawScheduler();
-    // Verificación periódica de retenciones de venta vencidas (8 días)
+    // Verificación periódica de retenciones de venta vencidas (7 días)
     startRetentionScheduler();
     // Auto sync del catálogo global
     void autoSyncService.start();
