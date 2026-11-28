@@ -207,7 +207,6 @@ export class SteamWebApiFloatAssetsClient {
     try {
       const queryString = params.toString().replace(/\+/g, '%20');
       const fullUrl = `${STEAM_FLOAT_ASSETS_URL}?${queryString}`;
-      console.log(`[FloatAssets] requesting: ${fullUrl.slice(0, 250)}`);
       res = await fetch(fullUrl, {
         signal: controller.signal,
         headers: { accept: "application/json" },

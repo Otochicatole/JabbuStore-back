@@ -64,18 +64,52 @@ export function buildFloatSyncQueryNames(
   return Array.from(names);
 }
 
-const PHASE_PAINT_INDEX: Record<
-  string,
-  { regular: number; gamma: number; glock?: number }
-> = {
-  Ruby: { regular: 415, gamma: 849 },
-  Sapphire: { regular: 416, gamma: 850 },
-  "Black Pearl": { regular: 417, gamma: 851 },
-  "Phase 1": { regular: 418, gamma: 569, glock: 1120 },
-  "Phase 2": { regular: 419, gamma: 570, glock: 1121 },
-  "Phase 3": { regular: 420, gamma: 571, glock: 1122 },
-  "Phase 4": { regular: 421, gamma: 572, glock: 1123 },
-  Emerald: { regular: 568, gamma: 568, glock: 1119 },
+const STANDARD_DOPPLER_PAINT_INDEX: Partial<Record<string, number>> = {
+  Ruby: 415,
+  Sapphire: 416,
+  "Black Pearl": 417,
+  "Phase 1": 418,
+  "Phase 2": 419,
+  "Phase 3": 420,
+  "Phase 4": 421,
+};
+
+/** Butterfly Knife & Shadow Daggers (Spectrum Doppler) use 617/618/619 for Black Pearl / Phase 2 / Sapphire. */
+const SPECTRUM_DOPPLER_PAINT_INDEX: Partial<Record<string, number>> = {
+  Ruby: 415,
+  Sapphire: 619,
+  "Black Pearl": 617,
+  "Phase 1": 418,
+  "Phase 2": 618,
+  "Phase 3": 420,
+  "Phase 4": 421,
+};
+
+/** Talon Knife (Horizon/Prisma Doppler) uses 852..855 for Phase 1..4 and 415..417 for gems. */
+const TALON_DOPPLER_PAINT_INDEX: Partial<Record<string, number>> = {
+  Ruby: 415,
+  Sapphire: 416,
+  "Black Pearl": 417,
+  "Phase 1": 852,
+  "Phase 2": 853,
+  "Phase 3": 854,
+  "Phase 4": 855,
+};
+
+const KNIFE_GAMMA_DOPPLER_PAINT_INDEX: Partial<Record<string, number>> = {
+  Emerald: 568,
+  "Phase 1": 569,
+  "Phase 2": 570,
+  "Phase 3": 571,
+  "Phase 4": 572,
+};
+
+const GLOCK_GAMMA_DOPPLER_PAINT_INDEX: Partial<Record<string, number>> = {
+  Emerald: 1119,
+  "Phase 1": 1120,
+  "Phase 2": 1121,
+  "Phase 3": 1122,
+  "Phase 4": 1123,
 };
 
 /** def_index de cuchillos CS2 (weapon definition index). */
@@ -103,19 +137,30 @@ const KNIFE_DEF_INDEX: Array<{ match: string; defIndex: number }> = [
 ];
 
 /**
- * paint_index de la fase Doppler/Gamma según SteamWebAPI.
- * La API filtra correctamente por paint_index pero NO combinar con market_hash_name.
+ * paint_index exacto de la fase Doppler/Gamma según items-catalog.json de CS2 / SteamWebAPI.
+ * Distingue variantes específicas por familia de cuchillo (Butterfly, Shadow Daggers, Talon, Gamma, Glock-18).
  */
 export function resolvePaintIndexForPhase(
   phase: string,
   baseName: string,
 ): number | null {
-  const entry = PHASE_PAINT_INDEX[phase];
-  if (!entry) return null;
+  const canonicalPhase = normalizeDopplerPhaseLabel(phase) ?? phase.trim();
+  if (!canonicalPhase) return null;
+
   const lower = baseName.toLowerCase();
-  if (lower.includes("glock-18")) return entry.glock ?? null;
-  if (lower.includes("gamma doppler")) return entry.gamma;
-  return entry.regular;
+  if (lower.includes("glock-18")) {
+    return GLOCK_GAMMA_DOPPLER_PAINT_INDEX[canonicalPhase] ?? null;
+  }
+  if (lower.includes("gamma doppler") || canonicalPhase === "Emerald") {
+    return KNIFE_GAMMA_DOPPLER_PAINT_INDEX[canonicalPhase] ?? null;
+  }
+  if (lower.includes("butterfly") || lower.includes("shadow daggers")) {
+    return SPECTRUM_DOPPLER_PAINT_INDEX[canonicalPhase] ?? null;
+  }
+  if (lower.includes("talon")) {
+    return TALON_DOPPLER_PAINT_INDEX[canonicalPhase] ?? null;
+  }
+  return STANDARD_DOPPLER_PAINT_INDEX[canonicalPhase] ?? null;
 }
 
 export function resolveDefIndexFromBaseName(baseName: string): number | null {

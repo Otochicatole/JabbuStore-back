@@ -102,6 +102,9 @@ const WEAPON_AND_GLOVE_DEF_INDEX: Record<string, number> = {
 let cachedCatalogLookup: CatalogPaintIndexLookup | null = null;
 let inflightCatalogLoad: Promise<CatalogPaintIndexLookup | null> | null = null;
 
+const TRAILING_WEAR_RE =
+  /\s*(\((?:Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred|FN|MW|FT|WW|BS|Recién fabricado|Casi nuevo|Algo desgastado|Bastante desgastado|Deplorable)\))\s*$/i;
+
 function parseListingInspectTarget(rawName: string): {
   baseMarketHashName: string;
   phase: DopplerPhaseLabel | null;
@@ -111,8 +114,13 @@ function parseListingInspectTarget(rawName: string): {
     const candidateSuffix = rawName.slice(separatorIndex + 3).trim();
     const detectedPhase = normalizeDopplerPhaseLabel(candidateSuffix);
     if (detectedPhase) {
+      let base = rawName.slice(0, separatorIndex).trim();
+      const trailingWearMatch = candidateSuffix.match(TRAILING_WEAR_RE);
+      if (trailingWearMatch?.[1] && !TRAILING_WEAR_RE.test(base)) {
+        base = `${base} ${trailingWearMatch[1]}`;
+      }
       return {
-        baseMarketHashName: rawName.slice(0, separatorIndex).trim(),
+        baseMarketHashName: base,
         phase: detectedPhase,
       };
     }
@@ -264,18 +272,18 @@ export class GetListingInspectLinkUseCase {
     try {
       const queries: FloatAssetsQuery[] = [];
       if (phase && defIndex != null && paintIndex != null) {
+        // Query across global CS2 float/assets without restricting to source=youpin/only_market_id=1
+        // because rare Doppler/Gamma/Emerald/Sapphire/Black Pearl phases often have 0 YouPin market_id rows
+        // while having hundreds of real CS2 certificates indexed by def_index + paint_index.
         queries.push({
-          source: 'youpin',
           defIndex,
           paintIndex,
           ...(wearCode ? { wear: wearCode } : {}),
-          isStatTrak,
-          isSouvenir,
+          ...(isStatTrak ? { isStatTrak: true } : {}),
+          ...(isSouvenir ? { isSouvenir: true } : {}),
           limit: 10,
           offset: 0,
           sort: 'newest',
-          onlyMarketId: true,
-          withItems: true,
           rateLimitPriority: 'normal',
           maxRateLimitWaitMs: MAX_RATE_LIMIT_WAIT_MS,
           requestTimeoutMs: UPSTREAM_REQUEST_TIMEOUT_MS,
@@ -358,12 +366,12 @@ export class GetListingInspectLinkUseCase {
     }
 
     if (!inspectLink && defIndex != null && paintIndex != null) {
-      const floatValue = (wearCode ? WEAR_FLOAT_MAP[wearCode] : undefined) ?? 0.035;
+      const rawFloat = (wearCode ? WEAR_FLOAT_MAP[wearCode] : undefined) ?? 0.035;
+      const floatValue = phase ? Math.min(0.078, Math.max(0.001, rawFloat)) : rawFloat;
       inspectLink = buildMaskedInspectLinkFromParams({
         defIndex,
         paintIndex,
         floatValue,
-        paintSeed: 0,
         rarity: baseMarketHashName.includes('★') ? 6 : 5,
         isStatTrak,
         isSouvenir,

@@ -328,26 +328,43 @@ function resolveEmbeddedInspectLink(
   exterior: string | null,
   isStatTrak: boolean,
   isSouvenir: boolean,
+  exactFloat?: number | null,
+  exactPattern?: number | null,
 ): string | null {
   const defIndex = resolveItemDefIndex(rawMarketName);
   if (defIndex == null) return null;
 
-  const paintIndex =
-    typeof rawPaintIndex === 'number' && Number.isFinite(rawPaintIndex)
-      ? rawPaintIndex
-      : phase
-        ? resolvePaintIndexForPhase(phase, rawMarketName)
+  const phasePaintIndex = phase ? resolvePaintIndexForPhase(phase, rawMarketName) : null;
+  const hasMatchingRawPaint =
+    typeof rawPaintIndex === 'number' &&
+    Number.isFinite(rawPaintIndex) &&
+    (!phase || getDopplerPhaseLabelByPaintIndex(rawPaintIndex) === phase);
+
+  const paintIndex = hasMatchingRawPaint
+    ? rawPaintIndex
+    : phasePaintIndex !== null
+      ? phasePaintIndex
+      : typeof rawPaintIndex === 'number' && Number.isFinite(rawPaintIndex)
+        ? rawPaintIndex
         : rawMarketName.includes('★') && !rawMarketName.includes(' | ')
           ? 0
           : null;
   if (paintIndex == null) return null;
 
-  const floatValue = (exterior ? EXTERIOR_FLOAT_FALLBACK[exterior] : undefined) ?? 0.035;
+  const baseFloat =
+    typeof exactFloat === 'number' && Number.isFinite(exactFloat)
+      ? exactFloat
+      : ((exterior ? EXTERIOR_FLOAT_FALLBACK[exterior] : undefined) ?? 0.035);
+  const floatValue = ALL_DOPPLER_PAINTS.has(paintIndex)
+    ? Math.min(0.078, Math.max(0.001, baseFloat))
+    : baseFloat;
   return buildMaskedInspectLinkFromParams({
     defIndex,
     paintIndex,
     floatValue,
-    paintSeed: 0,
+    ...(typeof exactPattern === 'number' && Number.isSafeInteger(exactPattern)
+      ? { paintSeed: exactPattern }
+      : {}),
     rarity: rawMarketName.includes('★') ? 6 : 5,
     isStatTrak,
     isSouvenir,
@@ -355,21 +372,27 @@ function resolveEmbeddedInspectLink(
 }
 
 function hydratePageInspectLinks(item: InternalCatalogItem): CatalogItem {
-  const baseNameForDef = item.phase && item.id.endsWith(` | ${item.phase}`)
-    ? item.id.slice(0, -(item.phase.length + 3))
-    : item.id;
+  const sourceMarketName =
+    item.provider === 'youpin'
+      ? item.phase && item.id.endsWith(` | ${item.phase}`)
+        ? item.id.slice(0, -(item.phase.length + 3))
+        : item.id
+      : `${item.weapon}${item.name && item.name !== item.weapon ? ` | ${item.name}` : ''}${
+          item.exterior ? ` (${item.exterior})` : ''
+        }`;
   const nextInspect =
-    item.inspectLink ??
-    (item.provider === 'youpin'
-      ? resolveEmbeddedInspectLink(
-          baseNameForDef,
+    item.inspectLink && !/%[a-z0-9_:]+%/i.test(item.inspectLink)
+      ? item.inspectLink
+      : resolveEmbeddedInspectLink(
+          sourceMarketName,
           item.rawPaintIndex,
           item.phase,
           item.exterior,
           item.isStatTrak,
           item.isSouvenir,
-        )
-      : null);
+          item.float,
+          item.pattern,
+        );
 
   const publicItem = stripInternal(item);
   return {
@@ -432,6 +455,7 @@ export class GetCatalogItemsUseCase {
             category: item.category,
             name: item.name,
           });
+          const botPhase = parsed.phase ?? resolveDopplerPhase(item.paintIndex);
           return {
             id: item.assetId,
             name: parsed.name,
@@ -450,7 +474,7 @@ export class GetCatalogItemsUseCase {
             category: item.category,
             isStatTrak: item.isStatTrak,
             isSouvenir: item.isSouvenir,
-            phase: parsed.phase,
+            phase: botPhase,
             isImmediate: true,
             inspectLink: item.inspectLink,
             provider: "bot" as const,
@@ -458,12 +482,13 @@ export class GetCatalogItemsUseCase {
             supportsFloatStock: capabilities.supportsFloatStock,
             priceFilterEligible: capabilities.priceFilterEligible,
             createdAt: item.createdAt,
+            rawPaintIndex: item.paintIndex ?? null,
             searchDocument: search.isEmpty ? null : createCatalogSearchDocument({
               fullName: item.name,
               weapon: parsed.weapon,
               name: parsed.name,
               exterior: item.exterior,
-              phase: parsed.phase,
+              phase: botPhase,
             }),
           };
         });
@@ -499,9 +524,17 @@ export class GetCatalogItemsUseCase {
                   name: item.itemname || name,
                   phase: null,
                 };
-            const paintIndex = variantPaintIndex ?? (item as any).paintindex;
+            const normalizedVariantPhase = normalizeDopplerPhaseLabel(variantPhase) ?? variantPhase;
+            const explicitPhase = normalizedVariantPhase ?? parsed.phase;
+            const fallbackPhasePaint = explicitPhase
+              ? resolvePaintIndexForPhase(explicitPhase, name)
+              : null;
+            const paintIndex =
+              variantPaintIndex ??
+              fallbackPhasePaint ??
+              (item as any).paintindex;
             const dopplerPhase = resolveDopplerPhase(paintIndex);
-            const phase = variantPhase ?? parsed.phase ?? dopplerPhase;
+            const phase = explicitPhase ?? dopplerPhase;
 
             const youpinAsk = item.youpinAsk ?? 0;
             const basePrice = youpinAsk;

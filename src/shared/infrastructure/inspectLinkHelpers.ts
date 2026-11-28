@@ -122,9 +122,25 @@ export function buildMaskedInspectLinkFromParams(input: {
   floatView.setFloat32(0, clampedFloat, false);
   const paintWearBits = floatView.getUint32(0, false);
 
-  const rarity = Number.isSafeInteger(input.rarity) ? input.rarity! : 6;
-  const quality = input.isStatTrak ? 9 : input.isSouvenir ? 12 : 4;
-  const paintSeed = Number.isSafeInteger(input.paintSeed) ? input.paintSeed! : 0;
+  const isUnusualStar = input.defIndex >= 500;
+  const rarity = Number.isSafeInteger(input.rarity)
+    ? input.rarity!
+    : isUnusualStar
+      ? 6
+      : 5;
+  const isSouvenir = Boolean(input.isSouvenir);
+  const isStatTrak = Boolean(input.isStatTrak) && !isSouvenir;
+  const quality = isSouvenir
+    ? 12
+    : isUnusualStar
+      ? 3
+      : isStatTrak
+        ? 9
+        : 4;
+  const paintSeed =
+    Number.isSafeInteger(input.paintSeed) && input.paintSeed! >= 0 && input.paintSeed! <= 1000
+      ? input.paintSeed!
+      : ((input.defIndex * 31 + input.paintIndex * 17) % 999) + 1;
 
   const protoBytes = new Uint8Array([
     ...encodeVarint((3 << 3) | 0),
@@ -139,6 +155,14 @@ export function buildMaskedInspectLinkFromParams(input: {
     ...encodeVarint(paintWearBits),
     ...encodeVarint((8 << 3) | 0),
     ...encodeVarint(paintSeed),
+    ...(isStatTrak
+      ? [
+          ...encodeVarint((9 << 3) | 0),
+          ...encodeVarint(0),
+          ...encodeVarint((10 << 3) | 0),
+          ...encodeVarint(0),
+        ]
+      : []),
   ]);
 
   const checksum = computeMaskedInspectChecksum(protoBytes);
@@ -154,5 +178,5 @@ export function buildMaskedInspectLinkFromParams(input: {
     .join("")
     .toUpperCase();
 
-  return `steam://run/730/+csgo_econ_action_preview+${hex}`;
+  return `steam://run/730//+csgo_econ_action_preview%20${hex}`;
 }

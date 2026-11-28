@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FloatRateLimitWaitTimeoutError } from './FloatRateLimiter';
+import { resolvePaintIndexForPhase } from './floatSyncHelpers';
 import { GetListingInspectLinkUseCase, resolveItemDefIndex } from './GetListingInspectLinkUseCase';
 
 describe('GetListingInspectLinkUseCase', () => {
@@ -29,7 +30,7 @@ describe('GetListingInspectLinkUseCase', () => {
     await expect(useCase.execute('Case | Test')).resolves.toBeNull();
   });
 
-  it('queries Doppler phases using defIndex + paintIndex instead of appending | Phase to marketHashName', async () => {
+  it('queries Doppler phases globally using defIndex + paintIndex without restricting to onlyMarketId', async () => {
     const fetchPage = vi.fn().mockResolvedValue({
       ok: true,
       assets: [{
@@ -48,21 +49,36 @@ describe('GetListingInspectLinkUseCase', () => {
       defIndex: 515,
       paintIndex: 415,
       wear: 'fn',
-      isStatTrak: false,
-      isSouvenir: false,
     }));
+    expect(fetchPage.mock.calls[0]?.[0]?.source).toBeUndefined();
+    expect(fetchPage.mock.calls[0]?.[0]?.onlyMarketId).toBeUndefined();
   });
 
-  it('synthesizes a valid phase inspect certificate for Ruby, Emerald, and Black Pearl when YouPin has no cached assets', async () => {
+  it('synthesizes canonical CS2 inspect links (// + %20) for Ruby, Emerald, Sapphire, and Black Pearl across knife families', async () => {
     const fetchPage = vi.fn().mockResolvedValue({ ok: true, assets: [] });
     const useCase = new GetListingInspectLinkUseCase({ fetchPage });
 
     const emerald = await useCase.execute('★ M9 Bayonet | Gamma Doppler (Factory New) | Emerald');
-    const blackPearl = await useCase.execute('★ Karambit | Doppler (Minimal Wear) | Black Pearl');
+    const trailingWearEmerald = await useCase.execute('★ Karambit | Gamma Doppler | Emerald (Factory New)');
+    const bfkSapphire = await useCase.execute('★ Butterfly Knife | Doppler (Factory New) | Sapphire');
+    const bfkBlackPearl = await useCase.execute('★ StatTrak™ Butterfly Knife | Doppler (Factory New) | Black Pearl');
+    const glockEmerald = await useCase.execute('Glock-18 | Gamma Doppler (Factory New) | Emerald');
 
-    expect(emerald).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
-    expect(blackPearl).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
-    expect(emerald).not.toBe(blackPearl);
+    for (const link of [emerald, trailingWearEmerald, bfkSapphire, bfkBlackPearl, glockEmerald]) {
+      expect(link).toMatch(/^steam:\/\/run\/730\/\/\+csgo_econ_action_preview%2000[0-9A-F]+$/);
+    }
+    expect(emerald).not.toBe(bfkSapphire);
+    // StatTrak certificate includes killeater fields 9=0 (4800) and 10=0 (5000) before 4-byte CRC trailer
+    expect(bfkBlackPearl).toMatch(/48005000[0-9A-F]{8}$/);
+
+    // Knife-specific CS2 paint_index ground truth
+    expect(resolvePaintIndexForPhase('Sapphire', '★ Butterfly Knife | Doppler (Factory New)')).toBe(619);
+    expect(resolvePaintIndexForPhase('Black Pearl', '★ Butterfly Knife | Doppler (Factory New)')).toBe(617);
+    expect(resolvePaintIndexForPhase('Phase 2', '★ Shadow Daggers | Doppler (Factory New)')).toBe(618);
+    expect(resolvePaintIndexForPhase('Phase 1', '★ Talon Knife | Doppler (Factory New)')).toBe(852);
+    expect(resolvePaintIndexForPhase('Phase 4', '★ Talon Knife | Doppler (Factory New)')).toBe(855);
+    expect(resolvePaintIndexForPhase('Emerald', '★ Karambit | Gamma Doppler (Factory New)')).toBe(568);
+    expect(resolvePaintIndexForPhase('Emerald', 'Glock-18 | Gamma Doppler (Factory New)')).toBe(1119);
   });
 
   it('skips short non-hex YouPin marketid certificates instead of emitting invalid M-links', async () => {
@@ -98,7 +114,7 @@ describe('GetListingInspectLinkUseCase', () => {
       maxRateLimitWaitMs: 1500,
       requestTimeoutMs: 4000,
     }));
-    expect(ruby).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
+    expect(ruby).toMatch(/^steam:\/\/run\/730\/\/\+csgo_econ_action_preview%2000[0-9A-F]+$/);
     expect(resolveItemDefIndex('AK-47 | Redline (Field-Tested)')).toBe(7);
     expect(resolveItemDefIndex("★ Sport Gloves | Pandora's Box (Field-Tested)")).toBe(5030);
   });
