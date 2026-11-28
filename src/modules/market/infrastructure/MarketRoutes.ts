@@ -18,6 +18,7 @@ const marketController = new MarketController(
 router.get('/listings', (req, res) => marketController.getListings(req, res));
 
 // Ruta pública — enlace Steam de inspección, resuelto bajo demanda y cacheado.
+router.get('/listings/inspect', (req, res) => marketController.getInspectLink(req, res));
 router.get('/listings/:id/inspect', (req, res) => marketController.getInspectLink(req, res));
 
 // Rutas protegidas (Admin) — ejecuciones manuales paso a paso

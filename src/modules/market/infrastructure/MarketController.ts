@@ -75,10 +75,12 @@ export class MarketController {
     }
   }
 
-  /** GET /market/listings/:id/inspect — devuelve solo un enlace Steam validado. */
+  /** GET /market/listings/inspect?name=... o /market/listings/:id/inspect — devuelve solo un enlace Steam validado. */
   async getInspectLink(req: Request, res: Response): Promise<void> {
     try {
-      const marketHashName = decodeURIComponent(req.params.id as string).trim();
+      const fromQuery = typeof req.query.name === 'string' ? req.query.name : '';
+      const fromParam = typeof req.params.id === 'string' ? decodeURIComponent(req.params.id) : '';
+      const marketHashName = (fromQuery || fromParam).trim();
       if (!marketHashName) {
         res.status(400).json({ inspectLink: null });
         return;

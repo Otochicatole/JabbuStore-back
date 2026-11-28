@@ -14,6 +14,9 @@ import {
   createCatalogSearchDocument,
   type CatalogSearchDocument,
 } from '../domain/CatalogSearch';
+import { buildMaskedInspectLinkFromParams } from '../../../shared/infrastructure/inspectLinkHelpers';
+import { resolvePaintIndexForPhase } from '../../market/application/floatSyncHelpers';
+import { resolveItemDefIndex } from '../../market/application/GetListingInspectLinkUseCase';
 
 type SortOption =
   | 'price_desc'
@@ -75,6 +78,7 @@ export interface CatalogItemsResult {
 interface InternalCatalogItem extends CatalogItem {
   createdAt: Date;
   searchDocument: CatalogSearchDocument | null;
+  rawPaintIndex?: number | null;
 }
 
 const DEFAULT_SORT: SortOption = 'price_desc';
@@ -300,8 +304,85 @@ function sortItems(items: InternalCatalogItem[], sort: SortOption): InternalCata
 }
 
 function stripInternal(item: InternalCatalogItem): CatalogItem {
-  const { createdAt: _createdAt, searchDocument: _searchDocument, ...publicItem } = item;
+  const {
+    createdAt: _createdAt,
+    searchDocument: _searchDocument,
+    rawPaintIndex: _rawPaintIndex,
+    ...publicItem
+  } = item;
   return publicItem;
+}
+
+const EXTERIOR_FLOAT_FALLBACK: Record<string, number> = {
+  'Factory New': 0.035,
+  'Minimal Wear': 0.075,
+  'Field-Tested': 0.26,
+  'Well-Worn': 0.415,
+  'Battle-Scarred': 0.72,
+};
+
+function resolveEmbeddedInspectLink(
+  rawMarketName: string,
+  rawPaintIndex: number | null | undefined,
+  phase: string | null,
+  exterior: string | null,
+  isStatTrak: boolean,
+  isSouvenir: boolean,
+): string | null {
+  const defIndex = resolveItemDefIndex(rawMarketName);
+  if (defIndex == null) return null;
+
+  const paintIndex =
+    typeof rawPaintIndex === 'number' && Number.isFinite(rawPaintIndex)
+      ? rawPaintIndex
+      : phase
+        ? resolvePaintIndexForPhase(phase, rawMarketName)
+        : rawMarketName.includes('★') && !rawMarketName.includes(' | ')
+          ? 0
+          : null;
+  if (paintIndex == null) return null;
+
+  const floatValue = (exterior ? EXTERIOR_FLOAT_FALLBACK[exterior] : undefined) ?? 0.035;
+  return buildMaskedInspectLinkFromParams({
+    defIndex,
+    paintIndex,
+    floatValue,
+    paintSeed: 0,
+    rarity: rawMarketName.includes('★') ? 6 : 5,
+    isStatTrak,
+    isSouvenir,
+  });
+}
+
+function hydratePageInspectLinks(item: InternalCatalogItem): CatalogItem {
+  const baseNameForDef = item.phase && item.id.endsWith(` | ${item.phase}`)
+    ? item.id.slice(0, -(item.phase.length + 3))
+    : item.id;
+  const nextInspect =
+    item.inspectLink ??
+    (item.provider === 'youpin'
+      ? resolveEmbeddedInspectLink(
+          baseNameForDef,
+          item.rawPaintIndex,
+          item.phase,
+          item.exterior,
+          item.isStatTrak,
+          item.isSouvenir,
+        )
+      : null);
+
+  const publicItem = stripInternal(item);
+  return {
+    ...publicItem,
+    inspectLink: nextInspect,
+    ...(item.variants
+      ? {
+          variants: (item.variants as InternalCatalogItem[]).map((variant) =>
+            hydratePageInspectLinks(variant),
+          ),
+        }
+      : {}),
+  };
 }
 
 const DOPPLER_STANDARD_PAINTS = new Set([415, 416, 417, 418, 419, 420, 421, 617, 618, 619, 849, 850, 851, 852, 853, 854, 855]);
@@ -468,6 +549,7 @@ export class GetCatalogItemsUseCase {
                   ? item.priceFilterEligible
                   : capabilities.priceFilterEligible,
               createdAt: new Date(),
+              rawPaintIndex: typeof paintIndex === 'number' ? paintIndex : null,
               searchDocument: search.isEmpty ? null : createCatalogSearchDocument({
                 fullName: name,
                 weapon: parsed.weapon,
@@ -546,13 +628,14 @@ export class GetCatalogItemsUseCase {
     }
 
     const sorted = sortItems(filtered.items, query.sort || DEFAULT_SORT);
-    const itemsForPagination = sorted.map(stripInternal);
 
-    const total = itemsForPagination.length;
+    const total = sorted.length;
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
     const page = Math.min(Math.max(query.page, 1), totalPages);
     const start = (page - 1) * query.limit;
-    const items = itemsForPagination.slice(start, start + query.limit);
+    const items = sorted
+      .slice(start, start + query.limit)
+      .map(hydratePageInspectLinks);
 
     return {
       items,
@@ -588,7 +671,7 @@ export class GetCatalogItemsUseCase {
 
       return {
         ...representative,
-        variants: variantsByLowestPrice.map(stripInternal),
+        variants: variantsByLowestPrice,
       };
     });
   }

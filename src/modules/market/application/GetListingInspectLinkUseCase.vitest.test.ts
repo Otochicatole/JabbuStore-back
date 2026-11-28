@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GetListingInspectLinkUseCase } from './GetListingInspectLinkUseCase';
+import { FloatRateLimitWaitTimeoutError } from './FloatRateLimiter';
+import { GetListingInspectLinkUseCase, resolveItemDefIndex } from './GetListingInspectLinkUseCase';
 
 describe('GetListingInspectLinkUseCase', () => {
   it('returns a certificate-based Steam link and caches the lookup', async () => {
@@ -85,5 +86,20 @@ describe('GetListingInspectLinkUseCase', () => {
     const result = await useCase.execute('AK-47 | Redline (Field-Tested)');
 
     expect(result).toBe('steam://run/730//+csgo_econ_action_preview%20abcdef0123456789abcdef0123456789');
+  });
+
+  it('bounds rate-limiter wait to prevent VPS 504 timeouts and synthesizes certificate on FloatRateLimitWaitTimeoutError', async () => {
+    const fetchPage = vi.fn().mockRejectedValue(new FloatRateLimitWaitTimeoutError(3600));
+    const useCase = new GetListingInspectLinkUseCase({ fetchPage });
+
+    const ruby = await useCase.execute('★ Karambit | Doppler (Factory New) | Ruby');
+
+    expect(fetchPage).toHaveBeenCalledWith(expect.objectContaining({
+      maxRateLimitWaitMs: 1500,
+      requestTimeoutMs: 4000,
+    }));
+    expect(ruby).toMatch(/^steam:\/\/run\/730\/\+csgo_econ_action_preview\+00[0-9A-F]+$/);
+    expect(resolveItemDefIndex('AK-47 | Redline (Field-Tested)')).toBe(7);
+    expect(resolveItemDefIndex("★ Sport Gloves | Pandora's Box (Field-Tested)")).toBe(5030);
   });
 });
